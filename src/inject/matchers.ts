@@ -13,6 +13,13 @@ export function matchEvent(event: NormalizedEvent): Match {
   if (event.kind === "user_message") return { promptFile: "user-message.md" };
   if (event.kind === "turn_finished") return event.usedBrain ? null : { promptFile: "turn-reminder.md" };
 
+  // Before a write (PreToolUse) → remind the agent of the entry format.
+  if (event.kind === "tool_pending") {
+    return isTool(event.tool, "brain_create") || isTool(event.tool, "brain_mutate")
+      ? { promptFile: "entry-format.md" }
+      : null;
+  }
+
   const { tool } = event;
   if (isTool(tool, "brain_search")) return { promptFile: "search-results.md" };
   if (isTool(tool, "brain_create")) return { promptFile: "node-created.md" };

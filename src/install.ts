@@ -24,7 +24,7 @@ async function installHooks(): Promise<string[]> {
   const hooks = settings.hooks ?? (settings.hooks = {});
 
   const added: string[] = [];
-  for (const event of ["UserPromptSubmit", "PostToolUse", "Stop"]) {
+  for (const event of ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"]) {
     const list = hooks[event] ?? (hooks[event] = []);
     if (list.some((g) => g.hooks.some((h) => h.command.includes(MARKER)))) continue;
     list.push({ hooks: [{ type: "command", command }] });

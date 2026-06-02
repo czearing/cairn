@@ -5,6 +5,8 @@
  */
 export type NormalizedEvent =
   | { kind: "user_message"; text: string }
+  /** A tool is ABOUT to run (PreToolUse) — fires before the write hits the db. */
+  | { kind: "tool_pending"; tool: string; input: Record<string, unknown> }
   | {
       kind: "tool_completed";
       tool: string;

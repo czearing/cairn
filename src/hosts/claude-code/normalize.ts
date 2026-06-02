@@ -16,6 +16,13 @@ export async function normalizeClaudeCode(payload: unknown): Promise<NormalizedE
     return typeof text === "string" ? { kind: "user_message", text } : null;
   }
 
+  if (eventName === "PreToolUse") {
+    const tool = payload.tool_name;
+    const input = payload.tool_input;
+    if (typeof tool !== "string" || !isObject(input)) return null;
+    return { kind: "tool_pending", tool, input };
+  }
+
   if (eventName === "PostToolUse") {
     const tool = payload.tool_name;
     const input = payload.tool_input;

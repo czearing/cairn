@@ -5,6 +5,7 @@
 
 import { inject } from "../../inject/inject";
 import { getEventName, normalizeClaudeCode } from "./normalize";
+import { respond } from "./respond";
 
 const raw = await Bun.stdin.text();
 
@@ -24,10 +25,4 @@ if (!content) process.exit(0);
 const eventName = getEventName(payload);
 if (!eventName) process.exit(0);
 
-// Stop hooks force continuation via decision/reason; other events add context.
-const out =
-  eventName === "Stop"
-    ? { decision: "block", reason: content }
-    : { hookSpecificOutput: { hookEventName: eventName, additionalContext: content } };
-
-process.stdout.write(JSON.stringify(out));
+process.stdout.write(JSON.stringify(respond(eventName, content)));

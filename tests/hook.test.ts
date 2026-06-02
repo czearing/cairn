@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { brainUsedThisTurn } from "../src/hosts/claude-code/transcript";
 import { matchEvent } from "../src/inject/matchers";
+import { normalizeClaudeCode } from "../src/hosts/claude-code/normalize";
+import { respond } from "../src/hosts/claude-code/respond";
 
 function transcript(entries: object[]): string {
   const p = join(tmpdir(), `cairn-tx-${randomUUID()}.jsonl`);
@@ -42,4 +44,33 @@ test("missing transcript fails safe (no nag)", async () => {
 test("matcher nudges only when the brain went unused", () => {
   expect(matchEvent({ kind: "turn_finished", usedBrain: false })).toEqual({ promptFile: "turn-reminder.md" });
   expect(matchEvent({ kind: "turn_finished", usedBrain: true })).toBeNull();
+});
+
+// ── entry-format injection + timing ──────────────────────────────────────────────
+
+test("format prompt fires only before a WRITE (brain_create/brain_mutate)", () => {
+  const fmt = { promptFile: "entry-format.md" };
+  expect(matchEvent({ kind: "tool_pending", tool: "brain_create", input: {} })).toEqual(fmt);
+  expect(matchEvent({ kind: "tool_pending", tool: "mcp__cairn__brain_mutate", input: {} })).toEqual(fmt);
+  // not before a read or an unrelated tool
+  expect(matchEvent({ kind: "tool_pending", tool: "brain_search", input: {} })).toBeNull();
+  expect(matchEvent({ kind: "tool_pending", tool: "Read", input: {} })).toBeNull();
+});
+
+test("TIMING: a write maps to PreToolUse (before) and PostToolUse (after) distinctly", async () => {
+  const payload = { tool_name: "brain_create", tool_input: { text: "x" } };
+  const pre = await normalizeClaudeCode({ ...payload, hook_event_name: "PreToolUse" });
+  expect(pre).toEqual({ kind: "tool_pending", tool: "brain_create", input: { text: "x" } });
+  const post = await normalizeClaudeCode({ ...payload, hook_event_name: "PostToolUse", tool_output: {} });
+  expect(post?.kind).toBe("tool_completed");
+});
+
+test("delivery mechanism per moment is correct", () => {
+  expect(respond("PreToolUse", "FMT")).toEqual({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", additionalContext: "FMT" },
+  });
+  expect(respond("Stop", "R")).toEqual({ decision: "block", reason: "R" });
+  expect(respond("PostToolUse", "C")).toEqual({
+    hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "C" },
+  });
 });

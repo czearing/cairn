@@ -1,6 +1,6 @@
 // End-to-end: spawn the REAL hook with a payload on stdin, exactly as Claude Code invokes it.
-// Proves the entry-format enforcement fires at the right moment (PreToolUse, before the write)
-// with the right decision.
+// Proves the entry-format prompt is injected when a write tool is called — with NO rejection
+// and NO length limit.
 import { test, expect } from "bun:test";
 
 async function fire(payload: object): Promise<string> {
@@ -14,27 +14,24 @@ async function fire(payload: object): Promise<string> {
   return out.trim();
 }
 
-const verbose = "x".repeat(500);
-
-test("PreToolUse DENIES a verbose brain_create before it writes", async () => {
-  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: verbose } });
+test("PreToolUse on a brain write injects the format and ALLOWS", async () => {
+  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "anything" } });
   const j = JSON.parse(out);
-  expect(j.hookSpecificOutput.permissionDecision).toBe("deny");
-  expect(j.hookSpecificOutput.permissionDecisionReason).toContain("too verbose");
-  expect(j.hookSpecificOutput.permissionDecisionReason).toContain("500 chars");
+  expect(j.hookSpecificOutput.permissionDecision).toBe("allow");
+  expect(j.hookSpecificOutput.additionalContext).toContain("terse");
 });
 
-test("PreToolUse DENIES a verbose namespaced brain_mutate", async () => {
-  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "mcp__cairn__brain_mutate", tool_input: { id: "1", answer: "y".repeat(800) } });
-  expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("deny");
+test("NO length limit — a 5000-char entry is still allowed, never rejected", async () => {
+  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "mcp__cairn__brain_mutate", tool_input: { id: "1", answer: "y".repeat(5000) } });
+  expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("allow");
 });
 
-test("PreToolUse ALLOWS a terse brain_create (no output, no friction)", async () => {
-  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "How do I write a haiku?" } });
+test("PreToolUse does not inject on brain_search (a read, not a write)", async () => {
+  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_search", tool_input: { query: "x" } });
   expect(out).toBe("");
 });
 
 test("PreToolUse ignores non-brain tools", async () => {
-  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: verbose } });
+  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "x" } });
   expect(out).toBe("");
 });

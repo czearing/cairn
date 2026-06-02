@@ -24,14 +24,4 @@ export interface CairnConfig {
   uiPort: number;
   /** Base URL of the viewer, used to build deep links (`/node/<id>`) to neurons. */
   uiUrl: string;
-  /** Length budgets that keep entries terse, enforced before a write. */
-  entry: EntryLimits;
-}
-
-/** Per-field character budgets. Entries over budget are denied at write time. */
-export interface EntryLimits {
-  /** Max characters for a neuron's `text` (the question). */
-  maxText: number;
-  /** Max characters for a neuron's `answer`. */
-  maxAnswer: number;
 }

@@ -58,8 +58,6 @@ Claude Code afterward to pick up the `brain_*` tools and the injected prompts.
 | `CAIRN_EMBED_API_KEY` | — | for the `openai` provider |
 | `CAIRN_EMBED_BASE_URL` | OpenAI | for Azure / OpenAI-compatible endpoints |
 | `CAIRN_RELEVANCE_THRESHOLD` | `0.3` | similarity bar for "relevant" |
-| `CAIRN_MAX_TEXT_CHARS` | `160` | deny a write whose `text` exceeds this (keeps entries terse) |
-| `CAIRN_MAX_ANSWER_CHARS` | `600` | deny a write whose `answer` exceeds this |
 
 Swap the embedding model with **no code change** — just set the env vars.
 

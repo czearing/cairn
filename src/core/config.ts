@@ -16,8 +16,4 @@ export const config: CairnConfig = {
   relevanceThreshold: Number(process.env.CAIRN_RELEVANCE_THRESHOLD || "0.3"),
   uiPort,
   uiUrl: process.env.CAIRN_UI_URL || `http://localhost:${uiPort}`,
-  entry: {
-    maxText: Number(process.env.CAIRN_MAX_TEXT_CHARS || "160"),
-    maxAnswer: Number(process.env.CAIRN_MAX_ANSWER_CHARS || "600"),
-  },
 };

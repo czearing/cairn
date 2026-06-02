@@ -6,6 +6,8 @@ export interface Neuron {
   text: string;
   /** The solution. An empty string means the neuron is unsolved. */
   answer: string;
+  /** Source link(s) backing the answer — real URLs the agent consulted. Empty if uncited. */
+  citation: string;
   /** Ids of related neurons (undirected, deduped). */
   edges: string[];
 }
@@ -15,6 +17,7 @@ export interface Row {
   id: string;
   text: string;
   answer: string;
+  citation: string;
   /** JSON-encoded `string[]` of edge ids. */
   edges: string;
   /** JSON-encoded embedding vector, or null until it has been computed. */
@@ -25,5 +28,6 @@ export interface Row {
 export interface NeuronPatch {
   text?: string;
   answer?: string;
+  citation?: string;
   edges?: string[];
 }

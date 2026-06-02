@@ -16,10 +16,16 @@ export function db(): Database {
        id        TEXT PRIMARY KEY,
        text      TEXT NOT NULL,
        answer    TEXT NOT NULL DEFAULT '',
+       citation  TEXT NOT NULL DEFAULT '',
        edges     TEXT NOT NULL DEFAULT '[]',
        embedding TEXT
      )`
   );
+  // migrate brains created before the citation column existed
+  const cols = d.query("PRAGMA table_info(neurons)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "citation")) {
+    d.run("ALTER TABLE neurons ADD COLUMN citation TEXT NOT NULL DEFAULT ''");
+  }
   _db = d;
   return d;
 }

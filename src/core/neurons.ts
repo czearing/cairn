@@ -8,11 +8,11 @@ export const vecText = (text: string, answer: string) => `${text} ${answer}`.tri
 export function toNeuron(r: Row): Neuron {
   let edges: string[] = [];
   try { edges = JSON.parse(r.edges); } catch { edges = []; }
-  return { id: r.id, text: r.text, answer: r.answer, edges };
+  return { id: r.id, text: r.text, answer: r.answer, citation: r.citation, edges };
 }
 
 const dedupe = (edges: string[], self: string) => [...new Set(edges)].filter((e) => e && e !== self);
-export const SELECT = "SELECT id, text, answer, edges, embedding FROM neurons";
+export const SELECT = "SELECT id, text, answer, citation, edges, embedding FROM neurons";
 
 export function get(id: string): Neuron | null {
   const r = db().query(`${SELECT} WHERE id = ?`).get(id) as Row | null;
@@ -35,10 +35,10 @@ export async function create(text: string, edges: string[] = []): Promise<Neuron
   const clean = dedupe(edges, id);
   const vec = JSON.stringify(await embed(vecText(text, "")));
   db()
-    .query("INSERT INTO neurons (id, text, answer, edges, embedding) VALUES (?, ?, '', ?, ?)")
+    .query("INSERT INTO neurons (id, text, answer, citation, edges, embedding) VALUES (?, ?, '', '', ?, ?)")
     .run(id, text, JSON.stringify(clean), vec);
   for (const t of clean) addEdge(t, id);
-  return { id, text, answer: "", edges: clean };
+  return { id, text, answer: "", citation: "", edges: clean };
 }
 
 // Partial merge. Setting `answer` marks it solved. Re-embeds on content change. Idempotent.
@@ -49,15 +49,17 @@ export async function mutate(id: string, patch: NeuronPatch): Promise<Neuron | n
     id,
     text: patch.text ?? cur.text,
     answer: patch.answer ?? cur.answer,
+    citation: patch.citation ?? cur.citation,
     edges: patch.edges ? dedupe(patch.edges, id) : cur.edges,
   };
   if (next.text !== cur.text || next.answer !== cur.answer) {
     const vec = JSON.stringify(await embed(vecText(next.text, next.answer)));
-    db().query("UPDATE neurons SET text = ?, answer = ?, edges = ?, embedding = ? WHERE id = ?")
-      .run(next.text, next.answer, JSON.stringify(next.edges), vec, id);
+    db().query("UPDATE neurons SET text = ?, answer = ?, citation = ?, edges = ?, embedding = ? WHERE id = ?")
+      .run(next.text, next.answer, next.citation, JSON.stringify(next.edges), vec, id);
   } else {
-    // content unchanged → only edges can differ; leave the embedding intact
-    db().query("UPDATE neurons SET edges = ? WHERE id = ?").run(JSON.stringify(next.edges), id);
+    // text/answer unchanged → only citation/edges can differ; leave the embedding intact
+    db().query("UPDATE neurons SET citation = ?, edges = ? WHERE id = ?")
+      .run(next.citation, JSON.stringify(next.edges), id);
   }
   return next;
 }

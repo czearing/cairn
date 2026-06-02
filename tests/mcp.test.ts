@@ -50,10 +50,15 @@ test("brain_search finds a neuron by meaning", async () => {
   expect(results.some((r: { text: string }) => r.text.includes("haiku"))).toBe(true);
 });
 
-test("brain_mutate sets an answer and it is findable by it", async () => {
+test("brain_mutate sets an answer + citation and it is findable by it", async () => {
   const n = parse(await call("brain_create", { text: "A geography question" }));
-  const updated = parse(await call("brain_mutate", { id: n.id, answer: "The capital of France is Paris." }));
+  const updated = parse(await call("brain_mutate", {
+    id: n.id,
+    answer: "The capital of France is Paris.",
+    citation: "https://en.wikipedia.org/wiki/Paris",
+  }));
   expect(updated.answer).toBe("The capital of France is Paris.");
+  expect(updated.citation).toBe("https://en.wikipedia.org/wiki/Paris");
   const results = parse(await call("brain_search", { query: "capital city of France" }));
   expect(results.some((r: { id: string }) => r.id === n.id)).toBe(true);
 });

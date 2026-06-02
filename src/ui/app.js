@@ -9,6 +9,8 @@ const qInput = document.getElementById("q");
 let neurons = [], byId = new Map(), roots = [], mode = "graph";
 
 const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const linkify = (s) =>
+  esc(s).replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noreferrer" style="color:#3b82f6">${u}</a>`);
 const div = (cls) => { const d = document.createElement("div"); if (cls) d.className = cls; return d; };
 const meta = (t) => { const p = document.createElement("p"); p.className = "meta"; p.textContent = t; return p; };
 const answered = (n) => n.answer && n.answer.trim();
@@ -113,6 +115,7 @@ function openDetail(id) {
     `<span class="badge" style="font-size:11px;font-weight:700;text-transform:uppercase;color:${c.bt}">${c.label}</span>` +
     `<div class="lbl">Question</div><div class="q">${esc(n.text)}</div>` +
     `<div class="lbl">Answer</div><div class="ans">${answered(n) ? esc(n.answer) : "<span style='color:#cbd5e1'>—</span>"}</div>` +
+    (n.citation && n.citation.trim() ? `<div class="lbl">Citation</div><div class="ans">${linkify(n.citation)}</div>` : "") +
     (n.edges.length ? `<div class="lbl">Edges</div><div id="ed"></div>` : "");
   detail.querySelector(".x").onclick = () => (detail.hidden = true);
   const ed = detail.querySelector("#ed");

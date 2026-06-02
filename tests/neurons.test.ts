@@ -15,7 +15,17 @@ test("create: returns a usable id and is unsolved", async () => {
   const n = await N.create("How do I write a haiku?");
   expect(n.id).toBeTruthy();
   expect(n.answer).toBe("");
+  expect(n.citation).toBe("");
   expect(N.get(n.id)).toEqual(n);
+});
+
+test("mutate: sets a citation and merges it independently of content", async () => {
+  const n = await N.create("Q?");
+  const m = (await N.mutate(n.id, { answer: "A", citation: "https://example.com/doc" }))!;
+  expect(m.citation).toBe("https://example.com/doc");
+  // changing only edges must not drop the citation (and must not re-embed)
+  await N.mutate(n.id, { edges: [] });
+  expect(N.get(n.id)!.citation).toBe("https://example.com/doc");
 });
 
 test("create: edges dedupe and never self-reference", async () => {

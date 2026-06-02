@@ -40,10 +40,14 @@ server.tool(
     id: z.string().describe("id of the neuron to update."),
     text: z.string().optional().describe("new question text."),
     answer: z.string().optional().describe("the solution; setting this marks it solved."),
+    citation: z
+      .string()
+      .optional()
+      .describe("Real source URL(s) backing the answer — links you actually consulted. Required when the answer makes factual claims."),
     edges: z.array(z.string()).optional().describe("the complete set of linked neuron ids."),
   },
-  async ({ id, text, answer, edges }) => {
-    const n = await mutate(id, { text, answer, edges });
+  async ({ id, text, answer, citation, edges }) => {
+    const n = await mutate(id, { text, answer, citation, edges });
     return n ? json(withUrl(n)) : fail(`no neuron with id ${id}`);
   }
 );

@@ -1,0 +1,33 @@
+{
+  "name": "cairn",
+  "version": "0.1.0",
+  "description": "A shared semantic-graph memory that AI agents read, write, and recall from. Markers left for whoever comes next.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "cairn": "src/cli.ts"
+  },
+  "files": [
+    "src",
+    "prompts",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "setup": "bun install && bun src/cli.ts install",
+    "install:claude": "bun src/cli.ts install",
+    "mcp": "bun src/mcp/server.ts",
+    "seed": "bun examples/seed.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.5.0"
+  }
+}

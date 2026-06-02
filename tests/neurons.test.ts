@@ -1,0 +1,77 @@
+import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+
+process.env.CAIRN_DB_PATH = join(tmpdir(), `cairn-neurons-${randomUUID()}.db`);
+
+let N: typeof import("../src/core/neurons");
+let DB: typeof import("../src/core/db");
+
+beforeAll(async () => {
+  N = await import("../src/core/neurons");
+  DB = await import("../src/core/db");
+});
+beforeEach(() => DB.db().run("DELETE FROM neurons"));
+
+const answered = (n: { answer: string }) => n.answer.trim().length > 0;
+
+test("create: returns a usable id and is unsolved", async () => {
+  const n = await N.create("How do I write a haiku?");
+  expect(n.id).toBeTruthy();
+  expect(n.answer).toBe("");
+  expect(N.get(n.id)).toEqual(n);
+});
+
+test("create: edges dedupe and never self-reference", async () => {
+  const other = await N.create("neighbor");
+  const n = await N.create("root", [other.id, other.id]);
+  expect(n.edges).toEqual([other.id]);
+  const m = await N.mutate(n.id, { edges: [n.id, other.id] });
+  expect(m!.edges).not.toContain(n.id);
+});
+
+test("create: edge mirrors so the graph is undirected", async () => {
+  const a = await N.create("A");
+  const b = await N.create("B", [a.id]);
+  expect(N.get(a.id)!.edges).toContain(b.id);
+});
+
+test("mutate: setting answer marks solved", async () => {
+  const n = await N.create("Q?");
+  expect(answered((await N.mutate(n.id, { answer: "because" }))!)).toBe(true);
+});
+
+test("mutate: idempotent", async () => {
+  const n = await N.create("Q?");
+  const a = await N.mutate(n.id, { answer: "A", text: "Q2?" });
+  const b = await N.mutate(n.id, { answer: "A", text: "Q2?" });
+  expect(a).toEqual(b);
+});
+
+test("mutate: partial merge keeps omitted fields", async () => {
+  const n = await N.create("keep me");
+  await N.mutate(n.id, { answer: "new" });
+  const after = N.get(n.id)!;
+  expect(after.text).toBe("keep me");
+  expect(after.answer).toBe("new");
+});
+
+test("mutate: unknown id returns null", async () => {
+  expect(await N.mutate("nope", { answer: "x" })).toBeNull();
+});
+
+test("remove: deletes and cleans dangling edges", async () => {
+  const a = await N.create("A");
+  const b = await N.create("B", [a.id]);
+  expect(N.remove(b.id)).toBe(true);
+  expect(N.get(b.id)).toBeNull();
+  expect(N.get(a.id)!.edges).not.toContain(b.id);
+});
+
+test("all: reflects writes", async () => {
+  expect(N.all().length).toBe(0);
+  await N.create("one");
+  await N.create("two");
+  expect(N.all().length).toBe(2);
+});

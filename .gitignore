@@ -1,0 +1,35 @@
+# dependencies (bun install)
+node_modules
+
+# output
+out
+dist
+*.tgz
+
+# cairn brain databases
+*.db
+*.db-shm
+*.db-wal
+
+# scratch
+spike.ts
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+_.log
+
+# dotenv environment variable files
+.env
+.env.local
+
+# caches
+.cache
+*.tsbuildinfo
+
+# IDEs / OS
+.idea
+.DS_Store

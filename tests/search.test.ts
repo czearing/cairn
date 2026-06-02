@@ -67,7 +67,7 @@ test("E6 NO LIMIT — all relevant neurons returned", async () => {
 
 test("E7 matches a neuron by its ANSWER text", async () => {
   const n = await N.create("Q: a geography fact");
-  await N.mutate(n.id, { answer: "The capital of France is Paris." });
+  await N.mutate(n.id, { answer: "The capital of France is Paris.", citation: "https://en.wikipedia.org/wiki/Paris" });
   expect(ids(await S.search("what is the capital city of France"))).toContain(n.id);
 });
 

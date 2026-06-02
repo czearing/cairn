@@ -52,6 +52,10 @@ export async function mutate(id: string, patch: NeuronPatch): Promise<Neuron | n
     citation: patch.citation ?? cur.citation,
     edges: patch.edges ? dedupe(patch.edges, id) : cur.edges,
   };
+  // A neuron with an answer MUST be cited — no uncited claims in the brain.
+  if (next.answer.trim() && !next.citation.trim()) {
+    throw new Error("citation required: set `citation` to a real source link when giving a neuron an answer.");
+  }
   if (next.text !== cur.text || next.answer !== cur.answer) {
     const vec = JSON.stringify(await embed(vecText(next.text, next.answer)));
     db().query("UPDATE neurons SET text = ?, answer = ?, citation = ?, edges = ?, embedding = ? WHERE id = ?")

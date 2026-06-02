@@ -43,12 +43,16 @@ server.tool(
     citation: z
       .string()
       .optional()
-      .describe("Real source URL(s) backing the answer — links you actually consulted. Required when the answer makes factual claims."),
+      .describe("REQUIRED whenever you set a non-empty answer: the real source URL(s) you actually consulted. A neuron with an answer but no citation is rejected."),
     edges: z.array(z.string()).optional().describe("the complete set of linked neuron ids."),
   },
   async ({ id, text, answer, citation, edges }) => {
-    const n = await mutate(id, { text, answer, citation, edges });
-    return n ? json(withUrl(n)) : fail(`no neuron with id ${id}`);
+    try {
+      const n = await mutate(id, { text, answer, citation, edges });
+      return n ? json(withUrl(n)) : fail(`no neuron with id ${id}`);
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
+    }
   }
 );
 

@@ -64,5 +64,12 @@ test("brain_mutate sets an answer + citation and it is findable by it", async ()
 });
 
 test("brain_mutate on unknown id errors cleanly", async () => {
-  expect((await call("brain_mutate", { id: "nope", answer: "x" })).isError).toBe(true);
+  expect((await call("brain_mutate", { id: "nope", answer: "x", citation: "https://x" })).isError).toBe(true);
+});
+
+test("brain_mutate REJECTS an answer with no citation", async () => {
+  const n = parse(await call("brain_create", { text: "needs a source" }));
+  const res = await call("brain_mutate", { id: n.id, answer: "an uncited factual claim" });
+  expect(res.isError).toBe(true);
+  expect(res.content[0]!.text).toContain("citation required");
 });

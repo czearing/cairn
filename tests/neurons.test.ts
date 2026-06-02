@@ -42,24 +42,33 @@ test("create: edge mirrors so the graph is undirected", async () => {
   expect(N.get(a.id)!.edges).toContain(b.id);
 });
 
+const CITE = "https://src.example";
+
 test("mutate: setting answer marks solved", async () => {
   const n = await N.create("Q?");
-  expect(answered((await N.mutate(n.id, { answer: "because" }))!)).toBe(true);
+  expect(answered((await N.mutate(n.id, { answer: "because", citation: CITE }))!)).toBe(true);
 });
 
 test("mutate: idempotent", async () => {
   const n = await N.create("Q?");
-  const a = await N.mutate(n.id, { answer: "A", text: "Q2?" });
-  const b = await N.mutate(n.id, { answer: "A", text: "Q2?" });
+  const a = await N.mutate(n.id, { answer: "A", text: "Q2?", citation: CITE });
+  const b = await N.mutate(n.id, { answer: "A", text: "Q2?", citation: CITE });
   expect(a).toEqual(b);
 });
 
 test("mutate: partial merge keeps omitted fields", async () => {
   const n = await N.create("keep me");
-  await N.mutate(n.id, { answer: "new" });
+  await N.mutate(n.id, { answer: "new", citation: CITE });
   const after = N.get(n.id)!;
   expect(after.text).toBe("keep me");
   expect(after.answer).toBe("new");
+});
+
+test("mutate: REQUIRES a citation when giving an answer", async () => {
+  const n = await N.create("Q?");
+  expect(N.mutate(n.id, { answer: "an uncited claim" })).rejects.toThrow(/citation required/);
+  const m = (await N.mutate(n.id, { answer: "a cited claim", citation: CITE }))!;
+  expect(m.answer).toBe("a cited claim");
 });
 
 test("mutate: unknown id returns null", async () => {

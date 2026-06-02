@@ -15,7 +15,7 @@ try {
   process.exit(0);
 }
 
-const event = normalizeClaudeCode(payload);
+const event = await normalizeClaudeCode(payload);
 if (!event) process.exit(0);
 
 const content = await inject(event);
@@ -24,11 +24,10 @@ if (!content) process.exit(0);
 const eventName = getEventName(payload);
 if (!eventName) process.exit(0);
 
-process.stdout.write(
-  JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: eventName,
-      additionalContext: content,
-    },
-  })
-);
+// Stop hooks force continuation via decision/reason; other events add context.
+const out =
+  eventName === "Stop"
+    ? { decision: "block", reason: content }
+    : { hookSpecificOutput: { hookEventName: eventName, additionalContext: content } };
+
+process.stdout.write(JSON.stringify(out));

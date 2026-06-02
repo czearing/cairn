@@ -11,6 +11,7 @@ function isTool(tool: string, name: string): boolean {
 
 export function matchEvent(event: NormalizedEvent): Match {
   if (event.kind === "user_message") return { promptFile: "user-message.md" };
+  if (event.kind === "turn_finished") return event.usedBrain ? null : { promptFile: "turn-reminder.md" };
 
   const { tool } = event;
   if (isTool(tool, "brain_search")) return { promptFile: "search-results.md" };

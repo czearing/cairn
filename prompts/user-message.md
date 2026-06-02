@@ -1,4 +1,4 @@
-MANDATORY: Before responding to ANY user message follow these steps NO EXCEPTIONS. No task is too trivial. IF ANYTHING IS MISSING FROM THE OUTPUT YOU WILL FAIL!
+Run this on every task, including trivial/creative ones (yes, a haiku). Reason: creative outputs must be checked against and stored in the brain so nothing is duplicated.
 
 # Instructions
 ## Read the Shared Brain First
@@ -23,8 +23,9 @@ Nodes whose connected subgraph brain_search returned and how we will surpass the
 - NEVER skip Part 1. Working without reading the brain means duplicating work already done.
 - NEVER omit questions just because they seem like common knowledge.
 - IT IS CRITICAL TO INCLUDE nodes for what excellent output looks like and common failure modes.
-- IT IS MANDATORY TO OUTPUT THIS DATA REGARDLESS OF THE TASK.
-- IF THE USER CATCHES ANY ASSUMPTIONS OR MISSED QUESTIONS THEY WILL UNSUB.
+- Search first. Other agents store reusable findings; skipping duplicates work.
+- Surface assumptions explicitly so they can be checked.
+
 
 # Output (MANDATORY)
 1. The root node answer as your final synthesis.

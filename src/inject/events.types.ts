@@ -10,4 +10,6 @@ export type NormalizedEvent =
       tool: string;
       input: Record<string, unknown>;
       output: unknown;
-    };
+    }
+  /** The agent finished a turn. `usedBrain` is whether it called brain_search/brain_mutate. */
+  | { kind: "turn_finished"; usedBrain: boolean };

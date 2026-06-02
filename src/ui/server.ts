@@ -1,16 +1,21 @@
 import { all } from "../core/neurons";
+import { search } from "../core/search";
 import { config } from "../core/config";
 
-// Optional read-only viewer for the brain. Not part of the MCP/inject core — run it with
-// `cairn ui` (or `bun run ui`). Serves the brain as JSON; every page path returns the same
-// single-page app, which reads `/node/<id>` from the URL to focus a neuron.
+// Optional read-only viewer. Not part of the MCP/inject core — run with `cairn ui`.
+// Serves the brain as JSON (+ semantic search) and a dependency-free single-page app.
 
-const INDEX = new URL("./index.html", import.meta.url);
+const DIR = new URL("./", import.meta.url);
+const asset = (name: string, type: string) =>
+  new Response(Bun.file(new URL(name, DIR)), { headers: { "content-type": type } });
 
-function handler(req: Request): Response {
-  const { pathname } = new URL(req.url);
+async function handler(req: Request): Promise<Response> {
+  const { pathname, searchParams } = new URL(req.url);
   if (pathname === "/api/neurons") return Response.json({ neurons: all() });
-  return new Response(Bun.file(INDEX), { headers: { "content-type": "text/html; charset=utf-8" } });
+  if (pathname === "/api/search") return Response.json({ results: await search(searchParams.get("q") || "") });
+  if (pathname === "/app.js") return asset("app.js", "text/javascript; charset=utf-8");
+  if (pathname === "/graph.js") return asset("graph.js", "text/javascript; charset=utf-8");
+  return asset("index.html", "text/html; charset=utf-8");
 }
 
 export function start(port: number = config.uiPort) {

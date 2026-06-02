@@ -20,3 +20,16 @@ test("/node/:id serves the viewer page", async () => {
   expect(res.status).toBe(200);
   expect(res.headers.get("content-type")).toContain("text/html");
 });
+
+test("/api/search returns ranked results", async () => {
+  const res = await fetch(`http://localhost:${server.port}/api/search?q=viewer%20test`);
+  const data = (await res.json()) as { results: { id: string }[] };
+  expect(Array.isArray(data.results)).toBe(true);
+  expect(data.results.some((n) => n.id === created.id)).toBe(true);
+});
+
+test("serves the app.js asset", async () => {
+  const res = await fetch(`http://localhost:${server.port}/app.js`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toContain("javascript");
+});

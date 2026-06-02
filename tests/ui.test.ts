@@ -1,9 +1,4 @@
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-
-process.env.CAIRN_DB_PATH = join(tmpdir(), `cairn-ui-${randomUUID()}.db`);
 
 let server: ReturnType<typeof import("../src/ui/server").start>;
 let created: { id: string };

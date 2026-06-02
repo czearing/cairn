@@ -1,0 +1,4 @@
+[test]
+# Force every test onto a throwaway brain BEFORE any module loads. Without this, the config
+# singleton can resolve to the real ~/.cairn/cairn.db and a test's DELETE would wipe it.
+preload = ["./tests/setup.ts"]

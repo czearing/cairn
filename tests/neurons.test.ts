@@ -1,9 +1,4 @@
 import { test, expect, beforeAll, beforeEach } from "bun:test";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-
-process.env.CAIRN_DB_PATH = join(tmpdir(), `cairn-neurons-${randomUUID()}.db`);
 
 let N: typeof import("../src/core/neurons");
 let DB: typeof import("../src/core/db");

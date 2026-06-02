@@ -1,10 +1,5 @@
 // Semantic eval — proves search quality. Meaning-based behavior a keyword matcher can't do.
 import { test, expect, beforeAll, beforeEach } from "bun:test";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-
-process.env.CAIRN_DB_PATH = join(tmpdir(), `cairn-search-${randomUUID()}.db`);
 
 let N: typeof import("../src/core/neurons");
 let S: typeof import("../src/core/search");

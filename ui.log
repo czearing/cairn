@@ -1,2 +1,3 @@
 $ bun src/ui/server.ts
 Cairn viewer → http://localhost:3737  (brain: C:\Users\calebzearing\.cairn\cairn.db)
+error: script "ui" exited with code 255

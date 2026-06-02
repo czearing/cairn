@@ -33,3 +33,6 @@ _.log
 # IDEs / OS
 .idea
 .DS_Store
+
+# runtime logs
+*.log

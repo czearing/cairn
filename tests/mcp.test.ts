@@ -33,10 +33,11 @@ test("exposes exactly the three brain tools", async () => {
   expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_mutate", "brain_search"]);
 });
 
-test("brain_create returns a neuron with an id", async () => {
+test("brain_create returns a neuron with an id and a viewer url", async () => {
   const n = parse(await call("brain_create", { text: "How do I write a haiku poem?" }));
   expect(n.id).toBeTruthy();
   expect(n.answer).toBe("");
+  expect(n.url).toContain(`/node/${n.id}`);
 });
 
 test("brain_create rejects empty text", async () => {

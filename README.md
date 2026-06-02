@@ -84,9 +84,17 @@ content. To add a scenario, drop a new `.md` and add a case to `src/inject/match
 ## Develop
 
 ```bash
-bun test                 # core contracts + semantic eval + MCP end-to-end
-bun run mcp              # run the server over stdio
+bun test                 # core contracts + semantic eval + MCP + viewer
+bun run mcp              # run the MCP server over stdio
+bun run ui               # serve the viewer (default http://localhost:3737)
 bun run seed             # optional demo data
 ```
+
+## Viewer
+
+`cairn ui` (or `bun run ui`) serves a tiny read-only view of the brain from `~/.cairn/cairn.db`,
+deep-linkable per neuron at `/node/<id>`. The MCP tools return a `url` field for every neuron,
+so an agent can hand back a clickable link to what it created. Configure with `CAIRN_UI_PORT`
+/ `CAIRN_UI_URL`. It's optional and entirely separate from the MCP/inject core.
 
 MIT licensed.

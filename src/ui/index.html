@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>cairn</title>
+  <style>
+    :root { --line:#e2e8f0; --muted:#64748b; --ink:#0f172a; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:#f8fafc; }
+    header { position:sticky; top:0; display:flex; align-items:center; gap:10px; padding:12px 20px;
+      background:#fff; border-bottom:1px solid var(--line); }
+    .logo { width:26px; height:26px; border-radius:7px; display:grid; place-items:center; font-size:14px;
+      background:linear-gradient(135deg,#3b82f6,#8b5cf6); }
+    header b { font-weight:700; } header a { color:var(--muted); text-decoration:none; font-size:12px; }
+    main { max-width:760px; margin:0 auto; padding:22px 20px; }
+    .meta { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:#94a3b8; font-weight:600; margin:0 0 12px; }
+    .card { display:block; background:#fff; border:1px solid var(--line); border-left:4px solid var(--accent,#94a3b8);
+      border-radius:10px; padding:13px 16px; margin-bottom:10px; text-decoration:none; color:inherit; }
+    .card.focus { box-shadow:0 0 0 2px #3b82f644, 0 8px 28px rgba(0,0,0,.10); }
+    .card .top { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+    .badge { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.03em;
+      padding:2px 7px; border-radius:100px; background:var(--badge,#f1f5f9); color:var(--badgeText,#64748b); }
+    .q { font-size:14px; font-weight:500; }
+    .a { font-size:12px; color:#334155; margin-top:6px; white-space:pre-wrap; }
+    .edges { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+    .chip { font-size:11px; padding:3px 9px; border:1px solid var(--line); border-radius:100px;
+      background:#f8fafc; color:#475569; text-decoration:none; }
+    .empty { color:#cbd5e1; text-align:center; padding:60px 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/" class="logo">🧠</a>
+    <b>cairn</b>
+    <span id="focusNote"></span>
+  </header>
+  <main id="app"><p class="empty">loading…</p></main>
+
+  <script>
+    const ANS = { accent:"#10b981", badge:"#ecfdf5", badgeText:"#047857" };
+    const UNS = { accent:"#94a3b8", badge:"#f1f5f9", badgeText:"#64748b" };
+    const firstLine = (t) => (t || "").split("\n")[0];
+
+    function card(n, byId, focusId) {
+      const cfg = (n.answer || "").trim() ? ANS : UNS;
+      const el = document.createElement("a");
+      el.href = "/node/" + n.id;
+      el.className = "card" + (n.id === focusId ? " focus" : "");
+      el.style.setProperty("--accent", cfg.accent);
+      const edges = (n.edges || [])
+        .filter((e) => byId.has(e))
+        .map((e) => `<a class="chip" href="/node/${e}">${firstLine(byId.get(e).text)}</a>`)
+        .join("");
+      el.innerHTML =
+        `<div class="top"><span class="q">${firstLine(n.text)}</span>` +
+        `<span class="badge" style="--badge:${cfg.badge};--badgeText:${cfg.badgeText}">` +
+        `${(n.answer || "").trim() ? "answered" : "unsolved"}</span></div>` +
+        ((n.answer || "").trim() ? `<div class="a">${n.answer}</div>` : "") +
+        (edges ? `<div class="edges">${edges}</div>` : "");
+      return el;
+    }
+
+    async function render() {
+      const { neurons } = await (await fetch("/api/neurons")).json();
+      const byId = new Map(neurons.map((n) => [n.id, n]));
+      const m = location.pathname.match(/^\/node\/(.+)$/);
+      const focusId = m ? decodeURIComponent(m[1]) : null;
+      const app = document.getElementById("app");
+      app.innerHTML = "";
+
+      if (!neurons.length) { app.innerHTML = '<p class="empty">The brain is empty.</p>'; return; }
+
+      let list = neurons;
+      if (focusId && byId.has(focusId)) {
+        const focus = byId.get(focusId);
+        const near = new Set([focusId, ...(focus.edges || [])]);
+        list = [focus, ...neurons.filter((n) => n.id !== focusId && near.has(n.id))];
+        document.getElementById("focusNote").innerHTML = '&nbsp;/ <a href="/">all neurons</a>';
+      }
+
+      const head = document.createElement("p");
+      head.className = "meta";
+      head.textContent = focusId ? "Focused neuron + its connections" : `${neurons.length} neuron${neurons.length !== 1 ? "s" : ""}`;
+      app.appendChild(head);
+      for (const n of list) app.appendChild(card(n, byId, focusId));
+    }
+    render();
+  </script>
+</body>
+</html>

@@ -18,6 +18,7 @@
     "setup": "bun install && bun src/cli.ts install",
     "install:claude": "bun src/cli.ts install",
     "mcp": "bun src/mcp/server.ts",
+    "ui": "bun src/ui/server.ts",
     "seed": "bun examples/seed.ts",
     "test": "bun test"
   },

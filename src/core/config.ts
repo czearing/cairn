@@ -2,6 +2,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CairnConfig, EmbedProvider } from "./config.types";
 
+const uiPort = Number(process.env.CAIRN_UI_PORT || "3737");
+
 // All configuration comes from the environment — one place, no config files to hunt for.
 export const config: CairnConfig = {
   dbPath: process.env.CAIRN_DB_PATH || join(homedir(), ".cairn", "cairn.db"),
@@ -12,4 +14,6 @@ export const config: CairnConfig = {
     baseUrl: process.env.CAIRN_EMBED_BASE_URL || "",
   },
   relevanceThreshold: Number(process.env.CAIRN_RELEVANCE_THRESHOLD || "0.3"),
+  uiPort,
+  uiUrl: process.env.CAIRN_UI_URL || `http://localhost:${uiPort}`,
 };

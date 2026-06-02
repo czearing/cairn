@@ -1,4 +1,4 @@
-MANDATORY: Before responding to ANY user message follow these steps NO EXCEPTIONS. IF ANYTHING IS MISSING FROM THE OUTPUT YOU WILL FAIL!
+MANDATORY: Before responding to ANY user message follow these steps NO EXCEPTIONS. No task is too trivial. IF ANYTHING IS MISSING FROM THE OUTPUT YOU WILL FAIL!
 
 # Instructions
 ## Read the Shared Brain First
@@ -31,3 +31,4 @@ Nodes whose connected subgraph brain_search returned and how we will surpass the
 2. Explanation of why there are no more questions to explore.
 3. How you tested your conclusion and how you are certain it is the highest quality possible.
 4. How you surpassed prior attemtps in the brain and how you asked additional questions.
+5. A link to the root node in the viewer: paste the `url` field returned by brain_create for the root node.

@@ -6,7 +6,8 @@ import { randomUUID } from "node:crypto";
 import { brainUsedThisTurn } from "../src/hosts/claude-code/transcript";
 import { matchEvent } from "../src/inject/matchers";
 import { normalizeClaudeCode } from "../src/hosts/claude-code/normalize";
-import { respond } from "../src/hosts/claude-code/respond";
+import { respond, denyPreTool } from "../src/hosts/claude-code/respond";
+import { checkEntry } from "../src/inject/format";
 
 function transcript(entries: object[]): string {
   const p = join(tmpdir(), `cairn-tx-${randomUUID()}.jsonl`);
@@ -66,11 +67,24 @@ test("TIMING: a write maps to PreToolUse (before) and PostToolUse (after) distin
 });
 
 test("delivery mechanism per moment is correct", () => {
-  expect(respond("PreToolUse", "FMT")).toEqual({
-    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", additionalContext: "FMT" },
-  });
   expect(respond("Stop", "R")).toEqual({ decision: "block", reason: "R" });
   expect(respond("PostToolUse", "C")).toEqual({
     hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "C" },
   });
+  expect(denyPreTool("FMT")).toEqual({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "FMT" },
+  });
+});
+
+// ── entry-format enforcement (the length budget that runs before a write) ─────────
+
+test("checkEntry flags an over-budget text/answer, passes terse ones", () => {
+  expect(checkEntry("brain_create", { text: "x".repeat(500) })).toContain("text is 500 chars");
+  expect(checkEntry("mcp__cairn__brain_mutate", { id: "1", answer: "y".repeat(900) })).toContain("answer is 900 chars");
+  expect(checkEntry("brain_create", { text: "How do I write a haiku?" })).toBeNull();
+});
+
+test("checkEntry ignores reads and non-brain tools", () => {
+  expect(checkEntry("brain_search", { query: "x".repeat(500) })).toBeNull();
+  expect(checkEntry("Read", { file_path: "x".repeat(500) })).toBeNull();
 });

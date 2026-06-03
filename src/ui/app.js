@@ -58,11 +58,11 @@ function showRoots() {
   toggle.hidden = true;
   crumb.innerHTML = "";
   if (!neurons.length) {
-    app.innerHTML = emptyHTML("Nothing here yet", "Markers left for whoever comes next — the first thought starts the trail.");
+    app.innerHTML = emptyHTML("No thoughts yet", "Create one to get started.");
     return;
   }
   const w = div("wrap");
-  w.appendChild(meta(`Roots · ${roots.length}`));
+  w.appendChild(meta(`${roots.length} ${roots.length === 1 ? "root" : "roots"}`));
   for (const r of roots) {
     const done = r.members.every(answered);
     const a = document.createElement("button");
@@ -85,7 +85,7 @@ function showComponent(comp, focusId) {
 
   if (mode === "list") {
     const w = div("wrap");
-    w.appendChild(meta(`${comp.members.length} neurons`));
+    w.appendChild(meta(`${comp.members.length} ${comp.members.length === 1 ? "thought" : "thoughts"}`));
     for (const n of comp.members) w.appendChild(card(n, () => openDetail(n.id)));
     app.replaceChildren(w);
   } else {
@@ -119,9 +119,9 @@ function openDetail(id) {
     `<button class="x">×</button>` +
     `<span class="badge" style="font-size:11px;font-weight:700;text-transform:uppercase;color:${c.bt}">${c.label}</span>` +
     `<div class="lbl">Question</div><div class="q">${esc(n.text)}</div>` +
-    `<div class="lbl">Answer</div><div class="ans">${answered(n) ? esc(n.answer) : "<span style='color:#cbd5e1'>—</span>"}</div>` +
+    `<div class="lbl">Answer</div><div class="ans">${answered(n) ? esc(n.answer) : "<span style='color:#a8a29e'>Not answered yet</span>"}</div>` +
     (n.citation && n.citation.trim() ? `<div class="lbl">Citation</div><div class="ans">${linkify(n.citation)}</div>` : "") +
-    (n.edges.length ? `<div class="lbl">Edges</div><div id="ed"></div>` : "");
+    (n.edges.length ? `<div class="lbl">Links</div><div id="ed"></div>` : "");
   detail.querySelector(".x").onclick = () => (detail.hidden = true);
   const ed = detail.querySelector("#ed");
   if (ed) for (const e of n.edges) {
@@ -145,7 +145,7 @@ qInput.oninput = () => {
     const results = (await (await fetch("/api/search?q=" + encodeURIComponent(q))).json()).results;
     toggle.hidden = true; crumb.innerHTML = ""; detail.hidden = true;
     const w = div("wrap");
-    w.appendChild(meta(`${results.length} result${results.length !== 1 ? "s" : ""} · most relevant first`));
+    w.appendChild(meta(`${results.length} result${results.length !== 1 ? "s" : ""}`));
     if (!results.length) w.appendChild(Object.assign(document.createElement("p"), { textContent: "No matches.", style: "color:var(--muted)" }));
     results.forEach((n) => w.appendChild(card(n, () => { qInput.value = ""; go("/node/" + n.id); })));
     app.replaceChildren(w);

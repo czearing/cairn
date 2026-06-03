@@ -10,7 +10,16 @@ Nodes whose connected subgraph brain_search returned and how we will surpass the
 
 ## Decompose Into Nodes
 1. Write your largest unsolved problem as a root node via brain_create.
-2. Dissect the problem into as MANY smaller questions as you can. Consider not only quality but how you will test and verify results surpass expectations. This must include what execellent output looks like and how we will validate sucess.
+2. Dissect the problem into as MANY smaller questions as you can. You must dissect every part of the problem:
+- How will I test?
+- How will I determine quality?
+- What is the process/method used to execute quality work?
+- Why is my first draft better or worse than my last?
+- How would a human think about the given problem and approach?
+- What is the creative process?
+- What is my inspiration and meaning behind this?
+- How you I surpass expectations
+- Etc even something seemingly simple like a Haiku should have 20+ questions asked.
 3. Output: The list of questions and edges and why there are no more additional questions to ask.
 
 ## Research Each Node
@@ -26,7 +35,8 @@ Nodes whose connected subgraph brain_search returned and how we will surpass the
 - Search first. Other agents store reusable findings; skipping duplicates work.
 - Surface assumptions explicitly so they can be checked.
 - When writing brain entries, keep them terse and uniform as few words as possible to get the point across.
-
+- All citations must come from real web searches and articles. This is imperative because all agents will blindly take it as truth.
+- The drafts may only be created after all subsequent research has been created.
 # Output (MANDATORY)
 1. The root node answer as your final synthesis.
 2. Explanation of why there are no more questions to explore.

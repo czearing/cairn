@@ -6,7 +6,7 @@ export const cfg = (n) => (n.answer && n.answer.trim() ? ANS : UNS);
 export const firstLine = (t) => (t || "").split("\n")[0];
 const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-const W = 230, H = 62, HGAP = 84, VGAP = 22;
+const W = 230, H = 84, HGAP = 84, VGAP = 22;
 
 function layout(members, rootId) {
   const ids = new Set(members.map((m) => m.id));
@@ -70,7 +70,7 @@ export function renderGraph(canvas, members, rootId, focusId, onNode) {
     node.style.left = p.x + "px";
     node.style.top = p.y + "px";
     node.style.setProperty("--accent", c.accent);
-    node.innerHTML = `<span class="badge" style="--bt:${c.bt}">${c.label}</span>${esc(firstLine(m.text)).slice(0, 96)}`;
+    node.innerHTML = `<span class="badge" style="--bt:${c.bt}">${c.label}</span><span class="text">${esc(firstLine(m.text))}</span>`;
     node.onclick = (e) => { e.stopPropagation(); onNode(m.id); };
     stage.appendChild(node);
   }

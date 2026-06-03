@@ -38,7 +38,18 @@ if (event.kind === "tool_pending" && isBrainCreate(event.tool)) {
 const content = await inject(event);
 if (!content) process.exit(0);
 
+// Reward depth, not count: praise a new node ONLY when it was linked under a non-root parent
+// (genuine descent). Flat root-children earn no praise.
+let out = content;
+if (event.kind === "tool_completed" && isBrainCreate(event.tool)) {
+  const edges = Array.isArray(event.input.edges) ? (event.input.edges as string[]) : [];
+  const root = rootId();
+  if (root && edges.some((e) => e !== root)) {
+    out = "And you went a level deeper, exactly the move. Keep splitting downward.\n" + content;
+  }
+}
+
 const eventName = getEventName(payload);
 if (!eventName) process.exit(0);
 
-process.stdout.write(JSON.stringify(respond(eventName, content)));
+process.stdout.write(JSON.stringify(respond(eventName, out)));

@@ -46,3 +46,17 @@ test("PreToolUse DENIES a new root-only branch while an open branch exists", asy
   const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "another", edges: [root.id] } });
   expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("deny");
 });
+
+test("PostToolUse praises depth (non-root parent), not a flat root-child", async () => {
+  const DB = await import("../src/core/db");
+  const N = await import("../src/core/neurons");
+  DB.db().run("DELETE FROM neurons");
+  const root = await N.create("root");
+  const child = await N.create("child", [root.id]);
+
+  const deep = await fire({ hook_event_name: "PostToolUse", tool_name: "brain_create", tool_input: { text: "grandchild", edges: [child.id] }, tool_output: {} });
+  expect(JSON.parse(deep).hookSpecificOutput.additionalContext).toContain("a level deeper");
+
+  const flat = await fire({ hook_event_name: "PostToolUse", tool_name: "brain_create", tool_input: { text: "root child", edges: [root.id] }, tool_output: {} });
+  expect(JSON.parse(flat).hookSpecificOutput.additionalContext).not.toContain("a level deeper");
+});

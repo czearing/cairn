@@ -19,7 +19,7 @@ switch (cmd) {
     await import("../examples/seed");
     break;
   default:
-    console.log(`cairn — a shared semantic-graph memory for AI agents
+    console.log(`cairn: a shared semantic-graph memory for AI agents
 
 Usage:
   cairn install   Register hooks + the MCP server with Claude Code

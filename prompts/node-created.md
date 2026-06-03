@@ -1,4 +1,4 @@
-Excellent job, you took this branch one level deeper!
+Excellent job creating a new node!!
 The title of this node may only be a single question.
 Split before you answer. A node is atomic ONLY if its answer is one specific fact or claim, one source, 1 to 2 sentences. If answering needs a list, a comparison, or a synthesis, it is NOT atomic: split it, one child per item.
 Children must link to THIS node by the id you got back when you created it, NOT to the root. Split each child the same way. Depth does not stop until every leaf is a single fact.

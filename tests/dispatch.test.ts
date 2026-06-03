@@ -47,6 +47,18 @@ test("PreToolUse DENIES a new root-only branch while an open branch exists", asy
   expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("deny");
 });
 
+test("PreToolUse DENIES a yes/no question title and asks for how/why", async () => {
+  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "Does compression distinguish great poems?" } });
+  const j = JSON.parse(out);
+  expect(j.hookSpecificOutput.permissionDecision).toBe("deny");
+  expect(j.hookSpecificOutput.permissionDecisionReason).toContain("how or why");
+});
+
+test("PreToolUse ALLOWS an open how/why question", async () => {
+  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "How does compression distinguish great poems?" } });
+  expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("allow");
+});
+
 test("PostToolUse praises depth (non-root parent), not a flat root-child", async () => {
   const DB = await import("../src/core/db");
   const N = await import("../src/core/neurons");

@@ -6,7 +6,7 @@
 import { inject } from "../../inject/inject";
 import { getEventName, normalizeClaudeCode } from "./normalize";
 import { respond, denyPreTool } from "./respond";
-import { rootId, openBranchExists } from "../../core/audit";
+import { rootId, openBranchExists, isClosedQuestion } from "../../core/audit";
 
 const isBrainCreate = (t: string) => t === "brain_create" || t.endsWith("__brain_create");
 
@@ -25,6 +25,13 @@ if (!event) process.exit(0);
 // Depth-first gate: a new node that links ONLY to the root is denied while open branches
 // remain. Finish (or descend) an open branch before starting another straight off the root.
 if (event.kind === "tool_pending" && isBrainCreate(event.tool)) {
+  const text = typeof event.input.text === "string" ? event.input.text : "";
+  if (isClosedQuestion(text)) {
+    process.stdout.write(JSON.stringify(denyPreTool(
+      "That is a yes/no question. It presumes its answer and cannot be split. Re-ask it as a how or why question, then create it."
+    )));
+    process.exit(0);
+  }
   const edges = Array.isArray(event.input.edges) ? (event.input.edges as string[]) : [];
   const root = rootId();
   if (root && edges.length > 0 && edges.every((e) => e === root) && openBranchExists()) {

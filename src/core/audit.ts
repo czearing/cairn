@@ -15,6 +15,13 @@ export function isListish(answer: string): boolean {
   return sentences > 2 || a.length > 320; // multi-sentence synthesis
 }
 
+// A title that opens with a closed interrogative is a yes/no question: it presumes its answer
+// and cannot be split. Open questions (how/why/what/which) are required instead.
+const CLOSED = /^\s*(do|does|did|is|are|am|was|were|should|can|could|will|would|has|have|had|may|might|must|shall)\b/i;
+export function isClosedQuestion(text: string): boolean {
+  return CLOSED.test(text);
+}
+
 // Answered LEAF nodes whose answer is non-atomic. A leaf has at most one edge (its parent);
 // branch nodes (many edges) legitimately hold a synthesis, so they are excluded.
 export function unsplitLeaves(): Neuron[] {

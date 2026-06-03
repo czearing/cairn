@@ -41,9 +41,10 @@ test("missing transcript fails safe (no nag)", async () => {
   expect(await brainUsedThisTurn("C:/nope/does-not-exist.jsonl")).toBe(true);
 });
 
-test("matcher nudges only when the brain went unused", () => {
-  expect(matchEvent({ kind: "turn_finished", usedBrain: false })).toEqual({ promptFile: "turn-reminder.md" });
-  expect(matchEvent({ kind: "turn_finished", usedBrain: true })).toBeNull();
+test("turn_finished routing: unused brain, unsplit leaves, or done", () => {
+  expect(matchEvent({ kind: "turn_finished", usedBrain: false, unsplit: 0 })).toEqual({ promptFile: "turn-reminder.md" });
+  expect(matchEvent({ kind: "turn_finished", usedBrain: true, unsplit: 3 })).toEqual({ promptFile: "split-leaves.md" });
+  expect(matchEvent({ kind: "turn_finished", usedBrain: true, unsplit: 0 })).toBeNull();
 });
 
 // ── entry-format injection + timing ──────────────────────────────────────────────

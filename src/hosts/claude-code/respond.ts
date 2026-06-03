@@ -13,3 +13,14 @@ export function respond(eventName: string, content: string): object {
   }
   return { hookSpecificOutput: { hookEventName: eventName, additionalContext: content } };
 }
+
+// Block a pending tool call (PreToolUse), feeding the reason back so the agent reconsiders.
+export function denyPreTool(reason: string): object {
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: reason,
+    },
+  };
+}

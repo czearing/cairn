@@ -1,5 +1,6 @@
 import type { NormalizedEvent } from "../../inject/events.types";
 import { brainUsedThisTurn } from "./transcript";
+import { unsplitLeaves } from "../../core/audit";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -37,7 +38,7 @@ export async function normalizeClaudeCode(payload: unknown): Promise<NormalizedE
     if (payload.stop_hook_active) return null;
     const tp = payload.transcript_path;
     if (typeof tp !== "string") return null;
-    return { kind: "turn_finished", usedBrain: await brainUsedThisTurn(tp) };
+    return { kind: "turn_finished", usedBrain: await brainUsedThisTurn(tp), unsplit: unsplitLeaves().length };
   }
 
   return null;

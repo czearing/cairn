@@ -11,7 +11,11 @@ function isTool(tool: string, name: string): boolean {
 
 export function matchEvent(event: NormalizedEvent): Match {
   if (event.kind === "user_message") return { promptFile: "user-message.md" };
-  if (event.kind === "turn_finished") return event.usedBrain ? null : { promptFile: "turn-reminder.md" };
+  if (event.kind === "turn_finished") {
+    if (!event.usedBrain) return { promptFile: "turn-reminder.md" };
+    if (event.unsplit > 0) return { promptFile: "split-leaves.md" };
+    return null;
+  }
 
   // Before a write (PreToolUse) → remind the agent of the entry format.
   if (event.kind === "tool_pending") {

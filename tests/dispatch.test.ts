@@ -8,6 +8,7 @@ async function fire(payload: object): Promise<string> {
     stdin: new TextEncoder().encode(JSON.stringify(payload)),
     stdout: "pipe",
     stderr: "pipe",
+    env: { ...process.env }, // inherit the test's throwaway CAIRN_DB_PATH (preload)
   });
   const out = await new Response(proc.stdout).text();
   await proc.exited;
@@ -34,4 +35,14 @@ test("PreToolUse does not inject on brain_search (a read, not a write)", async (
 test("PreToolUse ignores non-brain tools", async () => {
   const out = await fire({ hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "x" } });
   expect(out).toBe("");
+});
+
+test("PreToolUse DENIES a new root-only branch while an open branch exists", async () => {
+  const DB = await import("../src/core/db");
+  const N = await import("../src/core/neurons");
+  DB.db().run("DELETE FROM neurons");
+  const root = await N.create("root question");
+  await N.create("open child", [root.id]); // unanswered -> open branch
+  const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "another", edges: [root.id] } });
+  expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("deny");
 });

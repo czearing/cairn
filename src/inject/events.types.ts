@@ -13,5 +13,8 @@ export type NormalizedEvent =
       input: Record<string, unknown>;
       output: unknown;
     }
-  /** The agent finished a turn. `usedBrain` is whether it called brain_search/brain_mutate. */
-  | { kind: "turn_finished"; usedBrain: boolean };
+  /**
+   * The agent finished a turn. `usedBrain` is whether it called brain_search/brain_mutate;
+   * `unsplit` is how many answered leaves are still non-atomic (lists/syntheses).
+   */
+  | { kind: "turn_finished"; usedBrain: boolean; unsplit: number };

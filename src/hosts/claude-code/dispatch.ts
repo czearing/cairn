@@ -5,7 +5,10 @@
 
 import { inject } from "../../inject/inject";
 import { getEventName, normalizeClaudeCode } from "./normalize";
-import { respond } from "./respond";
+import { respond, denyPreTool } from "./respond";
+import { rootId, openBranchExists } from "../../core/audit";
+
+const isBrainCreate = (t: string) => t === "brain_create" || t.endsWith("__brain_create");
 
 const raw = await Bun.stdin.text();
 
@@ -18,6 +21,19 @@ try {
 
 const event = await normalizeClaudeCode(payload);
 if (!event) process.exit(0);
+
+// Depth-first gate: a new node that links ONLY to the root is denied while open branches
+// remain. Finish (or descend) an open branch before starting another straight off the root.
+if (event.kind === "tool_pending" && isBrainCreate(event.tool)) {
+  const edges = Array.isArray(event.input.edges) ? (event.input.edges as string[]) : [];
+  const root = rootId();
+  if (root && edges.length > 0 && edges.every((e) => e === root) && openBranchExists()) {
+    process.stdout.write(JSON.stringify(denyPreTool(
+      "The root already has open branches. Link this under one of them and go deeper, or finish an open branch first. Do not add another node straight off the root."
+    )));
+    process.exit(0);
+  }
+}
 
 const content = await inject(event);
 if (!content) process.exit(0);

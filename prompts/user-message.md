@@ -10,7 +10,7 @@ Nodes whose connected subgraph brain_search returned and how we will surpass the
 
 ## Decompose Into Nodes
 1. Write your largest unsolved problem as a root node via brain_create.
-2. Dissect the problem into as MANY smaller questions as you can. You must dissect every part of the problem:
+2. Dissect the problem. The angles below are only the ROOT's first split. Each one must then be split the same way until its leaves are single facts. Go deep on one branch before opening the next:
 - How will I test?
 - How will I determine quality?
 - What is the process/method used to execute quality work?
@@ -20,6 +20,7 @@ Nodes whose connected subgraph brain_search returned and how we will surpass the
 - What is my inspiration and meaning behind this?
 - How you I surpass expectations
 - Etc even something seemingly simple like a Haiku should have 20+ questions asked.
+These angles are starting points, not leaves. Keep splitting each one until it bottoms out in single facts.
 3. Output: The list of questions and edges and why there are no more additional questions to ask.
 
 ## Research Each Node

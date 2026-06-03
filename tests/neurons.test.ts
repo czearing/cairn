@@ -71,6 +71,17 @@ test("mutate: REQUIRES a citation when giving an answer", async () => {
   expect(m.answer).toBe("a cited claim");
 });
 
+test("link/unlink connect thoughts bidirectionally", async () => {
+  const a = await N.create("A");
+  const b = await N.create("B");
+  N.link(a.id, b.id);
+  expect(N.get(a.id)!.edges).toContain(b.id);
+  expect(N.get(b.id)!.edges).toContain(a.id);
+  N.unlink(a.id, b.id);
+  expect(N.get(a.id)!.edges).not.toContain(b.id);
+  expect(N.get(b.id)!.edges).not.toContain(a.id);
+});
+
 test("mutate: unknown id returns null", async () => {
   expect(await N.mutate("nope", { answer: "x" })).toBeNull();
 });

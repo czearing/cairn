@@ -29,6 +29,21 @@ function addEdge(from: string, to: string): void {
   db().query("UPDATE neurons SET edges = ? WHERE id = ?").run(JSON.stringify([...n.edges, to]), from);
 }
 
+function removeEdge(from: string, to: string): void {
+  const n = get(from);
+  if (!n || !n.edges.includes(to)) return;
+  db().query("UPDATE neurons SET edges = ? WHERE id = ?").run(JSON.stringify(n.edges.filter((e) => e !== to)), from);
+}
+
+// Connect/disconnect two thoughts (mirrored, so the link shows on both).
+export function link(a: string, b: string): void {
+  if (a !== b) { addEdge(a, b); addEdge(b, a); }
+}
+export function unlink(a: string, b: string): void {
+  removeEdge(a, b);
+  removeEdge(b, a);
+}
+
 // Create a new neuron; embeds on write; mirrors edges so the graph stays undirected.
 export async function create(text: string, edges: string[] = []): Promise<Neuron> {
   const id = randomUUID();

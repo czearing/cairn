@@ -1,4 +1,5 @@
 import { renderGraph, cfg, firstLine } from "/graph.js";
+import { openEditor } from "/detail.js";
 
 const app = document.getElementById("app");
 const detail = document.getElementById("detail");
@@ -9,8 +10,6 @@ const qInput = document.getElementById("q");
 let neurons = [], byId = new Map(), roots = [], mode = "graph";
 
 const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-const linkify = (s) =>
-  esc(s).replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noreferrer" style="color:var(--accent)">${u}</a>`);
 const CAIRN = `<svg width="48" height="48" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="19" rx="8" ry="2.5" fill="#d6d3d1"/><ellipse cx="12" cy="13.6" rx="6.2" ry="2.3" fill="#e7e5e4"/><ellipse cx="12" cy="8.6" rx="4.5" ry="2.1" fill="#e7e5e4"/><ellipse cx="12" cy="4.4" rx="2.7" ry="1.7" fill="#d6d3d1"/></svg>`;
 const emptyHTML = (h, p) => `<div class="empty">${CAIRN}<h2>${h}</h2><p>${p}</p></div>`;
 const div = (cls) => { const d = document.createElement("div"); if (cls) d.className = cls; return d; };
@@ -86,16 +85,16 @@ function showComponent(comp, focusId) {
   if (mode === "list") {
     const w = div("wrap");
     w.appendChild(meta(`${comp.members.length} ${comp.members.length === 1 ? "thought" : "thoughts"}`));
-    for (const n of comp.members) w.appendChild(card(n, () => openDetail(n.id)));
+    for (const n of comp.members) w.appendChild(card(n, () => showDetail(n.id)));
     app.replaceChildren(w);
   } else {
     const canvas = div();
     canvas.id = "canvas";
     canvas.onclick = () => { detail.hidden = true; };
     app.replaceChildren(canvas);
-    renderGraph(canvas, comp.members, comp.rep.id, focusId, openDetail);
+    renderGraph(canvas, comp.members, comp.rep.id, focusId, showDetail);
   }
-  if (focusId) openDetail(focusId);
+  if (focusId) showDetail(focusId);
 }
 
 function card(n, onClick) {
@@ -109,31 +108,25 @@ function card(n, onClick) {
   return b;
 }
 
-// ── detail drawer ──
-function openDetail(id) {
-  const n = byId.get(id);
-  if (!n) return;
-  const c = cfg(n);
-  detail.hidden = false;
-  detail.innerHTML =
-    `<button class="x">×</button>` +
-    `<span class="badge" style="font-size:11px;font-weight:700;text-transform:uppercase;color:${c.bt}">${c.label}</span>` +
-    `<div class="lbl">Question</div><div class="q">${esc(n.text)}</div>` +
-    `<div class="lbl">Answer</div><div class="ans">${answered(n) ? esc(n.answer) : "<span style='color:#a8a29e'>Not answered yet</span>"}</div>` +
-    (n.citation && n.citation.trim() ? `<div class="lbl">Citation</div><div class="ans">${linkify(n.citation)}</div>` : "") +
-    (n.edges.length ? `<div class="lbl">Links</div><div id="ed"></div>` : "");
-  detail.querySelector(".x").onclick = () => (detail.hidden = true);
-  const ed = detail.querySelector("#ed");
-  if (ed) for (const e of n.edges) {
-    const t = byId.get(e);
-    if (!t) continue;
-    const ch = document.createElement("span");
-    ch.className = "chip";
-    ch.textContent = firstLine(t.text).slice(0, 42);
-    ch.onclick = () => go("/node/" + e);
-    ed.appendChild(ch);
-  }
+// ── editable detail drawer ──
+function showDetail(id) {
+  openEditor(id, { byId, neurons, reload, go, reopen: showDetail });
 }
+
+async function reload() {
+  neurons = (await (await fetch("/api/neurons")).json()).neurons;
+  byId = new Map(neurons.map((n) => [n.id, n]));
+  roots = components();
+  route();
+}
+
+document.getElementById("new").onclick = async () => {
+  const { neuron } = await (await fetch("/api/neurons", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "New thought" }),
+  })).json();
+  await reload();
+  go("/node/" + neuron.id);
+};
 
 // ── search ──
 let timer;

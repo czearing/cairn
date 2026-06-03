@@ -17,6 +17,8 @@ test("isListish flags lists and multi-sentence syntheses, not single facts", () 
   expect(A.isListish("intro:\n- one\n- two")).toBe(true); // newline list
   expect(A.isListish("One. Two. Three. Four.")).toBe(true); // > 2 sentences
   expect(A.isListish("x".repeat(400))).toBe(true); // long synthesis
+  expect(A.isListish("Poems favor concrete imagery; abstraction is empty.")).toBe(true); // semicolon-welded claims
+  expect(A.isListish("It works because it rhymes so it sticks.")).toBe(true); // chained cause and effect
 });
 
 test("unsplitLeaves flags an answered single-edge node with a list answer", async () => {

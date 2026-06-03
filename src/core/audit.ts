@@ -8,6 +8,9 @@ export function isListish(answer: string): boolean {
   const a = answer.trim();
   if (!a) return false;
   if (/\n\s*([-*•]|\d+[.)])/.test(a)) return true; // bullet / numbered list
+  if (a.includes(";")) return true; // claims welded with a semicolon
+  const connectives = (a.match(/\b(so|because|therefore|whereas)\b/gi) || []).length;
+  if (connectives >= 2) return true; // chained cause-and-effect, not one fact
   const sentences = (a.match(/[.!?](\s|$)/g) || []).length;
   return sentences > 2 || a.length > 320; // multi-sentence synthesis
 }

@@ -5,10 +5,12 @@ const esc = (s) =>
   (s || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const post = (url, body) =>
   fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const grow = (el) => { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; };
 
-// Editable detail drawer. ctx = { byId, neurons, reload, go, reopen }.
+// Inline, Notion-style editor. Fields are borderless and autosave on blur; no Save button.
+// ctx = { byId, neurons, go, saved, reloadAndReopen, reloadAndClose, focusTitle }.
 export function openEditor(id, ctx) {
-  const { byId, neurons, reload, go, reopen } = ctx;
+  const { byId, neurons, go, saved, reloadAndReopen, reloadAndClose, focusTitle } = ctx;
   const n = byId.get(id);
   if (!n) { drawer.hidden = true; return; }
   const c = cfg(n);
@@ -18,48 +20,61 @@ export function openEditor(id, ctx) {
     .join("");
   const links = n.edges.filter((e) => byId.has(e))
     .map((e) => `<span class="chip" data-go="${e}">${esc(firstLine(byId.get(e).text)).slice(0, 34)}<b data-unlink="${e}">×</b></span>`)
-    .join("") || `<span style="color:#a8a29e;font-size:12.5px">No links yet</span>`;
+    .join("") || `<span class="hint">No links yet</span>`;
 
   drawer.hidden = false;
   drawer.innerHTML = `
-    <button class="x" data-x>×</button>
-    <span class="badge" style="font-size:11px;font-weight:700;text-transform:uppercase;color:${c.bt}">${c.label}</span>
-    <div class="lbl">Question</div>
-    <textarea class="field" id="f-text" rows="2">${esc(n.text)}</textarea>
-    <div class="lbl">Answer</div>
-    <textarea class="field" id="f-answer" rows="5" placeholder="Not answered yet">${esc(n.answer)}</textarea>
-    <div class="lbl">Citation</div>
-    <input class="field" id="f-cite" placeholder="https://…  (required when answered)" value="${esc(n.citation)}" />
-    <div class="err" id="f-err" hidden></div>
-    <div class="row">
-      <button class="btn primary" data-save>Save</button>
-      <button class="btn danger" data-del>Delete</button>
+    <div class="d-top">
+      <span class="badge2" style="--bt:${c.bt}">${c.label}</span>
+      <span class="status" id="d-status"></span>
+      <button class="icon" data-x title="Close">×</button>
     </div>
+    <textarea class="edit title" id="f-text" rows="1" placeholder="Untitled question">${esc(n.text)}</textarea>
+    <textarea class="edit answer" id="f-answer" rows="1" placeholder="Write the finding. One fact, one source.">${esc(n.answer)}</textarea>
+    <div class="cite-row"><span class="cite-ic">↗</span><input class="edit cite" id="f-cite" placeholder="Source URL" value="${esc(n.citation)}" /></div>
+    <div class="err" id="f-err" hidden></div>
     <div class="lbl">Links</div>
-    <div>${links}</div>
-    ${linkable ? `<select class="field" id="f-add" style="margin-top:9px"><option value="">+ Link a thought…</option>${linkable}</select>` : ""}`;
+    <div id="d-links">${links}</div>
+    ${linkable ? `<select class="addlink" id="f-add"><option value="">+ Add a link</option>${linkable}</select>` : ""}
+    <button class="del" data-del>Delete thought</button>`;
 
   const q = (s) => drawer.querySelector(s);
-  q("[data-x]").onclick = () => (drawer.hidden = true);
+  const status = q("#d-status"), errBox = q("#f-err");
+  const text = q("#f-text"), answer = q("#f-answer"), cite = q("#f-cite");
+  [text, answer].forEach((el) => { grow(el); el.addEventListener("input", () => grow(el)); });
 
-  q("[data-save]").onclick = async () => {
-    const body = { text: q("#f-text").value, answer: q("#f-answer").value, citation: q("#f-cite").value };
+  async function save() {
+    const t = text.value, a = answer.value, ci = cite.value;
+    const needsSource = a.trim() && !ci.trim(); // the brain forbids uncited answers; defer the answer
+    const body = needsSource ? { text: t } : { text: t, answer: a, citation: ci };
+    const changed = needsSource ? t !== n.text : (t !== n.text || a !== n.answer || ci !== n.citation);
+    if (needsSource) status.textContent = "Add a source to save the answer";
+    if (!changed) return;
+    status.textContent = "Saving";
     const res = await fetch("/api/neurons/" + id, {
       method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
-    if (!res.ok) { const e = q("#f-err"); e.hidden = false; e.textContent = (await res.json()).error || "Save failed"; return; }
-    await reload(); reopen(id);
-  };
+    if (!res.ok) { errBox.hidden = false; errBox.textContent = (await res.json()).error || "Save failed"; status.textContent = ""; return; }
+    errBox.hidden = true;
+    const prev = { ...n };
+    const updated = (await res.json()).neuron;
+    Object.assign(n, updated);
+    if (!needsSource) status.textContent = "Saved";
+    saved(prev, updated);
+  }
+  [text, answer, cite].forEach((el) => el.addEventListener("blur", save));
 
-  q("[data-del]").onclick = async () => {
+  q("[data-x]").onclick = () => (drawer.hidden = true);
+  q("[data-del]").onclick = async (e) => {
+    const b = e.currentTarget;
+    if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.classList.add("armed"); b.textContent = "Click again to delete"; return; }
     await fetch("/api/neurons/" + id, { method: "DELETE" });
-    drawer.hidden = true; await reload(); go("/");
+    reloadAndClose();
   };
-
   drawer.querySelectorAll("[data-unlink]").forEach((b) => (b.onclick = async (ev) => {
     ev.stopPropagation();
     await post("/api/unlink", { a: id, b: b.dataset.unlink });
-    await reload(); reopen(id);
+    reloadAndReopen(id);
   }));
   drawer.querySelectorAll("[data-go]").forEach((ch) => (ch.onclick = () => go("/node/" + ch.dataset.go)));
 
@@ -67,6 +82,8 @@ export function openEditor(id, ctx) {
   if (add) add.onchange = async () => {
     if (!add.value) return;
     await post("/api/link", { a: id, b: add.value });
-    await reload(); reopen(id);
+    reloadAndReopen(id);
   };
+
+  if (focusTitle) { text.focus(); text.select(); }
 }

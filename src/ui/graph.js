@@ -67,6 +67,7 @@ export function renderGraph(canvas, members, rootId, focusId, onNode) {
     const c = cfg(m);
     const node = document.createElement("div");
     node.className = "node" + (m.id === focusId ? " focus" : "");
+    node.dataset.id = m.id;
     node.style.left = p.x + "px";
     node.style.top = p.y + "px";
     node.style.setProperty("--accent", c.accent);

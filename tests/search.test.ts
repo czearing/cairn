@@ -71,13 +71,23 @@ test("E7 matches a neuron by its ANSWER text", async () => {
   expect(ids(await S.search("what is the capital city of France"))).toContain(n.id);
 });
 
-test("E8 a hit returns the WHOLE connected tree (grandchildren included)", async () => {
+test("E8 a hit on a root returns its whole subtree (grandchildren included)", async () => {
   const a = await N.create("how to write a haiku poem");
   const b = await N.create("my unrelated tax filing deadline", [a.id]);
   const c = await N.create("weekly grocery shopping list", [b.id]);
   const d = await N.create("when to change my car's oil", [c.id]);
   const got = ids(await S.search("compose a poem"));
   for (const id of [a.id, b.id, c.id, d.id]) expect(got).toContain(id);
+});
+
+test("E10 a hit on a child returns its descendants but NOT its ancestors", async () => {
+  const root = await N.create("household monthly budget planning");
+  const mid = await N.create("weekly grocery shopping strategy", [root.id]);
+  const leaf = await N.create("how to compose a haiku poem", [mid.id]);
+  const res = ids(await S.search("writing poetry and verse"));
+  expect(res).toContain(leaf.id); // the hit itself
+  expect(res).not.toContain(mid.id); // parent NOT pulled in
+  expect(res).not.toContain(root.id); // root NOT pulled in
 });
 
 test("E9 results interleaved by relevance, not hop distance", async () => {

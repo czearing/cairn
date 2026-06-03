@@ -22,14 +22,22 @@ async function vectors(): Promise<NeuronVector[]> {
   return out;
 }
 
-// Semantic search. Neurons above the threshold are "seeds"; from each we traverse the ENTIRE
-// connected subgraph (the whole tree), then interleave everything into one list ranked by
-// relevance. Deduped, NO count limit.
+// Semantic search. Neurons above the threshold are "seeds"; from each we descend INTO its
+// subtree (its sub-questions and their findings), then interleave everything into one list
+// ranked by relevance. A match never pulls in its parents or root. Deduped, NO count limit.
+//
+// Edges are stored mirrored (undirected), so direction comes from creation order: a parent is
+// always created before its child, so a node's descendants are the NEWER neurons reachable
+// through its edges. We expand a seed downward only, never up the tree.
 export async function search(query: string): Promise<Neuron[]> {
   if (!query.trim()) return [];
   const qv = await embed(query);
   const scored: ScoredNeuron[] = (await vectors()).map((d) => ({ ...d, sim: cosine(qv, d.vec) }));
   const byId = new Map(scored.map((s) => [s.neuron.id, s]));
+
+  const order = new Map<string, number>();
+  (db().query("SELECT id FROM neurons ORDER BY rowid").all() as { id: string }[])
+    .forEach((r, i) => order.set(r.id, i));
 
   const adj = new Map<string, Set<string>>();
   for (const s of scored) adj.set(s.neuron.id, new Set());
@@ -49,7 +57,11 @@ export async function search(query: string): Promise<Neuron[]> {
   if (included.size === 0) return [];
   while (stack.length) {
     const id = stack.pop()!;
-    for (const nb of adj.get(id) ?? []) if (!included.has(nb)) { included.add(nb); stack.push(nb); }
+    const rank = order.get(id) ?? -1;
+    for (const nb of adj.get(id) ?? []) {
+      if (included.has(nb)) continue;
+      if ((order.get(nb) ?? -1) > rank) { included.add(nb); stack.push(nb); } // descend only
+    }
   }
 
   return [...included]

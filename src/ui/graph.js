@@ -1,7 +1,7 @@
 // Dependency-free graph rendering: a layered (left-to-right) tree layout + SVG edges + pan/zoom.
 
-const ANS = { accent: "#10b981", bt: "#047857", label: "answered" };
-const UNS = { accent: "#94a3b8", bt: "#64748b", label: "unsolved" };
+const ANS = { accent: "#059669", bt: "#059669", label: "answered" };
+const UNS = { accent: "#a8a29e", bt: "#78716c", label: "unsolved" };
 export const cfg = (n) => (n.answer && n.answer.trim() ? ANS : UNS);
 export const firstLine = (t) => (t || "").split("\n")[0];
 const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));

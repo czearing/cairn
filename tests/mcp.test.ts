@@ -28,9 +28,9 @@ const call = (name: string, args: Record<string, unknown>) =>
   }>;
 const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.text);
 
-test("exposes exactly the three brain tools", async () => {
+test("exposes the brain tools", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_mutate", "brain_search"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search"]);
 });
 
 test("brain_create returns a neuron with an id and a viewer url", async () => {
@@ -72,4 +72,10 @@ test("brain_mutate REJECTS an answer with no citation", async () => {
   const res = await call("brain_mutate", { id: n.id, answer: "an uncited factual claim" });
   expect(res.isError).toBe(true);
   expect(res.content[0]!.text).toContain("citation required");
+});
+
+test("brain_delete removes a thought", async () => {
+  const n = parse(await call("brain_create", { text: "to delete" }));
+  expect(parse(await call("brain_delete", { id: n.id })).deleted).toBe(true);
+  expect(parse(await call("brain_delete", { id: n.id })).deleted).toBe(false);
 });

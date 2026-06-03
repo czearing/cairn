@@ -10,7 +10,9 @@ let neurons = [], byId = new Map(), roots = [], mode = "graph";
 
 const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const linkify = (s) =>
-  esc(s).replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noreferrer" style="color:#3b82f6">${u}</a>`);
+  esc(s).replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noreferrer" style="color:var(--accent)">${u}</a>`);
+const CAIRN = `<svg width="48" height="48" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="19" rx="8" ry="2.5" fill="#d6d3d1"/><ellipse cx="12" cy="13.6" rx="6.2" ry="2.3" fill="#e7e5e4"/><ellipse cx="12" cy="8.6" rx="4.5" ry="2.1" fill="#e7e5e4"/><ellipse cx="12" cy="4.4" rx="2.7" ry="1.7" fill="#d6d3d1"/></svg>`;
+const emptyHTML = (h, p) => `<div class="empty">${CAIRN}<h2>${h}</h2><p>${p}</p></div>`;
 const div = (cls) => { const d = document.createElement("div"); if (cls) d.className = cls; return d; };
 const meta = (t) => { const p = document.createElement("p"); p.className = "meta"; p.textContent = t; return p; };
 const answered = (n) => n.answer && n.answer.trim();
@@ -55,14 +57,17 @@ document.getElementById("home").onclick = (e) => { e.preventDefault(); qInput.va
 function showRoots() {
   toggle.hidden = true;
   crumb.innerHTML = "";
-  if (!neurons.length) { app.innerHTML = `<div class="empty">The brain is empty.</div>`; return; }
+  if (!neurons.length) {
+    app.innerHTML = emptyHTML("Nothing here yet", "Markers left for whoever comes next — the first thought starts the trail.");
+    return;
+  }
   const w = div("wrap");
   w.appendChild(meta(`Roots · ${roots.length}`));
   for (const r of roots) {
     const done = r.members.every(answered);
     const a = document.createElement("button");
     a.className = "card";
-    a.style.setProperty("--accent", done ? "#10b981" : "#94a3b8");
+    a.style.setProperty("--accent", done ? "#059669" : "#a8a29e");
     a.onclick = () => go("/node/" + r.rep.id);
     a.innerHTML = `<span class="dot"></span><span class="q">${esc(firstLine(r.rep.text))}</span>` +
       `<span class="count">${r.members.filter(answered).length}/${r.members.length} answered</span>`;
@@ -141,7 +146,7 @@ qInput.oninput = () => {
     toggle.hidden = true; crumb.innerHTML = ""; detail.hidden = true;
     const w = div("wrap");
     w.appendChild(meta(`${results.length} result${results.length !== 1 ? "s" : ""} · most relevant first`));
-    if (!results.length) w.appendChild(Object.assign(div("empty"), { textContent: "No matches." }));
+    if (!results.length) w.appendChild(Object.assign(document.createElement("p"), { textContent: "No matches.", style: "color:var(--muted)" }));
     results.forEach((n) => w.appendChild(card(n, () => { qInput.value = ""; go("/node/" + n.id); })));
     app.replaceChildren(w);
   }, 220);

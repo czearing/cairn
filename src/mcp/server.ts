@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { create, mutate } from "../core/neurons";
+import { create, mutate, remove } from "../core/neurons";
 import { search } from "../core/search";
 import { config } from "../core/config";
 import type { Neuron } from "../core/neurons.types";
@@ -13,47 +13,54 @@ const server = new McpServer({ name: "cairn", version: "1.0.0" });
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
 
-// Attach a viewer deep-link so callers can show/cite the neuron in the UI.
+// Attach a viewer deep-link so callers can show/cite the thought in the UI.
 const withUrl = (n: Neuron) => ({ ...n, url: `${config.uiUrl}/node/${n.id}` });
 
 server.tool(
   "brain_search",
-  "Semantic search the brain. Returns every relevant neuron ranked most-relevant-first, plus the whole connected subgraph of each hit. No limit. Use this FIRST to find existing thinking.",
+  "Returns every relevant thought ranked most-relevant-first. Use this as much as possible to learn from previous thoughts",
   { query: z.string().describe("What you are looking for, in natural language.") },
   async ({ query }) => json((await search(query)).map(withUrl))
 );
 
 server.tool(
   "brain_create",
-  "Create a new neuron (a question/problem note). Returns it with its id. Optionally link it to existing neurons by id.",
+  "Create a thought and return its id. Keep it concise, bloated text pollutes search. Link related thoughts by id so future agents can build on them",
   {
     text: z.string().describe("The question or problem, in natural language."),
-    edges: z.array(z.string()).optional().describe("ids of related neurons to link to."),
+    edges: z.array(z.string()).optional().describe("ids of related thoughts to link to."),
   },
   async ({ text, edges }) => (text.trim() ? json(withUrl(await create(text, edges ?? []))) : fail("text is required"))
 );
 
 server.tool(
   "brain_mutate",
-  "Update an existing neuron by id. Provide only the fields to change. Setting `answer` marks it solved. Returns the updated neuron.",
+  "Update an existing thought by id. Provide only the fields to change. Setting `answer` marks it solved. Returns the updated thought",
   {
-    id: z.string().describe("id of the neuron to update."),
+    id: z.string().describe("id of the thought to update."),
     text: z.string().optional().describe("new question text."),
     answer: z.string().optional().describe("the solution; setting this marks it solved."),
     citation: z
       .string()
       .optional()
-      .describe("REQUIRED whenever you set a non-empty answer: the real source URL(s) you actually consulted. A neuron with an answer but no citation is rejected."),
-    edges: z.array(z.string()).optional().describe("the complete set of linked neuron ids."),
+      .describe("REQUIRED whenever you set a non-empty answer: the real source URL(s) you actually consulted. A thought with an answer but no citation is rejected"),
+    edges: z.array(z.string()).optional().describe("the complete set of linked thought ids."),
   },
   async ({ id, text, answer, citation, edges }) => {
     try {
       const n = await mutate(id, { text, answer, citation, edges });
-      return n ? json(withUrl(n)) : fail(`no neuron with id ${id}`);
+      return n ? json(withUrl(n)) : fail(`no thought with id ${id}`);
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
     }
   }
+);
+
+server.tool(
+  "brain_delete",
+  "Delete a thought by id (removes it and detaches its edges from other thoughts). Use to clear duplicates or mistakes.",
+  { id: z.string().describe("id of the thought to delete.") },
+  async ({ id }) => json({ deleted: remove(id) })
 );
 
 await server.connect(new StdioServerTransport());

@@ -120,7 +120,8 @@ async function reload() {
   route();
 }
 
-document.getElementById("new").onclick = async () => {
+const newBtn = document.getElementById("new");
+if (newBtn) newBtn.onclick = async () => {
   const { neuron } = await (await fetch("/api/neurons", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "New thought" }),
   })).json();

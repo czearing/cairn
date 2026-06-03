@@ -65,6 +65,14 @@ test("TIMING: a write maps to PreToolUse (before) and PostToolUse (after) distin
   expect(post?.kind).toBe("tool_completed");
 });
 
+test("answering a node (brain_mutate with answer) triggers the split-check", () => {
+  const completed = (tool: string, input: Record<string, unknown>) => matchEvent({ kind: "tool_completed", tool, input, output: null });
+  expect(completed("brain_mutate", { answer: "x" })).toEqual({ promptFile: "answer-check.md" });
+  expect(completed("mcp__cairn__brain_mutate", { id: "1", answer: "y" })).toEqual({ promptFile: "answer-check.md" });
+  // edits that don't set an answer are just modifications
+  expect(completed("brain_mutate", { edges: [] })).toEqual({ promptFile: "node-modified.md" });
+});
+
 test("delivery mechanism per moment is correct", () => {
   // PreToolUse injects context and ALLOWS — never rejects.
   expect(respond("PreToolUse", "FMT")).toEqual({

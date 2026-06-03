@@ -7,7 +7,7 @@ import { config } from "../core/config";
 
 const DIR = new URL("./", import.meta.url);
 const asset = (name: string, type: string) =>
-  new Response(Bun.file(new URL(name, DIR)), { headers: { "content-type": type } });
+  new Response(Bun.file(new URL(name, DIR)), { headers: { "content-type": type, "cache-control": "no-store" } });
 const bad = (error: string, status = 400) => Response.json({ error }, { status });
 type Body = { text?: string; answer?: string; citation?: string; a?: string; b?: string };
 

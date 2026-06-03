@@ -20,10 +20,15 @@ export function matchEvent(event: NormalizedEvent): Match {
       : null;
   }
 
-  const { tool } = event;
+  const { tool, input } = event;
   if (isTool(tool, "brain_search")) return { promptFile: "search-results.md" };
   if (isTool(tool, "brain_create")) return { promptFile: "node-created.md" };
-  if (isTool(tool, "brain_mutate")) return { promptFile: "node-modified.md" };
+  if (isTool(tool, "brain_mutate")) {
+    // Setting an answer triggers the split-check; other edits are just modifications.
+    return typeof input.answer === "string" && input.answer.trim()
+      ? { promptFile: "answer-check.md" }
+      : { promptFile: "node-modified.md" };
+  }
   if (tool === "Task") return { promptFile: "subtask-spawned.md" };
 
   return null;

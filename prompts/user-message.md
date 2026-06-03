@@ -34,9 +34,9 @@ Nodes whose connected subgraph brain_search returned and how we will surpass the
 - IT IS CRITICAL TO INCLUDE nodes for what excellent output looks like and common failure modes.
 - Search first. Other agents store reusable findings; skipping duplicates work.
 - Surface assumptions explicitly so they can be checked.
-- When writing brain entries, keep them terse and uniform as few words as possible to get the point across.
 - All citations must come from real web searches and articles. This is imperative because all agents will blindly take it as truth.
 - The drafts may only be created after all subsequent research has been created.
+
 # Output (MANDATORY)
 1. The root node answer as your final synthesis.
 2. Explanation of why there are no more questions to explore.

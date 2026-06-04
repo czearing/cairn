@@ -85,7 +85,8 @@ function showRoots() {
 function showComponent(comp, focusId) {
   if (!comp) return showRoots();
   toggle.hidden = false;
-  crumb.innerHTML = `/ <a href="/" id="back">roots</a> / ${esc(title(comp.rep)).slice(0, 50)}`;
+  const here = (focusId && byId.get(focusId)) || comp.rep;
+  crumb.innerHTML = `/ <a href="/" id="back">roots</a> / ${esc(title(here)).slice(0, 50)}`;
   crumb.querySelector("#back").onclick = (e) => { e.preventDefault(); go("/"); };
   if (mode === "list") {
     const w = div("wrap");

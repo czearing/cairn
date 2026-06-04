@@ -19,7 +19,9 @@ export function renderGraph(canvas, members, rootId, focusId, onNode) {
   const adj = new Map(members.map((m) => [m.id, new Set()]));
   for (const m of members) for (const e of m.edges) if (ids.has(e)) { adj.get(m.id).add(e); adj.get(e).add(m.id); }
 
-  const start = ids.has(rootId) ? rootId : members[0] && members[0].id;
+  // root the displayed tree at the node you navigated to, so the view is oriented from where you
+  // are (not the component's oldest node, which in one big cross-linked blob is arbitrary).
+  const start = (focusId && ids.has(focusId)) ? focusId : (ids.has(rootId) ? rootId : members[0] && members[0].id);
   const parent = new Map(), kids = new Map(members.map((m) => [m.id, []])), depth = new Map(), seen = new Set();
   const bfs = (r) => { seen.add(r); depth.set(r, 0); const q = [r];
     while (q.length) { const id = q.shift();
@@ -31,7 +33,7 @@ export function renderGraph(canvas, members, rootId, focusId, onNode) {
   for (const m of members) if (!seen.has(m.id)) bfs(m.id);
   const descendants = (id) => kids.get(id).reduce((s, k) => s + 1 + descendants(k), 0);
 
-  if (rootId !== lastRoot) { lastRoot = rootId; collapsed = new Set(); } // default: everything expanded
+  if (start !== lastRoot) { lastRoot = start; collapsed = new Set(); } // re-root (and reset collapse) per focused node
 
   let x = 0, y = 0, z = 1, drag = null, fitted = false, pctEl = null, LW = 0, FXY = null;
   const stage = document.createElement("div");

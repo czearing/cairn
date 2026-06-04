@@ -114,13 +114,19 @@ export function renderGraph(canvas, members, rootId, focusId, onNode) {
   canvas.onmousemove = (e) => { if (!drag) return; x = e.clientX - drag.x; y = e.clientY - drag.y; apply(); };
   const end = () => { drag = null; canvas.classList.remove("drag"); };
   canvas.onmouseup = end; canvas.onmouseleave = end;
+  // Figma-style: scroll pans, shift-scroll pans sideways, cmd/ctrl-scroll (and trackpad pinch)
+  // zooms toward the cursor. Zoom is continuous (proportional to the gesture), not stepped.
   canvas.onwheel = (e) => {
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey) { // zoom about cursor
-      const nz = Math.min(2, Math.max(0.3, z * (e.deltaY < 0 ? 1.1 : 0.9)));
+    if (e.ctrlKey || e.metaKey) {
       const r = canvas.getBoundingClientRect(), cx = e.clientX - r.left, cy = e.clientY - r.top;
+      const nz = Math.min(3, Math.max(0.1, z * Math.exp(-e.deltaY * 0.0016)));
       x = cx - (cx - x) * (nz / z); y = cy - (cy - y) * (nz / z); z = nz;
-    } else { x -= e.deltaX; y -= e.deltaY; } // scroll
+    } else if (e.shiftKey) {
+      x -= e.deltaY || e.deltaX;
+    } else {
+      x -= e.deltaX; y -= e.deltaY;
+    }
     apply();
   };
 }

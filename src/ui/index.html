@@ -64,8 +64,9 @@
     .node .badge::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
     svg#edges { position:absolute; left:0; top:0; overflow:visible; }
     svg#edges .edge { stroke:#cbd5e1; stroke-width:1.6; fill:none; transition:stroke .15s,opacity .15s,stroke-width .15s; }
-    svg#edges .edge.hot { stroke:var(--accent); stroke-width:2.4; }
-    svg#edges .edge.dim { opacity:.1; }
+    svg#edges .edge.cross { stroke:#c7d2fe; stroke-width:1.4; stroke-dasharray:5 5; }
+    svg#edges .edge.hot { stroke:var(--accent); stroke-width:2.4; stroke-dasharray:none; }
+    svg#edges .edge.faded { opacity:.12; }
     /* detail drawer: inline editor */
     #detail { position:fixed; top:56px; right:0; bottom:0; width:400px; z-index:40; background:var(--surface);
       border-left:1px solid var(--line); box-shadow:-8px 0 28px rgba(28,25,23,.07); padding:var(--s5); overflow:auto; }

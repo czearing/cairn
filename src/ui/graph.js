@@ -1,5 +1,6 @@
-// Dependency-free node-link graph: a force-directed layout (Fruchterman-Reingold) so connected
-// thoughts cluster and cross-links read naturally, plus SVG edges, hover highlighting, pan/zoom.
+// Dependency-free graph: a tidy top-down hierarchy (BFS spanning tree from the root) draws the
+// decomposition backbone; non-tree edges are drawn as distinct dashed cross-links. Hover or focus
+// a node to highlight its connections. Opens centered on the focused node at a legible zoom.
 
 const ANS = { accent: "#059669", bt: "#059669", label: "answered" };
 const UNS = { accent: "#a8a29e", bt: "#78716c", label: "unsolved" };
@@ -7,60 +8,60 @@ export const cfg = (n) => (n.answer && n.answer.trim() ? ANS : UNS);
 export const firstLine = (t) => (t || "").split("\n")[0];
 const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-const W = 220, H = 80, K = 300, ITERS = 320;
+const W = 220, H = 80, HGAP = 56, VGAP = 78, DRAWER = 400;
 
-// Deterministic force layout: same members in same order always settle the same way (no jitter
-// between re-renders). Positions are node CENTERS.
-function layout(members) {
-  const n = members.length;
-  const idx = new Map(members.map((m, i) => [m.id, i]));
+function layout(members, rootId) {
+  const ord = new Map(members.map((m, i) => [m.id, i]));
   const ids = new Set(members.map((m) => m.id));
-  const edges = [], seen = new Set();
+  const adj = new Map(members.map((m) => [m.id, []]));
+  for (const m of members) for (const e of m.edges) if (ids.has(e)) adj.get(m.id).push(e);
+
+  // BFS spanning tree from the root: first discoverer is the parent; rest of the edges are cross-links
+  const parent = new Map(), depth = new Map(), kids = new Map(members.map((m) => [m.id, []]));
+  const start = ids.has(rootId) ? rootId : (members[0] && members[0].id);
+  const visited = new Set();
+  const seed = (r) => { depth.set(r, 0); visited.add(r); const q = [r];
+    while (q.length) {
+      const id = q.shift();
+      for (const nb of adj.get(id).slice().sort((a, b) => ord.get(a) - ord.get(b))) {
+        if (visited.has(nb)) continue;
+        visited.add(nb); parent.set(nb, id); depth.set(nb, depth.get(id) + 1); kids.get(id).push(nb); q.push(nb);
+      }
+    } };
+  if (start) seed(start);
+  for (const m of members) if (!visited.has(m.id)) seed(m.id); // detached pieces become their own roots
+
+  // tidy x: leaves take sequential slots, parents center over their children (post-order)
+  const xs = new Map(); let leaf = 0;
+  const place = (id) => {
+    const cs = kids.get(id);
+    if (!cs.length) { xs.set(id, leaf++); return; }
+    cs.forEach(place);
+    xs.set(id, (xs.get(cs[0]) + xs.get(cs[cs.length - 1])) / 2);
+  };
+  members.filter((m) => !parent.has(m.id)).forEach((m) => place(m.id));
+  for (const m of members) if (!xs.has(m.id)) xs.set(m.id, leaf++);
+
+  const pos = new Map();
+  for (const m of members) pos.set(m.id, { x: xs.get(m.id) * (W + HGAP), y: (depth.get(m.id) || 0) * (H + VGAP) });
+
+  const edges = [], nbr = new Map(members.map((m) => [m.id, new Set()])), drawn = new Set();
   for (const m of members) for (const e of m.edges) {
-    if (!ids.has(e)) continue;
+    if (!pos.has(e) || m.id === e) continue;
     const key = [m.id, e].sort().join("|");
-    if (seen.has(key)) continue;
-    seen.add(key);
-    edges.push([idx.get(m.id), idx.get(e)]);
+    if (drawn.has(key)) continue;
+    drawn.add(key);
+    nbr.get(m.id).add(e); nbr.get(e).add(m.id);
+    const tree = parent.get(m.id) === e || parent.get(e) === m.id;
+    edges.push({ a: m.id, b: e, tree });
   }
-  // deterministic seed: golden-angle spiral
-  const pos = members.map((m, i) => {
-    const a = i * 2.399963, r = K * 0.55 * Math.sqrt(i + 1);
-    return { x: Math.cos(a) * r, y: Math.sin(a) * r };
-  });
-  let t = K * 0.9;
-  for (let it = 0; it < ITERS; it++) {
-    const disp = pos.map(() => ({ x: 0, y: 0 }));
-    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-      let dx = pos[i].x - pos[j].x, dy = pos[i].y - pos[j].y;
-      let d = Math.hypot(dx, dy) || 0.01;
-      const f = (K * K) / d; // repulsion
-      dx = (dx / d) * f; dy = (dy / d) * f;
-      disp[i].x += dx; disp[i].y += dy; disp[j].x -= dx; disp[j].y -= dy;
-    }
-    for (const [a, b] of edges) {
-      let dx = pos[a].x - pos[b].x, dy = pos[a].y - pos[b].y;
-      let d = Math.hypot(dx, dy) || 0.01;
-      const f = (d * d) / K; // attraction
-      dx = (dx / d) * f; dy = (dy / d) * f;
-      disp[a].x -= dx; disp[a].y -= dy; disp[b].x += dx; disp[b].y += dy;
-    }
-    for (let i = 0; i < n; i++) {
-      disp[i].x -= pos[i].x * 0.012; disp[i].y -= pos[i].y * 0.012; // gravity to center
-      const d = Math.hypot(disp[i].x, disp[i].y) || 0.01, lim = Math.min(d, t);
-      pos[i].x += (disp[i].x / d) * lim; pos[i].y += (disp[i].y / d) * lim;
-    }
-    t = Math.max(t * 0.97, 2); // cool
-  }
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of pos) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
-  const pad = 100, out = new Map();
-  members.forEach((m, i) => out.set(m.id, { x: pos[i].x - minX + pad, y: pos[i].y - minY + pad }));
-  return { pos: out, edges, width: (maxX - minX) + pad * 2, height: (maxY - minY) + pad * 2 };
+  let maxX = 0, maxY = 0;
+  for (const p of pos.values()) { maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+  return { pos, edges, nbr, width: maxX + W, height: maxY + H };
 }
 
 export function renderGraph(canvas, members, rootId, focusId, onNode) {
-  const { pos, width, height } = layout(members);
+  const { pos, edges, nbr, width, height } = layout(members, rootId);
   const NS = "http://www.w3.org/2000/svg";
   canvas.innerHTML = "";
   const stage = document.createElement("div");
@@ -70,61 +71,62 @@ export function renderGraph(canvas, members, rootId, focusId, onNode) {
   svg.id = "edges";
   svg.setAttribute("width", width);
   svg.setAttribute("height", height);
-  const nbr = new Map(members.map((m) => [m.id, new Set()]));
-  const drawn = new Set();
-  for (const m of members) for (const e of m.edges) {
-    if (!pos.has(m.id) || !pos.has(e)) continue;
-    const key = [m.id, e].sort().join("|");
-    if (drawn.has(key)) continue;
-    drawn.add(key);
-    nbr.get(m.id).add(e); nbr.get(e).add(m.id);
-    const a = pos.get(m.id), b = pos.get(e);
+  for (const e of edges) {
+    const a = pos.get(e.a), b = pos.get(e.b);
     const path = document.createElementNS(NS, "path");
-    path.setAttribute("d", `M${a.x},${a.y} L${b.x},${b.y}`);
-    path.setAttribute("class", "edge");
-    path.dataset.a = m.id; path.dataset.b = e;
+    if (e.tree) {
+      const [t, d] = a.y <= b.y ? [a, b] : [b, a]; // parent on top
+      const x1 = t.x + W / 2, y1 = t.y + H, x2 = d.x + W / 2, y2 = d.y, my = (y1 + y2) / 2;
+      path.setAttribute("d", `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`);
+    } else {
+      path.setAttribute("d", `M${a.x + W / 2},${a.y + H / 2} L${b.x + W / 2},${b.y + H / 2}`);
+    }
+    path.setAttribute("class", e.tree ? "edge" : "edge cross");
+    path.dataset.a = e.a; path.dataset.b = e.b;
     svg.appendChild(path);
   }
   stage.appendChild(svg);
 
   for (const m of members) {
     const p = pos.get(m.id);
-    if (!p) continue;
     const c = cfg(m);
     const node = document.createElement("div");
     node.className = "node" + (m.id === focusId ? " focus" : "");
     node.dataset.id = m.id;
-    node.style.left = p.x - W / 2 + "px";
-    node.style.top = p.y - H / 2 + "px";
+    node.style.left = p.x + "px";
+    node.style.top = p.y + "px";
     node.style.setProperty("--accent", c.accent);
     node.innerHTML = `<span class="badge" style="--bt:${c.bt}">${c.label}</span><span class="text">${esc(firstLine(m.text))}</span>`;
     node.onclick = (e) => { e.stopPropagation(); onNode(m.id); };
     node.onmouseenter = () => highlight(m.id);
-    node.onmouseleave = () => highlight(focusId);
+    node.onmouseleave = () => highlight(null);
     stage.appendChild(node);
   }
 
-  // Highlight a node, its edges, and its neighbors; dim the rest. null clears.
   function highlight(id) {
     const near = id ? new Set([id, ...nbr.get(id)]) : null;
     stage.querySelectorAll(".node").forEach((el) => el.classList.toggle("dim", !!near && !near.has(el.dataset.id)));
     stage.querySelectorAll(".edge").forEach((el) => {
       const on = id && (el.dataset.a === id || el.dataset.b === id);
       el.classList.toggle("hot", !!on);
-      el.classList.toggle("dim", !!near && !on);
+      el.classList.toggle("faded", !!near && !on);
     });
   }
 
   canvas.appendChild(stage);
-  enablePanZoom(canvas, stage, width, height);
-  if (focusId) highlight(focusId);
+  enablePanZoom(canvas, stage, width, height, focusId && pos.get(focusId), !!focusId);
 }
 
-function enablePanZoom(canvas, stage, w, h) {
+function enablePanZoom(canvas, stage, w, h, focus, drawerOpen) {
   const vw = canvas.clientWidth, vh = canvas.clientHeight;
-  let z = Math.min(1, (vw - 80) / w, (vh - 80) / h);
-  if (!isFinite(z) || z <= 0) z = 1;
-  let x = (vw - w * z) / 2, y = (vh - h * z) / 2, drag = null;
+  const viewW = vw - (drawerOpen ? DRAWER : 0);
+  // open at a legible zoom; fit only when that still keeps cards readable
+  let z = Math.min(1, (viewW - 80) / w, (vh - 80) / h);
+  z = Math.max(z, 0.55);
+  let x, y;
+  if (focus) { x = viewW / 2 - (focus.x + W / 2) * z; y = vh / 2 - (focus.y + H / 2) * z; }
+  else { x = (viewW - w * z) / 2; y = (vh - h * z) / 2; }
+  let drag = null;
   const apply = () => (stage.style.transform = `translate(${x}px,${y}px) scale(${z})`);
   apply();
 

@@ -1,6 +1,6 @@
-// Dependency-free graph: a RADIAL tree shows the whole brain compactly. Root at center, each depth
-// in a ring radiating outward (uses 360 degrees instead of one wide row), so even large graphs fit
-// in a tight disc. Small nodes, distinct cross-links, hover to highlight a node's connections.
+// Dependency-free knowledge graph: every thought is a small dot laid out radially (root center,
+// each depth in a ring) so the whole brain fits compactly with no overlap. Labels appear on hover
+// and when zoomed in; click a dot for full detail. Cross-links are dashed, hover highlights links.
 
 const ANS = { accent: "#059669", bt: "#059669", label: "answered" };
 const UNS = { accent: "#a8a29e", bt: "#78716c", label: "unsolved" };
@@ -8,7 +8,7 @@ export const cfg = (n) => (n.answer && n.answer.trim() ? ANS : UNS);
 export const firstLine = (t) => (t || "").split("\n")[0];
 const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-const NW = 168, NH = 54, RING = 230;
+const RING = 165, SEP = 34, LABEL_ZOOM = 0.85;
 
 function layout(members, rootId) {
   const ord = new Map(members.map((m, i) => [m.id, i]));
@@ -16,7 +16,6 @@ function layout(members, rootId) {
   const adj = new Map(members.map((m) => [m.id, new Set()]));
   for (const m of members) for (const e of m.edges) if (ids.has(e)) { adj.get(m.id).add(e); adj.get(e).add(m.id); }
 
-  // BFS spanning tree from root; remaining edges are cross-links
   const start = ids.has(rootId) ? rootId : members[0] && members[0].id;
   const parent = new Map(), kids = new Map(members.map((m) => [m.id, []])), depth = new Map(), seen = new Set();
   const bfs = (r) => { seen.add(r); depth.set(r, 0); const q = [r];
@@ -40,6 +39,18 @@ function layout(members, rootId) {
   };
   roots.forEach((r, i) => assign(r, (i / roots.length) * 6.2832, ((i + 1) / roots.length) * 6.2832));
 
+  // collision relaxation so dots never overlap, keeping the radial structure
+  const pts = members.map((m) => pos.get(m.id));
+  for (let it = 0; it < 200; it++) {
+    let moved = false;
+    for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+      const a = pts[i], b = pts[j]; let dx = b.x - a.x, dy = b.y - a.y;
+      let d = Math.hypot(dx, dy) || 0.01;
+      if (d < SEP) { moved = true; const push = (SEP - d) / 2; dx /= d; dy /= d; a.x -= dx * push; a.y -= dy * push; b.x += dx * push; b.y += dy * push; }
+    }
+    if (!moved) break;
+  }
+
   const edges = [], nbr = new Map(members.map((m) => [m.id, new Set()])), drawn = new Set();
   for (const m of members) for (const e of m.edges) {
     if (!pos.has(e) || m.id === e) continue;
@@ -51,13 +62,14 @@ function layout(members, rootId) {
   }
   let minX = 0, minY = 0, maxX = 0, maxY = 0;
   for (const p of pos.values()) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
-  const pad = NW;
+  const pad = 90;
   for (const p of pos.values()) { p.x += -minX + pad; p.y += -minY + pad; }
   return { pos, edges, nbr, width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 };
 }
 
 export function renderGraph(canvas, members, rootId, focusId, onNode) {
   const { pos, edges, nbr, width, height } = layout(members, rootId);
+  const byId = new Map(members.map((m) => [m.id, m]));
   const NS = "http://www.w3.org/2000/svg";
   canvas.innerHTML = "";
   const stage = document.createElement("div");
@@ -77,26 +89,22 @@ export function renderGraph(canvas, members, rootId, focusId, onNode) {
 
   for (const m of members) {
     const p = pos.get(m.id);
-    const node = document.createElement("div");
-    node.className = "node sm" + (m.id === focusId ? " focus" : "");
-    node.dataset.id = m.id;
-    node.style.left = p.x - NW / 2 + "px";
-    node.style.top = p.y - NH / 2 + "px";
-    node.style.setProperty("--accent", cfg(m).accent);
-    node.innerHTML = `<span class="text">${esc(firstLine(m.text))}</span>`;
-    node.onclick = (e) => { e.stopPropagation(); onNode(m.id); };
-    node.onmouseenter = () => highlight(m.id);
-    node.onmouseleave = () => highlight(null);
-    stage.appendChild(node);
+    const g = document.createElement("div");
+    g.className = "gnode" + (m.id === focusId ? " focus" : "");
+    g.dataset.id = m.id;
+    g.style.left = p.x + "px"; g.style.top = p.y + "px";
+    g.style.setProperty("--accent", cfg(m).accent);
+    g.innerHTML = `<span class="dot"></span><span class="label">${esc(firstLine(m.text))}</span>`;
+    g.onclick = (e) => { e.stopPropagation(); onNode(m.id); };
+    g.onmouseenter = () => highlight(m.id);
+    g.onmouseleave = () => highlight(null);
+    stage.appendChild(g);
   }
 
   function highlight(id) {
-    const near = id ? new Set([id, ...nbr.get(id)]) : null;
-    stage.querySelectorAll(".node").forEach((el) => el.classList.toggle("dim", !!near && !near.has(el.dataset.id)));
-    stage.querySelectorAll(".edge").forEach((el) => {
-      const on = id && (el.dataset.a === id || el.dataset.b === id);
-      el.classList.toggle("hot", !!on); el.classList.toggle("faded", !!near && !on);
-    });
+    const near = id ? new Set([id, ...nbr.get(id)]) : new Set();
+    stage.querySelectorAll(".gnode").forEach((el) => el.classList.toggle("lit", near.has(el.dataset.id)));
+    stage.querySelectorAll(".edge").forEach((el) => el.classList.toggle("hot", !!id && (el.dataset.a === id || el.dataset.b === id)));
   }
 
   canvas.appendChild(stage);
@@ -105,10 +113,12 @@ export function renderGraph(canvas, members, rootId, focusId, onNode) {
 
 function panZoom(canvas, stage, w, h, focus, drawerOpen) {
   const vw = canvas.clientWidth, vh = canvas.clientHeight, viewW = vw - (drawerOpen ? 400 : 0);
-  let z = Math.min(1.4, (viewW - 60) / w, (vh - 60) / h);
+  let z = Math.min(1.2, (viewW - 60) / w, (vh - 60) / h);
   if (!isFinite(z) || z <= 0) z = 1;
-  let x = (viewW - w * z) / 2, y = (vh - h * z) / 2, drag = null;
-  const apply = () => (stage.style.transform = `translate(${x}px,${y}px) scale(${z})`);
+  let x = focus ? viewW / 2 - focus.x * z : (viewW - w * z) / 2;
+  let y = focus ? vh / 2 - focus.y * z : (vh - h * z) / 2;
+  let drag = null;
+  const apply = () => { stage.style.transform = `translate(${x}px,${y}px) scale(${z})`; canvas.classList.toggle("zoomed", z >= LABEL_ZOOM); };
   apply();
   canvas.onmousedown = (e) => { drag = { x: e.clientX - x, y: e.clientY - y }; canvas.classList.add("drag"); };
   canvas.onmousemove = (e) => { if (!drag) return; x = e.clientX - drag.x; y = e.clientY - drag.y; apply(); };

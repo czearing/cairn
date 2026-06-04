@@ -1,6 +1,6 @@
-// Dependency-free LOCAL graph: render only the focused node's neighborhood so it stays legible no
-// matter how huge the brain gets. Parent sits above, children grid below, cross-links to the side.
-// Click any node to recenter on it and walk outward. Edge style marks backbone vs cross-link.
+// Dependency-free graph: a RADIAL tree shows the whole brain compactly. Root at center, each depth
+// in a ring radiating outward (uses 360 degrees instead of one wide row), so even large graphs fit
+// in a tight disc. Small nodes, distinct cross-links, hover to highlight a node's connections.
 
 const ANS = { accent: "#059669", bt: "#059669", label: "answered" };
 const UNS = { accent: "#a8a29e", bt: "#78716c", label: "unsolved" };
@@ -8,81 +8,106 @@ export const cfg = (n) => (n.answer && n.answer.trim() ? ANS : UNS);
 export const firstLine = (t) => (t || "").split("\n")[0];
 const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-const W = 220, H = 80, HGAP = 48, VGAP = 72, COLS = 5;
+const NW = 168, NH = 54, RING = 230;
 
-export function renderGraph(canvas, members, rootId, focusId, onNode) {
-  const byId = new Map(members.map((m) => [m.id, m]));
-  const focus = focusId && byId.has(focusId) ? focusId : rootId;
-  if (!byId.has(focus)) return;
+function layout(members, rootId) {
   const ord = new Map(members.map((m, i) => [m.id, i]));
   const ids = new Set(members.map((m) => m.id));
   const adj = new Map(members.map((m) => [m.id, new Set()]));
   for (const m of members) for (const e of m.edges) if (ids.has(e)) { adj.get(m.id).add(e); adj.get(e).add(m.id); }
-  const parentOf = (x) => { let best = null; for (const e of adj.get(x)) if (ord.get(e) < ord.get(x)) if (best === null || ord.get(e) < ord.get(best)) best = e; return best; };
 
-  const par = parentOf(focus);
-  const nbrs = [...adj.get(focus)];
-  const children = nbrs.filter((id) => parentOf(id) === focus).sort((a, b) => ord.get(a) - ord.get(b));
-  const cross = nbrs.filter((id) => id !== par && parentOf(id) !== focus).sort((a, b) => ord.get(a) - ord.get(b));
+  // BFS spanning tree from root; remaining edges are cross-links
+  const start = ids.has(rootId) ? rootId : members[0] && members[0].id;
+  const parent = new Map(), kids = new Map(members.map((m) => [m.id, []])), depth = new Map(), seen = new Set();
+  const bfs = (r) => { seen.add(r); depth.set(r, 0); const q = [r];
+    while (q.length) { const id = q.shift();
+      for (const nb of [...adj.get(id)].sort((a, b) => ord.get(a) - ord.get(b))) {
+        if (seen.has(nb)) continue;
+        seen.add(nb); parent.set(nb, id); kids.get(id).push(nb); depth.set(nb, depth.get(id) + 1); q.push(nb);
+      } } };
+  if (start) bfs(start);
+  for (const m of members) if (!seen.has(m.id)) bfs(m.id);
 
-  // centers, focus at origin
-  const C = new Map([[focus, { x: 0, y: 0 }]]);
-  if (par) C.set(par, { x: 0, y: -(H + VGAP) });
-  const cols = Math.min(COLS, Math.max(1, children.length));
-  const rowW = cols * (W + HGAP) - HGAP;
-  children.forEach((id, i) => C.set(id, { x: -rowW / 2 + W / 2 + (i % cols) * (W + HGAP), y: (H + VGAP) + Math.floor(i / cols) * (H + VGAP) }));
-  cross.forEach((id, i) => C.set(id, { x: rowW / 2 + W + HGAP, y: i * (H + VGAP) }));
+  const leaves = (id) => kids.get(id).length ? kids.get(id).reduce((s, k) => s + leaves(k), 0) : 1;
+  const pos = new Map();
+  const roots = members.filter((m) => !parent.has(m.id)).map((m) => m.id);
+  const assign = (id, a0, a1) => {
+    const d = depth.get(id), ang = (a0 + a1) / 2, r = d * RING;
+    pos.set(id, { x: Math.cos(ang) * r, y: Math.sin(ang) * r });
+    const cs = kids.get(id); if (!cs.length) return;
+    const total = leaves(id); let cur = a0;
+    for (const c of cs) { const w = leaves(c) / total; assign(c, cur, cur + (a1 - a0) * w); cur += (a1 - a0) * w; }
+  };
+  roots.forEach((r, i) => assign(r, (i / roots.length) * 6.2832, ((i + 1) / roots.length) * 6.2832));
 
+  const edges = [], nbr = new Map(members.map((m) => [m.id, new Set()])), drawn = new Set();
+  for (const m of members) for (const e of m.edges) {
+    if (!pos.has(e) || m.id === e) continue;
+    const key = [m.id, e].sort().join("|");
+    if (drawn.has(key)) continue;
+    drawn.add(key);
+    nbr.get(m.id).add(e); nbr.get(e).add(m.id);
+    edges.push({ a: m.id, b: e, tree: parent.get(m.id) === e || parent.get(e) === m.id });
+  }
+  let minX = 0, minY = 0, maxX = 0, maxY = 0;
+  for (const p of pos.values()) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+  const pad = NW;
+  for (const p of pos.values()) { p.x += -minX + pad; p.y += -minY + pad; }
+  return { pos, edges, nbr, width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 };
+}
+
+export function renderGraph(canvas, members, rootId, focusId, onNode) {
+  const { pos, edges, nbr, width, height } = layout(members, rootId);
   const NS = "http://www.w3.org/2000/svg";
   canvas.innerHTML = "";
   const stage = document.createElement("div");
   stage.id = "stage";
 
-  // edges from focus to each shown neighbor
-  let minX = 0, minY = 0, maxX = 0, maxY = 0;
-  for (const { x, y } of C.values()) { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
-  const pad = 90, ox = -minX + pad, oy = -minY + pad;
-  const at = (id) => ({ x: C.get(id).x + ox, y: C.get(id).y + oy });
-  const width = maxX - minX + pad * 2, height = maxY - minY + pad * 2;
-
   const svg = document.createElementNS(NS, "svg");
   svg.id = "edges"; svg.setAttribute("width", width); svg.setAttribute("height", height);
-  const fc = at(focus);
-  for (const id of [par, ...children, ...cross].filter(Boolean)) {
-    const p = at(id), isCross = cross.includes(id);
+  for (const e of edges) {
+    const a = pos.get(e.a), b = pos.get(e.b);
     const path = document.createElementNS(NS, "path");
-    path.setAttribute("d", `M${fc.x},${fc.y} L${p.x},${p.y}`);
-    path.setAttribute("class", isCross ? "edge cross" : "edge");
+    path.setAttribute("d", `M${a.x},${a.y} L${b.x},${b.y}`);
+    path.setAttribute("class", e.tree ? "edge" : "edge cross");
+    path.dataset.a = e.a; path.dataset.b = e.b;
     svg.appendChild(path);
   }
   stage.appendChild(svg);
 
-  const draw = (id) => {
-    const m = byId.get(id), p = at(id), c = cfg(m);
+  for (const m of members) {
+    const p = pos.get(m.id);
     const node = document.createElement("div");
-    node.className = "node" + (id === focus ? " focus" : "");
-    node.style.left = p.x - W / 2 + "px";
-    node.style.top = p.y - H / 2 + "px";
-    node.style.setProperty("--accent", c.accent);
-    const more = adj.get(id).size - 1; // connections not shown from here
-    node.innerHTML = `<span class="badge" style="--bt:${c.bt}">${c.label}</span><span class="text">${esc(firstLine(m.text))}</span>` +
-      (id !== focus && more > 0 ? `<span class="more">+${more}</span>` : "");
-    if (id !== focus) node.onclick = (e) => { e.stopPropagation(); onNode(id); };
+    node.className = "node sm" + (m.id === focusId ? " focus" : "");
+    node.dataset.id = m.id;
+    node.style.left = p.x - NW / 2 + "px";
+    node.style.top = p.y - NH / 2 + "px";
+    node.style.setProperty("--accent", cfg(m).accent);
+    node.innerHTML = `<span class="text">${esc(firstLine(m.text))}</span>`;
+    node.onclick = (e) => { e.stopPropagation(); onNode(m.id); };
+    node.onmouseenter = () => highlight(m.id);
+    node.onmouseleave = () => highlight(null);
     stage.appendChild(node);
-  };
-  draw(focus);
-  [par, ...children, ...cross].filter(Boolean).forEach(draw);
+  }
+
+  function highlight(id) {
+    const near = id ? new Set([id, ...nbr.get(id)]) : null;
+    stage.querySelectorAll(".node").forEach((el) => el.classList.toggle("dim", !!near && !near.has(el.dataset.id)));
+    stage.querySelectorAll(".edge").forEach((el) => {
+      const on = id && (el.dataset.a === id || el.dataset.b === id);
+      el.classList.toggle("hot", !!on); el.classList.toggle("faded", !!near && !on);
+    });
+  }
 
   canvas.appendChild(stage);
-  fitCenter(canvas, stage, width, height, at(focus), !!focusId);
+  panZoom(canvas, stage, width, height, focusId && pos.get(focusId), !!focusId);
 }
 
-function fitCenter(canvas, stage, w, h, focus, drawerOpen) {
-  const vw = canvas.clientWidth, vh = canvas.clientHeight;
-  const viewW = vw - (drawerOpen ? 400 : 0);
-  let z = Math.min(1, (viewW - 80) / w, (vh - 80) / h);
-  z = Math.max(z, 0.4);
-  let x = viewW / 2 - focus.x * z, y = vh / 2 - focus.y * z, drag = null;
+function panZoom(canvas, stage, w, h, focus, drawerOpen) {
+  const vw = canvas.clientWidth, vh = canvas.clientHeight, viewW = vw - (drawerOpen ? 400 : 0);
+  let z = Math.min(1.4, (viewW - 60) / w, (vh - 60) / h);
+  if (!isFinite(z) || z <= 0) z = 1;
+  let x = (viewW - w * z) / 2, y = (vh - h * z) / 2, drag = null;
   const apply = () => (stage.style.transform = `translate(${x}px,${y}px) scale(${z})`);
   apply();
   canvas.onmousedown = (e) => { drag = { x: e.clientX - x, y: e.clientY - y }; canvas.classList.add("drag"); };
@@ -91,7 +116,7 @@ function fitCenter(canvas, stage, w, h, focus, drawerOpen) {
   canvas.onmouseup = end; canvas.onmouseleave = end;
   canvas.onwheel = (e) => {
     e.preventDefault();
-    const nz = Math.min(2, Math.max(0.3, z * (e.deltaY < 0 ? 1.1 : 0.9)));
+    const nz = Math.min(2.5, Math.max(0.15, z * (e.deltaY < 0 ? 1.12 : 0.88)));
     const r = canvas.getBoundingClientRect();
     const cx = e.clientX - r.left, cy = e.clientY - r.top;
     x = cx - (cx - x) * (nz / z); y = cy - (cy - y) * (nz / z); z = nz; apply();

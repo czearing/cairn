@@ -64,6 +64,9 @@
     .node .badge::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
     .node .more { position:absolute; top:8px; right:10px; font-size:10px; font-weight:600; color:var(--muted);
       background:var(--bg); border:1px solid var(--line); border-radius:var(--rp); padding:1px 7px; }
+    .node.sm { width:168px; height:54px; padding:8px 11px; border-radius:10px;
+      border:1px solid var(--line); border-left:3px solid var(--accent); font-size:11.5px; line-height:1.35; }
+    .node.sm .text { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; overflow:hidden; }
     svg#edges { position:absolute; left:0; top:0; overflow:visible; }
     svg#edges .edge { stroke:#cbd5e1; stroke-width:1.6; fill:none; transition:stroke .15s,opacity .15s,stroke-width .15s; }
     svg#edges .edge.cross { stroke:#c7d2fe; stroke-width:1.4; stroke-dasharray:5 5; }

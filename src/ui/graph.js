@@ -33,10 +33,22 @@ export function renderGraph(canvas, members, rootId, focusId, onNode) {
 
   if (rootId !== lastRoot) { lastRoot = rootId; collapsed = new Set(); } // default: everything expanded
 
-  let x = 0, y = 0, z = 1, drag = null, fitted = false;
+  let x = 0, y = 0, z = 1, drag = null, fitted = false, pctEl = null, LW = 0, FXY = null;
   const stage = document.createElement("div");
   stage.id = "stage";
-  const apply = () => (stage.style.transform = `translate(${x}px,${y}px) scale(${z})`);
+  const apply = () => { stage.style.transform = `translate(${x}px,${y}px) scale(${z})`; if (pctEl) pctEl.textContent = Math.round(z * 100) + "%"; };
+  const viewW = () => canvas.clientWidth - (focusId ? 400 : 0);
+  function zoomTo(nz, ax, ay) {
+    nz = Math.min(3, Math.max(0.1, nz));
+    ax = ax == null ? viewW() / 2 : ax; ay = ay == null ? canvas.clientHeight / 2 : ay;
+    x = ax - (ax - x) * (nz / z); y = ay - (ay - y) * (nz / z); z = nz; apply();
+  }
+  function fitView() {
+    z = Math.min(1, (viewW() - 70) / LW); if (!isFinite(z) || z <= 0) z = 1;
+    x = Math.max(20, (viewW() - LW * z) / 2);
+    y = FXY ? Math.min(40, canvas.clientHeight / 2 - (FXY.y + NH / 2) * z) : 30;
+    apply();
+  }
 
   function render() {
     const pos = new Map(); let row = 0;
@@ -95,38 +107,34 @@ export function renderGraph(canvas, members, rootId, focusId, onNode) {
       stage.querySelectorAll(".edge").forEach((el) => el.classList.toggle("hot", !!id && (el.dataset.a === id || el.dataset.b === id)));
     }
 
-    if (!fitted) {
-      fitted = true;
-      const vw = canvas.clientWidth, vh = canvas.clientHeight, viewW = vw - (focusId ? 400 : 0);
-      z = Math.min(1, (viewW - 70) / width); if (!isFinite(z) || z <= 0) z = 1; // fit WIDTH (keep readable), scroll height
-      const f = focusId && pos.has(focusId) ? XY(pos.get(focusId)) : null;
-      x = Math.max(20, (viewW - width * z) / 2);
-      y = f ? Math.min(40, vh / 2 - (f.y + NH / 2) * z) : 30;
-    }
-    apply();
+    LW = width; FXY = focusId && pos.has(focusId) ? XY(pos.get(focusId)) : null;
+    if (!fitted) { fitted = true; fitView(); } else apply();
   }
 
   canvas.innerHTML = "";
   canvas.appendChild(stage);
   render();
 
+  // Figma-style zoom control: −  100%  +  Fit
+  const ctl = document.createElement("div");
+  ctl.className = "zoomctl";
+  ctl.innerHTML = `<button data-a="out" title="Zoom out">−</button><button data-a="pct" title="Reset to 100%">100%</button><button data-a="in" title="Zoom in">+</button><button data-a="fit">Fit</button>`;
+  canvas.appendChild(ctl);
+  pctEl = ctl.querySelector('[data-a="pct"]'); apply();
+  ctl.querySelector('[data-a="in"]').onclick = () => zoomTo(z * 1.25);
+  ctl.querySelector('[data-a="out"]').onclick = () => zoomTo(z * 0.8);
+  ctl.querySelector('[data-a="fit"]').onclick = () => fitView();
+  pctEl.onclick = () => zoomTo(1);
+
   canvas.onmousedown = (e) => { drag = { x: e.clientX - x, y: e.clientY - y }; canvas.classList.add("drag"); };
   canvas.onmousemove = (e) => { if (!drag) return; x = e.clientX - drag.x; y = e.clientY - drag.y; apply(); };
   const end = () => { drag = null; canvas.classList.remove("drag"); };
   canvas.onmouseup = end; canvas.onmouseleave = end;
-  // Figma-style: scroll pans, shift-scroll pans sideways, cmd/ctrl-scroll (and trackpad pinch)
-  // zooms toward the cursor. Zoom is continuous (proportional to the gesture), not stepped.
+  // Scroll zooms toward the cursor (continuous). Shift-scroll pans sideways; drag pans.
   canvas.onwheel = (e) => {
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey) {
-      const r = canvas.getBoundingClientRect(), cx = e.clientX - r.left, cy = e.clientY - r.top;
-      const nz = Math.min(3, Math.max(0.1, z * Math.exp(-e.deltaY * 0.0016)));
-      x = cx - (cx - x) * (nz / z); y = cy - (cy - y) * (nz / z); z = nz;
-    } else if (e.shiftKey) {
-      x -= e.deltaY || e.deltaX;
-    } else {
-      x -= e.deltaX; y -= e.deltaY;
-    }
-    apply();
+    if (e.shiftKey) { x -= e.deltaY || e.deltaX; apply(); return; }
+    const r = canvas.getBoundingClientRect();
+    zoomTo(z * Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
   };
 }

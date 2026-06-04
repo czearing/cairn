@@ -51,6 +51,13 @@
     #canvas { position:absolute; inset:0; overflow:hidden; cursor:grab;
       background-image:radial-gradient(var(--line) 1px,transparent 1px); background-size:22px 22px; }
     #canvas.drag { cursor:grabbing; }
+    .zoomctl { position:absolute; left:16px; bottom:16px; z-index:10; display:flex; align-items:center; gap:2px;
+      background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:3px; box-shadow:var(--shadow); }
+    .zoomctl button { border:none; background:transparent; color:var(--ink); font:inherit; font-size:14px; cursor:pointer;
+      height:28px; min-width:30px; padding:0 9px; border-radius:7px; line-height:1; }
+    .zoomctl button:hover { background:var(--hover); }
+    .zoomctl [data-a="pct"] { min-width:50px; color:var(--muted); font-size:12px; }
+    .zoomctl [data-a="fit"] { font-size:12.5px; color:var(--muted); }
     #stage { position:absolute; left:0; top:0; transform-origin:0 0; }
     svg#edges { position:absolute; left:0; top:0; overflow:visible; }
     svg#edges .edge { stroke:#cbd5e1; stroke-width:1.6; fill:none; transition:stroke .12s,stroke-width .12s; }

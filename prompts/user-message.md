@@ -21,6 +21,7 @@ Nodes whose connected subgraph brain_search returned and how we will surpass the
 - How you I surpass expectations
 - Etc even something seemingly simple like a Haiku should have 20+ questions asked.
 These angles are starting points, not leaves. Keep splitting each one until it bottoms out in single facts.
+Apply this same set of angles to every node you create, not only the root.
 Every node is an open question. If a node can be answered yes or no, it is too coarse: ask how or why instead, which forces it to split further.
 3. Output: The list of questions and edges and why there are no more additional questions to ask.
 

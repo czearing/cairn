@@ -1,6 +1,6 @@
-// Dependency-free knowledge graph: every thought is a small dot laid out radially (root center,
-// each depth in a ring) so the whole brain fits compactly with no overlap. Labels appear on hover
-// and when zoomed in; click a dot for full detail. Cross-links are dashed, hover highlights links.
+// Dependency-free COLLAPSIBLE tree (progressive disclosure). Readable labelled nodes, root expands
+// to the right; click a node's toggle to expand/collapse its branch. Collapsed nodes show a +N of
+// what is hidden, so huge brains stay clean and readable. Click a node body to open its detail.
 
 const ANS = { accent: "#059669", bt: "#059669", label: "answered" };
 const UNS = { accent: "#a8a29e", bt: "#78716c", label: "unsolved" };
@@ -8,14 +8,17 @@ export const cfg = (n) => (n.answer && n.answer.trim() ? ANS : UNS);
 export const firstLine = (t) => (t || "").split("\n")[0];
 const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-const RING = 165, SEP = 34, LABEL_ZOOM = 0.85;
+const NW = 208, NH = 46, HGAP = 58, VGAP = 14, DEFAULT_DEPTH = 1;
+let collapsed = new Set(), lastRoot = null;
 
-function layout(members, rootId) {
+export function renderGraph(canvas, members, rootId, focusId, onNode) {
+  const byId = new Map(members.map((m) => [m.id, m]));
   const ord = new Map(members.map((m, i) => [m.id, i]));
   const ids = new Set(members.map((m) => m.id));
   const adj = new Map(members.map((m) => [m.id, new Set()]));
   for (const m of members) for (const e of m.edges) if (ids.has(e)) { adj.get(m.id).add(e); adj.get(e).add(m.id); }
 
+  // BFS spanning tree from root -> parent/children/depth; leftover edges are cross-links
   const start = ids.has(rootId) ? rootId : members[0] && members[0].id;
   const parent = new Map(), kids = new Map(members.map((m) => [m.id, []])), depth = new Map(), seen = new Set();
   const bfs = (r) => { seen.add(r); depth.set(r, 0); const q = [r];
@@ -26,109 +29,91 @@ function layout(members, rootId) {
       } } };
   if (start) bfs(start);
   for (const m of members) if (!seen.has(m.id)) bfs(m.id);
+  const descendants = (id) => kids.get(id).reduce((s, k) => s + 1 + descendants(k), 0);
 
-  const leaves = (id) => kids.get(id).length ? kids.get(id).reduce((s, k) => s + leaves(k), 0) : 1;
-  const pos = new Map();
-  const roots = members.filter((m) => !parent.has(m.id)).map((m) => m.id);
-  const assign = (id, a0, a1) => {
-    const d = depth.get(id), ang = (a0 + a1) / 2, r = d * RING;
-    pos.set(id, { x: Math.cos(ang) * r, y: Math.sin(ang) * r });
-    const cs = kids.get(id); if (!cs.length) return;
-    const total = leaves(id); let cur = a0;
-    for (const c of cs) { const w = leaves(c) / total; assign(c, cur, cur + (a1 - a0) * w); cur += (a1 - a0) * w; }
-  };
-  roots.forEach((r, i) => assign(r, (i / roots.length) * 6.2832, ((i + 1) / roots.length) * 6.2832));
-
-  // collision relaxation so dots never overlap, keeping the radial structure
-  const pts = members.map((m) => pos.get(m.id));
-  for (let it = 0; it < 200; it++) {
-    let moved = false;
-    for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
-      const a = pts[i], b = pts[j]; let dx = b.x - a.x, dy = b.y - a.y;
-      let d = Math.hypot(dx, dy) || 0.01;
-      if (d < SEP) { moved = true; const push = (SEP - d) / 2; dx /= d; dy /= d; a.x -= dx * push; a.y -= dy * push; b.x += dx * push; b.y += dy * push; }
-    }
-    if (!moved) break;
+  // default: collapse anything deeper than DEFAULT_DEPTH; persist toggles per component
+  if (rootId !== lastRoot) {
+    lastRoot = rootId; collapsed = new Set();
+    for (const m of members) if ((depth.get(m.id) || 0) >= DEFAULT_DEPTH && kids.get(m.id).length) collapsed.add(m.id);
   }
+  for (let a = focusId && parent.get(focusId); a; a = parent.get(a)) collapsed.delete(a); // reveal focus
 
-  const edges = [], nbr = new Map(members.map((m) => [m.id, new Set()])), drawn = new Set();
-  for (const m of members) for (const e of m.edges) {
-    if (!pos.has(e) || m.id === e) continue;
-    const key = [m.id, e].sort().join("|");
-    if (drawn.has(key)) continue;
-    drawn.add(key);
-    nbr.get(m.id).add(e); nbr.get(e).add(m.id);
-    edges.push({ a: m.id, b: e, tree: parent.get(m.id) === e || parent.get(e) === m.id });
-  }
-  let minX = 0, minY = 0, maxX = 0, maxY = 0;
-  for (const p of pos.values()) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
-  const pad = 90;
-  for (const p of pos.values()) { p.x += -minX + pad; p.y += -minY + pad; }
-  return { pos, edges, nbr, width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 };
-}
-
-export function renderGraph(canvas, members, rootId, focusId, onNode) {
-  const { pos, edges, nbr, width, height } = layout(members, rootId);
-  const byId = new Map(members.map((m) => [m.id, m]));
-  const NS = "http://www.w3.org/2000/svg";
-  canvas.innerHTML = "";
+  let x = 0, y = 0, z = 1, drag = null, fitted = false;
   const stage = document.createElement("div");
   stage.id = "stage";
+  const apply = () => (stage.style.transform = `translate(${x}px,${y}px) scale(${z})`);
 
-  const svg = document.createElementNS(NS, "svg");
-  svg.id = "edges"; svg.setAttribute("width", width); svg.setAttribute("height", height);
-  for (const e of edges) {
-    const a = pos.get(e.a), b = pos.get(e.b);
-    const path = document.createElementNS(NS, "path");
-    path.setAttribute("d", `M${a.x},${a.y} L${b.x},${b.y}`);
-    path.setAttribute("class", e.tree ? "edge" : "edge cross");
-    path.dataset.a = e.a; path.dataset.b = e.b;
-    svg.appendChild(path);
+  function render() {
+    // layout visible nodes (tidy tree: y by leaf order, x by depth)
+    const pos = new Map(); let row = 0;
+    const place = (id) => {
+      const cs = collapsed.has(id) ? [] : kids.get(id);
+      if (!cs.length) { pos.set(id, { d: depth.get(id), r: row++ }); return; }
+      cs.forEach(place);
+      pos.set(id, { d: depth.get(id), r: (pos.get(cs[0]).r + pos.get(cs[cs.length - 1]).r) / 2 });
+    };
+    members.filter((m) => !parent.has(m.id)).forEach((m) => place(m.id));
+    const XY = (p) => ({ x: p.d * (NW + HGAP) + 60, y: p.r * (NH + VGAP) + 40 });
+    const vis = [...pos.keys()];
+    const width = Math.max(...vis.map((id) => XY(pos.get(id)).x)) + NW + 60;
+    const height = Math.max(...vis.map((id) => XY(pos.get(id)).y)) + NH + 40;
+
+    const NS = "http://www.w3.org/2000/svg";
+    stage.innerHTML = "";
+    const svg = document.createElementNS(NS, "svg");
+    svg.id = "edges"; svg.setAttribute("width", width); svg.setAttribute("height", height);
+    const visSet = new Set(vis), drawn = new Set();
+    for (const id of vis) for (const e of adj.get(id)) {
+      if (!visSet.has(e)) continue;
+      const key = [id, e].sort().join("|"); if (drawn.has(key)) continue; drawn.add(key);
+      const tree = parent.get(id) === e || parent.get(e) === id;
+      const a = XY(pos.get(id)), b = XY(pos.get(e)), [l, r] = a.x <= b.x ? [a, b] : [b, a];
+      const x1 = l.x + NW, y1 = l.y + NH / 2, x2 = r.x, y2 = r.y + NH / 2, mx = (x1 + x2) / 2;
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("d", `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
+      path.setAttribute("class", tree ? "edge" : "edge cross");
+      svg.appendChild(path);
+    }
+    stage.appendChild(svg);
+
+    for (const id of vis) {
+      const m = byId.get(id), p = XY(pos.get(id)), c = cfg(m), n = kids.get(id).length;
+      const node = document.createElement("div");
+      node.className = "tnode" + (id === focusId ? " focus" : "");
+      node.style.left = p.x + "px"; node.style.top = p.y + "px"; node.style.setProperty("--accent", c.accent);
+      const toggle = n ? `<button class="ttoggle">${collapsed.has(id) ? "+" + (descendants(id)) : "−"}</button>` : "";
+      node.innerHTML = `<span class="tlabel">${esc(firstLine(m.text))}</span>${toggle}`;
+      node.onclick = (e) => { e.stopPropagation(); onNode(id); };
+      if (n) node.querySelector(".ttoggle").onclick = (e) => {
+        e.stopPropagation();
+        collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id);
+        render();
+      };
+      stage.appendChild(node);
+    }
+
+    if (!fitted) {
+      fitted = true;
+      const vw = canvas.clientWidth, vh = canvas.clientHeight, viewW = vw - (focusId ? 400 : 0);
+      z = Math.min(1, (viewW - 60) / width, (vh - 60) / height); if (!isFinite(z) || z <= 0) z = 1;
+      const f = focusId && pos.has(focusId) ? XY(pos.get(focusId)) : null;
+      x = f ? viewW / 2 - (f.x + NW / 2) * z : 30; y = f ? vh / 2 - (f.y + NH / 2) * z : 30;
+    }
+    apply();
   }
-  stage.appendChild(svg);
 
-  for (const m of members) {
-    const p = pos.get(m.id);
-    const g = document.createElement("div");
-    g.className = "gnode" + (m.id === focusId ? " focus" : "");
-    g.dataset.id = m.id;
-    g.style.left = p.x + "px"; g.style.top = p.y + "px";
-    g.style.setProperty("--accent", cfg(m).accent);
-    g.innerHTML = `<span class="dot"></span><span class="label">${esc(firstLine(m.text))}</span>`;
-    g.onclick = (e) => { e.stopPropagation(); onNode(m.id); };
-    g.onmouseenter = () => highlight(m.id);
-    g.onmouseleave = () => highlight(null);
-    stage.appendChild(g);
-  }
-
-  function highlight(id) {
-    const near = id ? new Set([id, ...nbr.get(id)]) : new Set();
-    stage.querySelectorAll(".gnode").forEach((el) => el.classList.toggle("lit", near.has(el.dataset.id)));
-    stage.querySelectorAll(".edge").forEach((el) => el.classList.toggle("hot", !!id && (el.dataset.a === id || el.dataset.b === id)));
-  }
-
+  canvas.innerHTML = "";
   canvas.appendChild(stage);
-  panZoom(canvas, stage, width, height, focusId && pos.get(focusId), !!focusId);
-}
+  render();
 
-function panZoom(canvas, stage, w, h, focus, drawerOpen) {
-  const vw = canvas.clientWidth, vh = canvas.clientHeight, viewW = vw - (drawerOpen ? 400 : 0);
-  let z = Math.min(1.2, (viewW - 60) / w, (vh - 60) / h);
-  if (!isFinite(z) || z <= 0) z = 1;
-  let x = focus ? viewW / 2 - focus.x * z : (viewW - w * z) / 2;
-  let y = focus ? vh / 2 - focus.y * z : (vh - h * z) / 2;
-  let drag = null;
-  const apply = () => { stage.style.transform = `translate(${x}px,${y}px) scale(${z})`; canvas.classList.toggle("zoomed", z >= LABEL_ZOOM); };
-  apply();
   canvas.onmousedown = (e) => { drag = { x: e.clientX - x, y: e.clientY - y }; canvas.classList.add("drag"); };
   canvas.onmousemove = (e) => { if (!drag) return; x = e.clientX - drag.x; y = e.clientY - drag.y; apply(); };
   const end = () => { drag = null; canvas.classList.remove("drag"); };
   canvas.onmouseup = end; canvas.onmouseleave = end;
   canvas.onwheel = (e) => {
     e.preventDefault();
-    const nz = Math.min(2.5, Math.max(0.15, z * (e.deltaY < 0 ? 1.12 : 0.88)));
-    const r = canvas.getBoundingClientRect();
-    const cx = e.clientX - r.left, cy = e.clientY - r.top;
+    const nz = Math.min(2, Math.max(0.3, z * (e.deltaY < 0 ? 1.1 : 0.9)));
+    const r = canvas.getBoundingClientRect(), cx = e.clientX - r.left, cy = e.clientY - r.top;
     x = cx - (cx - x) * (nz / z); y = cy - (cy - y) * (nz / z); z = nz; apply();
   };
 }

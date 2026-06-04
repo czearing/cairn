@@ -14,6 +14,8 @@ export const config: CairnConfig = {
     baseUrl: process.env.CAIRN_EMBED_BASE_URL || "",
   },
   relevanceThreshold: Number(process.env.CAIRN_RELEVANCE_THRESHOLD || "0.3"),
+  expandSubtree: process.env.CAIRN_SEARCH_EXPAND === "1", // off by default: return only direct matches
+
   uiPort,
   uiUrl: process.env.CAIRN_UI_URL || `http://localhost:${uiPort}`,
 };

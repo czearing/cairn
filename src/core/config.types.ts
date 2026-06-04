@@ -20,6 +20,8 @@ export interface CairnConfig {
   embed: EmbedConfig;
   /** Cosine-similarity bar at or above which a neuron counts as relevant. */
   relevanceThreshold: number;
+  /** When true, a match also pulls in its descendant subtree. Off = return only direct matches. */
+  expandSubtree: boolean;
   /** Port the optional viewer serves on. */
   uiPort: number;
   /** Base URL of the viewer, used to build deep links (`/node/<id>`) to neurons. */

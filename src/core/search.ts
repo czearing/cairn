@@ -55,7 +55,9 @@ export async function search(query: string): Promise<Neuron[]> {
     if (s.sim >= config.relevanceThreshold) { included.add(s.neuron.id); stack.push(s.neuron.id); }
   }
   if (included.size === 0) return [];
-  while (stack.length) {
+  // Subtree expansion is toggleable (CAIRN_SEARCH_EXPAND=1). Off by default so search returns only
+  // the direct matches, not their descendants, to keep results tight.
+  while (config.expandSubtree && stack.length) {
     const id = stack.pop()!;
     const rank = order.get(id) ?? -1;
     for (const nb of adj.get(id) ?? []) {

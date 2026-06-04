@@ -44,6 +44,14 @@ test("brain_create rejects empty text", async () => {
   expect((await call("brain_create", { text: "   " })).isError).toBe(true);
 });
 
+test("brain_create rejects a yes/no question at the source", async () => {
+  const r = await call("brain_create", { text: "Does compression distinguish great poems?" });
+  expect(r.isError).toBe(true);
+  expect(r.content[0]!.text).toContain("how or why");
+  // an open rephrase is accepted
+  expect(parse(await call("brain_create", { text: "How does compression distinguish great poems?" })).id).toBeTruthy();
+});
+
 test("brain_search finds a neuron by meaning", async () => {
   await call("brain_create", { text: "How do I write a haiku poem?" });
   const results = parse(await call("brain_search", { query: "compose some verse" }));

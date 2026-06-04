@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { create, mutate, remove } from "../core/neurons";
+import { isClosedQuestion } from "../core/audit";
 import { search } from "../core/search";
 import { config } from "../core/config";
 import type { Neuron } from "../core/neurons.types";
@@ -25,12 +26,16 @@ server.tool(
 
 server.tool(
   "brain_create",
-  "Create a thought and return its id. Keep it concise, bloated text pollutes search. Link related thoughts by id so future agents can build on them",
+  "Create a thought and return its id. The text MUST be an open question (what / how / why / which); yes/no questions are rejected. Keep it concise, bloated text pollutes search. Link related thoughts by id so future agents can build on them",
   {
-    text: z.string().describe("The question or problem, in natural language."),
+    text: z.string().describe("An open question starting with what / how / why / which. Never a yes/no question."),
     edges: z.array(z.string()).optional().describe("ids of related thoughts to link to."),
   },
-  async ({ text, edges }) => (text.trim() ? json(withUrl(await create(text, edges ?? []))) : fail("text is required"))
+  async ({ text, edges }) => {
+    if (!text.trim()) return fail("text is required");
+    if (isClosedQuestion(text)) return fail("Rejected: that is a yes/no question and presumes its answer. Re-ask it as a how or why question, then create it.");
+    return json(withUrl(await create(text, edges ?? [])));
+  }
 );
 
 server.tool(

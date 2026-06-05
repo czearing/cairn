@@ -6,6 +6,8 @@ All notable changes to Cairn are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-05
+
 ### Added
 - Re-engineered, verified installer: six measured phases (preflight → hooks → MCP → warm model →
   end-to-end smoke test → summary) that *prove* the brain works before declaring success.
@@ -22,4 +24,5 @@ All notable changes to Cairn are documented here. The format follows
 - Reconciled the install/update/docs repository URL to `github.com/czearing/cairn` (the advertised
   one-liner previously pointed at a non-existent repo).
 
-[Unreleased]: https://github.com/czearing/cairn/commits/main
+[Unreleased]: https://github.com/czearing/cairn/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/czearing/cairn/releases/tag/v0.1.0

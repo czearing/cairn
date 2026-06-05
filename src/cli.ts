@@ -44,6 +44,15 @@ switch (cmd) {
     console.log(JSON.stringify(v));
     break;
   }
+  case "proxy": {
+    const { start } = await import("./proxy/server");
+    const { c, sym, line } = await import("./term");
+    const s = start();
+    line(`${sym.ok} ${c.green("Cairn proxy")} on ${c.cyan(`http://localhost:${s.port}/v1`)}  ->  ${s.upstream.name} ${c.dim(`(${s.upstream.baseUrl})`)}`);
+    line(c.dim(`   Point your OpenAI client's base_url at http://localhost:${s.port}/v1. Memory is recalled automatically.`));
+    line(c.dim(`   Switch backend with CAIRN_PROXY_UPSTREAM (ollama, openai) or CAIRN_PROXY_BASE_URL.`));
+    break;
+  }
   case "mcp":
     await import("./mcp/server"); // starts the stdio server (connects on import)
     break;
@@ -66,6 +75,7 @@ Usage:
   cairn update      Pull the latest version, reinstall deps, re-apply config
   cairn uninstall   Remove Cairn's hooks and MCP registration from Claude Code
   cairn --version   Print the installed version
+  cairn proxy       Run the OpenAI-compatible memory proxy (recall for Ollama and others)
   cairn mcp         Run the MCP server over stdio
   cairn ui          Serve the read-only viewer (deep-linkable at /node/<id>)
   cairn seed        Write a few demo neurons to the brain

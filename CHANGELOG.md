@@ -5,6 +5,12 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and 
 
 ## [Unreleased]
 
+### Added
+
+- `cairn proxy`: an OpenAI-compatible gateway that recalls memory into the system prompt and forwards
+  to a model backend. Works with Ollama (default), OpenAI, or any OpenAI-compatible server. Switch
+  the backend with `CAIRN_PROXY_UPSTREAM` or `CAIRN_PROXY_BASE_URL`. See `scripts/proxy-demo.ts`.
+
 ## [0.1.0] - 2026-06-05
 
 First public release.

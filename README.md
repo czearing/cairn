@@ -69,6 +69,37 @@ src/
 scripts/                 installer bootstrap and the sandbox harness
 ```
 
+## Memory for any model (the proxy)
+
+Not every tool speaks MCP. For a local model like Ollama, or any OpenAI-compatible client, run the
+proxy instead:
+
+```bash
+cairn proxy
+```
+
+It serves an OpenAI-compatible API on `http://localhost:11435/v1`. Point your client's `base_url` at
+it. On each chat request, the proxy searches the brain with your latest message and adds what it
+finds to the system prompt, then forwards the request to the model. The model needs to know nothing
+about Cairn.
+
+Switch the backend with one variable:
+
+```bash
+CAIRN_PROXY_UPSTREAM=ollama cairn proxy        # default, http://localhost:11434/v1
+CAIRN_PROXY_UPSTREAM=openai cairn proxy         # needs OPENAI_API_KEY
+CAIRN_PROXY_BASE_URL=http://host:1234/v1 cairn proxy   # any other OpenAI-compatible server
+```
+
+To see it work without a model running:
+
+```bash
+bun scripts/proxy-demo.ts
+```
+
+The proxy recalls memory (read) today. Writing new memories back from a conversation is opt-in and
+still minimal, because the brain is a curated graph of questions and answers, not a chat log.
+
 ## Configuration
 
 Everything is set with environment variables. There are no config files to find.
@@ -81,6 +112,10 @@ Everything is set with environment variables. There are no config files to find.
 | `CAIRN_EMBED_API_KEY` | none | For the `openai` provider. |
 | `CAIRN_EMBED_BASE_URL` | OpenAI | For Azure or other OpenAI-compatible endpoints. |
 | `CAIRN_RELEVANCE_THRESHOLD` | `0.3` | How similar a neuron must be to count as relevant. |
+| `CAIRN_PROXY_UPSTREAM` | `ollama` | Which model backend the proxy forwards to (`ollama`, `openai`). |
+| `CAIRN_PROXY_BASE_URL` | preset | Override the upstream URL for any OpenAI-compatible server. |
+| `CAIRN_PROXY_PORT` | `11435` | Port the proxy listens on. |
+| `CAIRN_PROXY_MEMORIES` | `5` | How many recalled neurons to inject per request. |
 
 Swap the embedding model by changing these. No code change.
 

@@ -91,7 +91,7 @@ function linkCommand(dryRun: boolean): { path: string; created: boolean; onBunPa
 
 export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   const dryRun = opts.dryRun ?? false;
-  line(c.bold(`\nInstalling Cairn for Claude Code${dryRun ? c.yellow("  [DRY RUN — no changes will be written]") : ""}\n`));
+  line(c.bold(`\nInstalling Cairn for Claude Code${dryRun ? c.yellow("  [DRY RUN: nothing is written]") : ""}\n`));
 
   // ── Phase 1: preflight ────────────────────────────────────────────────────────────────────
   line(c.dim("1/6  Preflight"));
@@ -106,7 +106,7 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   line(c.dim("\n2/6  Prompt-injection hooks"));
   const { added, bak } = await installHooks(dryRun);
   const wouldOr = dryRun ? "Would add" : "Added";
-  step(added.length ? `${sym.ok} ${wouldOr}: ${added.join(", ")}` : `${sym.dot} Already installed — no change.`);
+  step(added.length ? `${sym.ok} ${wouldOr}: ${added.join(", ")}` : `${sym.dot} Already installed. No change.`);
 
   // ── Phase 3: MCP registration ─────────────────────────────────────────────────────────────
   line(c.dim("\n3/6  MCP server (brain_* tools)"));
@@ -115,7 +115,7 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   if (mcp === "skipped") step(`${sym.dot} Skipped (CAIRN_SKIP_MCP set).`);
   else if (mcp === "registered") step(`${sym.ok} Registered '${mcpName()}' at user scope.`);
   else if (mcp === "would-register") step(`${sym.dot} Would register '${mcpName()}' at user scope.`);
-  else if (mcp === "already") step(`${sym.dot} Already registered — no change.`);
+  else if (mcp === "already") step(`${sym.dot} Already registered. No change.`);
   else if (mcp === "no-cli") {
     step(`${sym.warn} Claude CLI not found. Register it yourself once Claude Code is installed:`);
     step(`    ${c.cyan(manual)}`);
@@ -133,7 +133,7 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
 
   // ── Phase 5: warm the model and prove a real create -> recall round-trip ─────────────────────
   line(c.dim("\n5/6  Warming the embedding model + verifying end-to-end"));
-  step(c.dim("(first run downloads a small local model — done now so your first search is instant)"));
+  step(c.dim("(first run downloads a small local model, so we do it now to keep your first search fast)"));
   const v = process.env.CAIRN_SKIP_VERIFY
     ? { ok: true, recalled: true, warmMs: 0, smokeMs: 0 }
     : await verify();
@@ -157,7 +157,7 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   if (dryRun) {
     line(`${sym.ok} ${c.green(c.bold("Dry run complete."))} Nothing was written. Re-run without ${c.cyan("--dry-run")} to apply.`);
   } else {
-    line(`${sym.ok} ${c.green(c.bold("Done."))} ${c.bold("Restart Claude Code")}, then ask it something — it will recall and grow the brain.`);
-    line(c.dim("   (New terminal? The `cairn` command is ready — try `cairn doctor`.)"));
+    line(`${sym.ok} ${c.green(c.bold("Done."))} ${c.bold("Restart Claude Code")}, then ask it something. It will recall and grow the brain.`);
+    line(c.dim("   (New terminal? The `cairn` command is ready. Try `cairn doctor`.)"));
   }
 }

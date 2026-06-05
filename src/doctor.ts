@@ -64,7 +64,7 @@ export async function checks(): Promise<Check[]> {
     name: "Git",
     ok: git !== null,
     required: false,
-    detail: git ?? "not found — only needed to update Cairn later",
+    detail: git ?? "not found (only needed to update Cairn later)",
     fix: "Install Git: https://git-scm.com/downloads",
   });
 
@@ -73,7 +73,7 @@ export async function checks(): Promise<Check[]> {
     name: "Claude Code CLI",
     ok: Boolean(claude),
     required: false,
-    detail: claude ? claude.replace(/\\/g, "/") : "not found — brain_* tools can't auto-register",
+    detail: claude ? claude.replace(/\\/g, "/") : "not found; brain_* tools can't auto-register",
     fix: "Install Claude Code, then re-run `cairn install` (a manual register line is printed at the end).",
   });
 
@@ -101,7 +101,7 @@ export function report(list: Check[]): boolean {
 
 // `cairn doctor` entrypoint: run + print, exit non-zero if a required check fails.
 export async function doctor(): Promise<boolean> {
-  line(c.bold("\nCairn doctor — environment preflight\n"));
+  line(c.bold("\nCairn doctor: environment preflight\n"));
   const ok = report(await checks());
   line();
   line(ok ? `${sym.ok} ${c.green("Ready to install.")}` : `${sym.bad} ${c.red("Fix the items above, then re-run.")}`);

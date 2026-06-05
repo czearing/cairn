@@ -1,34 +1,40 @@
-# Security Policy
+# Security
 
 ## Reporting a vulnerability
 
-Please **do not open a public issue** for security vulnerabilities.
+Please don't open a public issue for a security problem.
 
-Instead, report privately via GitHub's [Security Advisories](https://github.com/czearing/cairn/security/advisories/new)
-(Security → Report a vulnerability), or email the maintainer listed on the GitHub profile. We aim to
-acknowledge within 72 hours and will coordinate a fix and disclosure timeline with you.
+Report it privately through GitHub's
+[security advisories](https://github.com/czearing/cairn/security/advisories/new), or email the
+maintainer listed on the GitHub profile. We aim to reply within 72 hours and will agree a fix and
+disclosure timeline with you.
 
-## What to include
+Include:
 
-- A description of the issue and its impact.
-- Steps to reproduce (a minimal repro is ideal).
-- The affected version (`cairn --version`) and OS.
+- What the issue is and what it lets an attacker do.
+- Steps to reproduce. A minimal repro helps a lot.
+- The version (`cairn --version`) and your OS.
 
-## Scope & trust model
+## How the installer behaves
 
-Cairn installs via a `curl … | bash` / `irm … | iex` one-liner that runs code from this repository.
-As with any such installer, **only run it from a source you trust over HTTPS.** You can always read
-the script first:
+Cairn installs with a `curl ... | bash` (or `irm ... | iex`) one-liner that runs a script from this
+repo. As with any installer of this kind, only run it from a source you trust, over HTTPS. You can
+read the script first:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/czearing/cairn/main/scripts/install.sh   # inspect, then run
+curl -fsSL https://raw.githubusercontent.com/czearing/cairn/main/scripts/install.sh
 ```
 
-The installer writes only to `~/.claude/settings.json` (hooks, with a `.bak`), your user-scoped
-`claude mcp` registration, a `cairn` shim in bun's bin dir, and the local brain at `~/.cairn/`.
-It never requires `sudo`. `cairn uninstall` reverses the hooks and MCP registration.
+The installer writes to four places, and nothing else:
 
-## Roadmap
+- `~/.claude/settings.json` (the hooks; it keeps a `.bak`)
+- your user-scoped `claude mcp` registration
+- a `cairn` shim in bun's bin directory
+- the local brain under `~/.cairn/`
 
-We plan to publish a checksum + Sigstore signature for the installer and release artifacts so the
-one-liner can be cryptographically verified before it runs.
+It never needs `sudo`. `cairn uninstall` reverses the hooks and the MCP registration.
+
+## Planned
+
+We plan to sign the installer and release artifacts (checksum plus Sigstore) so you can verify them
+before they run.

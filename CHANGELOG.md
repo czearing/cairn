@@ -1,28 +1,30 @@
 # Changelog
 
-All notable changes to Cairn are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to adhere to
+This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 ## [0.1.0] - 2026-06-05
 
+First public release.
+
 ### Added
-- Re-engineered, verified installer: six measured phases (preflight → hooks → MCP → warm model →
-  end-to-end smoke test → summary) that *prove* the brain works before declaring success.
-- Composable commands: `cairn doctor`, `cairn verify`, `cairn update`, `cairn uninstall`,
+
+- A verified installer. It checks your environment, wires Cairn into Claude Code, registers the MCP
+  server, warms the embedding model, and runs a create-recall round-trip before it finishes.
+- Commands: `cairn doctor`, `cairn verify`, `cairn update`, `cairn uninstall`,
   `cairn install --dry-run`, and `cairn --version`.
-- Global `cairn` command installed as a shim in bun's on-PATH bin dir (no PATH edits; avoids the
-  unreliable `bun link` on Windows).
-- `scripts/sandbox.ts`: a safe harness to rehearse the full installer UX against temp paths,
-  asserting the live config/brain are byte-for-byte unchanged.
-- Test-safety guard in `src/core/db.ts` that refuses to open the real brain during a test run.
-- Cross-platform CI (Linux/macOS/Windows), `SECURITY.md`, `CONTRIBUTING.md`.
+- A global `cairn` command, installed as a shim in bun's bin directory.
+- `scripts/sandbox.ts`, which rehearses the installer against temp paths and checks your real config
+  and brain are unchanged.
+- A test guard in `src/core/db.ts` that refuses to open the real brain during a test run.
+- CI on Linux, macOS, and Windows. `SECURITY.md` and `CONTRIBUTING.md`.
 
 ### Fixed
-- Reconciled the install/update/docs repository URL to `github.com/czearing/cairn` (the advertised
-  one-liner previously pointed at a non-existent repo).
+
+- The install and update commands pointed at a repository that did not exist. They now point at
+  `github.com/czearing/cairn`.
 
 [Unreleased]: https://github.com/czearing/cairn/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/czearing/cairn/releases/tag/v0.1.0

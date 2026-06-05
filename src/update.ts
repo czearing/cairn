@@ -25,14 +25,14 @@ export async function update(): Promise<void> {
   line(c.bold("\nUpdating Cairn\n"));
   const g = git();
   if (!g || !existsSync(join(ROOT, ".git"))) {
-    step(`${sym.warn} This install isn't a git checkout — update by re-running the one-liner:`);
+    step(`${sym.warn} This install isn't a git checkout. Update by re-running the one-liner:`);
     step(`    ${c.cyan(ONELINER)}`);
     process.exitCode = 1;
     return;
   }
 
   const before = head();
-  step(c.dim(`current ${before} — pulling latest…`));
+  step(c.dim(`current ${before}, pulling latest…`));
   const pull = sh([g, "-C", ROOT, "pull", "--ff-only"]);
   if (!pull.success) {
     step(`${sym.bad} ${c.red("git pull failed.")} ${c.dim(text(pull.stderr).split("\n")[0] ?? "")}`);

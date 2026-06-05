@@ -63,7 +63,7 @@ export async function uninstall(): Promise<void> {
         ? `${sym.dot} MCP server 'cairn' was not registered.`
         : mcp === "skipped"
           ? `${sym.dot} Skipped MCP removal (CAIRN_SKIP_MCP set).`
-          : `${sym.warn} Claude CLI not found — remove manually: ${c.cyan(`claude mcp remove ${mcpName()} --scope user`)}`
+          : `${sym.warn} Claude CLI not found. Remove manually: ${c.cyan(`claude mcp remove ${mcpName()} --scope user`)}`
   );
 
   line();

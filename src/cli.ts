@@ -30,7 +30,7 @@ switch (cmd) {
     const { c, sym, line } = await import("./term");
     const v = await verify();
     if (v.ok) {
-      line(`${sym.ok} ${c.green("Brain verified")} — created & recalled a memory ${c.dim(`(warm ${v.warmMs}ms · recall ${v.smokeMs}ms)`)}`);
+      line(`${sym.ok} ${c.green("Brain verified.")} Created and recalled a memory ${c.dim(`(warm ${v.warmMs}ms, recall ${v.smokeMs}ms)`)}`);
     } else {
       line(`${sym.bad} ${c.red("Verification failed")} ${c.dim(v.error ?? "")}`);
       line(`  ${sym.arrow} Check your connection (the local model downloads once) or your CAIRN_EMBED_* settings, then retry ${c.cyan("cairn verify")}.`);

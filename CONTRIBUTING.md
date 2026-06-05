@@ -1,8 +1,8 @@
-# Contributing to Cairn
+# Contributing
 
-Thanks for helping mark the trail for whoever comes next.
+Thanks for helping out.
 
-## Dev setup
+## Setup
 
 ```bash
 git clone https://github.com/czearing/cairn
@@ -10,48 +10,45 @@ cd cairn
 bun install
 ```
 
-## Running the checks
+## Checks
 
 > [!IMPORTANT]
-> **Run tests from the repo root.** `bunfig.toml` preloads `tests/setup.ts`, which redirects the
-> tests onto a throwaway database. Bun reads `bunfig.toml` from the working directory, so running
-> `bun test` from elsewhere skips that preload. (`src/core/db.ts` now hard-refuses to open the real
-> brain during a test run as a backstop, but run from the root anyway.)
+> Run tests from the repo root. `bunfig.toml` preloads `tests/setup.ts`, which points the tests at a
+> throwaway database. Bun reads `bunfig.toml` from the current directory, so running `bun test` from
+> somewhere else skips that preload. (`src/core/db.ts` also refuses to open the real brain during a
+> test run, as a backstop. Run from the root anyway.)
 
 ```bash
 bun test            # core, MCP, hooks, installer, viewer
 bunx tsc --noEmit   # typecheck
 ```
 
-## Trying the installer safely
+## Trying the installer
 
-The brain at `~/.cairn/cairn.db` may be shared across agents. To exercise the installer end-to-end
-(happy path, idempotent re-run, NO_COLOR, offline failure, uninstall) **without touching your real
-settings, brain, or `claude mcp` registration**:
+The brain at `~/.cairn/cairn.db` may be shared by several agents. To exercise the installer without
+touching your real settings, brain, or MCP registration:
 
 ```bash
-bun scripts/sandbox.ts          # asserts your live config/brain are byte-for-byte unchanged
-bun src/cli.ts install --dry-run # read-only preview against your real config
+bun scripts/sandbox.ts           # checks your real config and brain are unchanged afterward
+bun src/cli.ts install --dry-run # preview the changes, writing nothing
 ```
 
-## Architecture (where things live)
+## Where things live
 
-- `src/core/` — host-agnostic brain (db, embed, neurons, search). No host code here.
-- `src/mcp/server.ts` — the MCP adapter (the `brain_*` tools).
-- `src/inject/` + `src/hosts/<host>/` — prompt-injection adapters (Claude Code today).
-- `prompts/` — hot-editable policy markdown; no rebuild needed.
-- `scripts/` — installer bootstrap + the sandbox harness.
+- `src/core/` is the brain: db, embeddings, neurons, search. No host code goes here.
+- `src/mcp/server.ts` is the MCP adapter (the `brain_*` tools).
+- `src/inject/` and `src/hosts/<host>/` are the prompt-injection adapters. Claude Code is the only
+  host today.
+- `prompts/` is editable policy. No rebuild needed.
+- `scripts/` holds the installer bootstrap and the sandbox.
 
-Adding support for a new host means adding a `src/hosts/<host>/` adapter — `src/core` and
-`src/inject` don't change.
+To support a new host, add a `src/hosts/<host>/` adapter. The core and the inject layer stay the same.
 
 ## Pull requests
 
 1. Branch from `main`.
-2. Keep changes focused; update the README/CHANGELOG when behavior changes.
-3. Make sure `bun test` and `bunx tsc --noEmit` pass (CI runs them on Linux, macOS, and Windows).
-4. Use clear commit messages ([Conventional Commits](https://www.conventionalcommits.org) preferred).
+2. Keep the change focused. Update the README and CHANGELOG when behavior changes.
+3. Make sure `bun test` and `bunx tsc --noEmit` pass. CI runs them on Linux, macOS, and Windows.
+4. Write clear commit messages. [Conventional Commits](https://www.conventionalcommits.org) preferred.
 
-## License
-
-By contributing you agree your contributions are licensed under the project's MIT license.
+Contributions are licensed under the project's MIT license.

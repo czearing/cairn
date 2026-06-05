@@ -1,0 +1,90 @@
+import { test, expect, beforeEach, afterEach } from "bun:test";
+import { existsSync, writeFileSync, readFileSync, rmSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { install } from "../src/install";
+import { checks } from "../src/doctor";
+import { verify } from "../src/verify";
+
+// The installer is proven the same way the user sees it: drive `install` against a throwaway
+// settings file (MCP + verify stubbed for hermeticity) and assert idempotent, non-destructive
+// hook merging — plus a real end-to-end create -> recall round-trip via verify().
+
+let settings: string;
+let binDir: string;
+
+beforeEach(() => {
+  settings = join(tmpdir(), `cairn-settings-${randomUUID()}.json`);
+  binDir = mkdtempSync(join(tmpdir(), "cairn-bin-"));
+  process.env.CAIRN_SETTINGS_PATH = settings;
+  process.env.CAIRN_SKIP_MCP = "1";
+  process.env.CAIRN_SKIP_VERIFY = "1";
+  process.env.CAIRN_BIN_DIR = binDir; // keep the shim out of the real bun bin dir during tests
+});
+
+afterEach(() => {
+  for (const p of [settings, `${settings}.bak`]) if (existsSync(p)) rmSync(p);
+  rmSync(binDir, { recursive: true, force: true });
+  delete process.env.CAIRN_SETTINGS_PATH;
+  delete process.env.CAIRN_SKIP_MCP;
+  delete process.env.CAIRN_SKIP_VERIFY;
+  delete process.env.CAIRN_BIN_DIR;
+});
+
+const read = () => JSON.parse(readFileSync(settings, "utf8"));
+const cairnGroups = (s: ReturnType<typeof read>) =>
+  Object.values(s.hooks ?? {}).flat().filter((g: any) => g.hooks.some((h: any) => h.command.includes("cairn")));
+
+test("install adds the four Cairn hooks", async () => {
+  await install();
+  const s = read();
+  for (const ev of ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"]) {
+    expect(s.hooks[ev].some((g: any) => g.hooks.some((h: any) => h.command.includes("cairn")))).toBe(true);
+  }
+});
+
+test("install is idempotent — a second run adds nothing", async () => {
+  await install();
+  const before = cairnGroups(read()).length;
+  await install();
+  expect(cairnGroups(read()).length).toBe(before);
+});
+
+test("install preserves pre-existing settings and writes a .bak on first change", async () => {
+  writeFileSync(settings, JSON.stringify({ model: "opus", hooks: { Stop: [{ hooks: [{ type: "command", command: "echo mine" }] }] } }));
+  await install();
+  const s = read();
+  expect(s.model).toBe("opus"); // untouched user key survives
+  expect(s.hooks.Stop.some((g: any) => g.hooks[0].command === "echo mine")).toBe(true); // their hook survives
+  expect(existsSync(`${settings}.bak`)).toBe(true); // backup made before editing
+});
+
+test("uninstall removes every Cairn hook it added", async () => {
+  const { uninstall } = await import("../src/uninstall");
+  await install();
+  expect(cairnGroups(read()).length).toBeGreaterThan(0);
+  await uninstall();
+  expect(cairnGroups(read()).length).toBe(0);
+});
+
+test("install creates a global cairn shim in CAIRN_BIN_DIR", async () => {
+  await install();
+  const isWin = process.platform === "win32";
+  const shim = join(binDir, isWin ? "cairn.cmd" : "cairn");
+  expect(existsSync(shim)).toBe(true);
+  expect(readFileSync(shim, "utf8")).toContain("cli.ts"); // shim invokes the CLI entrypoint
+});
+
+test("doctor reports bun and a settings-writable check", async () => {
+  const list = await checks();
+  expect(list.find((ck) => ck.name === "Bun runtime")?.ok).toBe(true);
+  expect(list.some((ck) => ck.name === "Settings writable")).toBe(true);
+});
+
+test("verify proves a real create -> recall round-trip in an isolated DB", async () => {
+  delete process.env.CAIRN_SKIP_VERIFY;
+  const v = await verify();
+  expect(v.recalled).toBe(true);
+  expect(v.ok).toBe(true);
+}, 60_000);

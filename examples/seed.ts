@@ -5,7 +5,7 @@ import { create, mutate } from "../src/core/neurons";
 
 const root = await create("Build Cairn: a shared semantic-graph memory for agents.");
 
-const SRC = "https://github.com/cairn-memory/cairn";
+const SRC = "https://github.com/czearing/cairn";
 
 const model = await create("What is the minimal neuron data model?", [root.id]);
 await mutate(model.id, {

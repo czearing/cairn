@@ -1,5 +1,8 @@
 # Cairn
 
+[![CI](https://github.com/czearing/cairn/actions/workflows/ci.yml/badge.svg)](https://github.com/czearing/cairn/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
 > Markers left for whoever comes next.
 
 A shared, persistent, **semantic-graph memory** for AI agents. Each entry is a *neuron* — a
@@ -32,13 +35,56 @@ Code for another agent only touches `src/hosts/`.
 
 ## Install
 
+One line — it installs Bun if missing, fetches Cairn, and runs the full setup:
+
 ```bash
-bun install
-bun run install:claude   # appends hooks to ~/.claude/settings.json + registers the MCP server
+# macOS / Linux / WSL2
+curl -fsSL https://raw.githubusercontent.com/czearing/cairn/main/scripts/install.sh | bash
+```
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/czearing/cairn/main/scripts/install.ps1 | iex
 ```
 
-The installer is idempotent and writes a `.bak` of `settings.json` on first change. Restart
-Claude Code afterward to pick up the `brain_*` tools and the injected prompts.
+From a clone it's just `bun install && bun run install:claude`. Either way you get a global **`cairn`**
+command (a shim dropped into bun's on-PATH bin dir), so afterwards you just type `cairn doctor`,
+`cairn verify`, `cairn update`, etc. — no `bun path/to/cli.ts`.
+
+**Update** any time with `cairn update` (git pull + reinstall + idempotent re-apply, printing the
+old→new commit), or just re-run the one-liner.
+
+The installer runs **six measured phases** — it doesn't just say "done", it *proves* the brain works:
+
+1. **Preflight** — checks Bun, Git, the Claude CLI, and write access; prints the exact fix for anything missing.
+2. **Hooks** — merges Cairn's four hooks into `~/.claude/settings.json` (idempotent; `.bak` on first change).
+3. **MCP** — registers the `brain_*` tools at user scope, detecting an existing registration so re-runs are no-ops.
+4. **Warm** — downloads/loads the local embedding model *now*, so your first search is instant (not a hidden stall later).
+5. **Verify** — runs a real create→recall→delete round-trip in a throwaway DB and reports the timing.
+6. **Summary** — what changed, where the brain lives, and one next step.
+
+Restart Claude Code afterward to pick up the tools and injected prompts.
+
+| Command | Does |
+|---|---|
+| `cairn doctor` | Environment preflight; prints a fix for anything missing. |
+| `cairn verify` | Proves the brain works end-to-end in an isolated DB. |
+| `cairn install --dry-run` | Runs the real preflight and prints what install *would* change — writes nothing. |
+| `cairn update` | Pulls the latest source, reinstalls deps, re-applies config; prints old→new commit. |
+| `cairn uninstall` | Removes Cairn's hooks and MCP registration (your brain DB is left intact). |
+
+### Testing the installer safely
+
+The brain is a shared, live database. To rehearse the full installer UX — happy path, idempotent
+re-run, `NO_COLOR`/non-TTY rendering, an offline failure, and uninstall — without touching your real
+settings, brain, or `claude mcp` registration:
+
+```bash
+bun scripts/sandbox.ts
+```
+
+It redirects every side effect to a temp dir (`CAIRN_SETTINGS_PATH`, `CAIRN_DB_PATH`, `CAIRN_SKIP_MCP`)
+and asserts your live `settings.json` and brain are byte-for-byte unchanged afterward. To rehearse the
+real `claude mcp` path under a throwaway name, set `CAIRN_MCP_NAME=cairn-sandbox`.
 
 ## The three tools
 

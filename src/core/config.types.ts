@@ -20,6 +20,10 @@ export interface CairnConfig {
   embed: EmbedConfig;
   /** Cosine-similarity bar at or above which a neuron counts as relevant. */
   relevanceThreshold: number;
+  /** Opt-in adaptive gate (0 = off). When >0, the effective floor for a query is
+   * `max(relevanceThreshold, topScore * relativeFloor)`, trimming the weak tail relative to the best
+   * match without ever capping the count. A diffuse query (low top) falls back to the absolute floor. */
+  relativeFloor: number;
   /** When true, a match also pulls in its descendant subtree. Off = return only direct matches. */
   expandSubtree: boolean;
   /** Port the optional viewer serves on. */

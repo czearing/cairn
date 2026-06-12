@@ -112,6 +112,7 @@ Everything is set with environment variables. There are no config files to find.
 | `CAIRN_EMBED_API_KEY` | none | For the `openai` provider. |
 | `CAIRN_EMBED_BASE_URL` | OpenAI | For Azure or other OpenAI-compatible endpoints. |
 | `CAIRN_RELEVANCE_THRESHOLD` | `0.3` | How similar a neuron must be to count as relevant. |
+| `CAIRN_RELATIVE_FLOOR` | `0` (off) | Adaptive trim. When set (e.g. `0.5`), also drops results scoring below `top × this` for the query — tightening a confident query without capping the count. Diffuse queries fall back to the absolute threshold. |
 | `CAIRN_PROXY_UPSTREAM` | `ollama` | Which model backend the proxy forwards to (`ollama`, `openai`). |
 | `CAIRN_PROXY_BASE_URL` | preset | Override the upstream URL for any OpenAI-compatible server. |
 | `CAIRN_PROXY_PORT` | `11435` | Port the proxy listens on. |

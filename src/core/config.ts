@@ -14,6 +14,7 @@ export const config: CairnConfig = {
     baseUrl: process.env.CAIRN_EMBED_BASE_URL || "",
   },
   relevanceThreshold: Number(process.env.CAIRN_RELEVANCE_THRESHOLD || "0.3"),
+  relativeFloor: Number(process.env.CAIRN_RELATIVE_FLOOR || "0"), // 0 = off; e.g. 0.5 keeps results >= half the top score
   expandSubtree: process.env.CAIRN_SEARCH_EXPAND === "1", // off by default: return only direct matches
 
   uiPort,

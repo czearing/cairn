@@ -14,12 +14,13 @@ const server = new McpServer({ name: "cairn", version: "1.0.0" });
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
 
-// Attach a viewer deep-link so callers can show/cite the thought in the UI.
-const withUrl = (n: Neuron) => ({ ...n, url: `${config.uiUrl}/node/${n.id}` });
+// Attach a viewer deep-link so callers can show/cite the thought in the UI. Generic so a search
+// result keeps its `score` field in the output (and type) alongside the url.
+const withUrl = <T extends Neuron>(n: T) => ({ ...n, url: `${config.uiUrl}/node/${n.id}` });
 
 server.tool(
   "brain_search",
-  "Returns every relevant thought ranked most-relevant-first. Use this as much as possible to learn from previous thoughts",
+  "Returns every relevant thought ranked most-relevant-first. Each result has a `score` (0-1 cosine relevance): weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. Use this as much as possible to learn from previous thoughts",
   { query: z.string().describe("What you are looking for, in natural language.") },
   async ({ query }) => json((await search(query)).map(withUrl))
 );

@@ -12,7 +12,7 @@ beforeAll(async () => {
   DB = await import("../src/core/db");
   C = await import("../src/core/config");
 });
-beforeEach(() => { DB.db().run("DELETE FROM neurons"); C.config.expandSubtree = false; });
+beforeEach(() => { DB.db().run("DELETE FROM neurons"); C.config.expandSubtree = false; C.config.relativeFloor = 0; });
 
 const ids = (ns: { id: string }[]) => ns.map((n) => n.id);
 const texts = (ns: { text: string }[]) => ns.map((n) => n.text);
@@ -100,6 +100,29 @@ test("E10 a hit on a child returns its descendants but NOT its ancestors", async
   expect(res).toContain(leaf.id); // the hit itself
   expect(res).not.toContain(mid.id); // parent NOT pulled in
   expect(res).not.toContain(root.id); // root NOT pulled in
+});
+
+test("E12 each result carries a numeric score in descending order", async () => {
+  await N.create("training deep neural networks");
+  await N.create("a recipe for pasta carbonara");
+  const res = await S.search("machine learning model training");
+  expect(res.length).toBeGreaterThan(0);
+  expect(typeof res[0]!.score).toBe("number");
+  for (let i = 1; i < res.length; i++) expect(res[i - 1]!.score).toBeGreaterThanOrEqual(res[i]!.score);
+});
+
+test("E13 CAIRN_RELATIVE_FLOOR keeps only results near the top match (no count cap)", async () => {
+  await N.create("how to write a haiku poem");
+  await N.create("composing rhyming verse and poetry");
+  await N.create("my quarterly tax filing deadline");
+  await N.create("changing the oil in my car");
+  const base = await S.search("write a poem");
+  C.config.relativeFloor = 0.9; // aggressive: keep only within 90% of the top score
+  const tight = await S.search("write a poem");
+  expect(tight.length).toBeGreaterThan(0);
+  expect(tight.length).toBeLessThanOrEqual(base.length);
+  const top = tight[0]!.score;
+  for (const r of tight) expect(r.score).toBeGreaterThanOrEqual(top * 0.9 - 1e-9);
 });
 
 test("E9 results interleaved by relevance, not hop distance", async () => {

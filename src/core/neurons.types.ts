@@ -22,6 +22,9 @@ export interface Row {
   edges: string;
   /** JSON-encoded embedding vector, or null until it has been computed. */
   embedding: string | null;
+  /** Id of the embedding model that produced {@link embedding}; null on legacy rows. A mismatch with
+   * the current model means the vector is stale/incomparable and must be re-embedded before use. */
+  embedding_model: string | null;
 }
 
 /** Fields accepted by `mutate`. Any omitted field is left unchanged. */

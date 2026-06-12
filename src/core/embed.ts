@@ -11,7 +11,10 @@ const DEFAULT_MODEL: Record<string, string> = {
   openai: "text-embedding-3-small",
 };
 
-const model = () => config.embed.model || DEFAULT_MODEL[config.embed.provider] || DEFAULT_MODEL.local;
+// The resolved embedding-model id (the provider default unless CAIRN_EMBED_MODEL overrides). Stored
+// next to each vector so search can detect a model change and re-embed now-incomparable old vectors.
+export const embedModel = (): string =>
+  config.embed.model || DEFAULT_MODEL[config.embed.provider] || DEFAULT_MODEL.local!;
 const blank = (t: string) => (t && t.trim() ? t : " ");
 
 function unit(v: number[]): number[] {
@@ -22,16 +25,21 @@ function unit(v: number[]): number[] {
 }
 
 // Vectors are unit-normalized, so cosine similarity is a dot product.
+//
+// A length mismatch means the two vectors came from different embedding models (e.g. 384-dim MiniLM
+// vs 1536-dim OpenAI). Those spaces are incomparable, so there is no real similarity to report —
+// return -1 (maximally dissimilar) rather than silently dotting the shared prefix, which would
+// invent a meaningless score and could let an unrelated neuron clear the relevance threshold.
 export function cosine(a: number[], b: number[]): number {
+  if (a.length !== b.length) return -1;
   let d = 0;
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) d += a[i]! * b[i]!;
+  for (let i = 0; i < a.length; i++) d += a[i]! * b[i]!;
   return d;
 }
 
 async function localEmbedder(): Promise<Embedder> {
   const { pipeline } = await import("@huggingface/transformers");
-  const extract = await pipeline("feature-extraction", model());
+  const extract = await pipeline("feature-extraction", embedModel());
   return async (text) => {
     const out = await extract(blank(text), { pooling: "mean", normalize: true });
     return Array.from(out.data as Float32Array);
@@ -44,7 +52,7 @@ function apiEmbedder(): Embedder {
     const res = await fetch(`${base}/embeddings`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.embed.apiKey}` },
-      body: JSON.stringify({ model: model(), input: blank(text) }),
+      body: JSON.stringify({ model: embedModel(), input: blank(text) }),
     });
     if (!res.ok) throw new Error(`embedding API ${res.status}: ${await res.text()}`);
     const j = (await res.json()) as { data: { embedding: number[] }[] };

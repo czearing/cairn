@@ -33,18 +33,24 @@ export function db(): Database {
   d.run("PRAGMA journal_mode = WAL");
   d.run(
     `CREATE TABLE IF NOT EXISTS neurons (
-       id        TEXT PRIMARY KEY,
-       text      TEXT NOT NULL,
-       answer    TEXT NOT NULL DEFAULT '',
-       citation  TEXT NOT NULL DEFAULT '',
-       edges     TEXT NOT NULL DEFAULT '[]',
-       embedding TEXT
+       id              TEXT PRIMARY KEY,
+       text            TEXT NOT NULL,
+       answer          TEXT NOT NULL DEFAULT '',
+       citation        TEXT NOT NULL DEFAULT '',
+       edges           TEXT NOT NULL DEFAULT '[]',
+       embedding       TEXT,
+       embedding_model TEXT
      )`
   );
-  // migrate brains created before the citation column existed
+  // migrate brains created before a column existed
   const cols = d.query("PRAGMA table_info(neurons)").all() as { name: string }[];
   if (!cols.some((c) => c.name === "citation")) {
     d.run("ALTER TABLE neurons ADD COLUMN citation TEXT NOT NULL DEFAULT ''");
+  }
+  // embedding_model records which model produced each vector, so search can detect a model change
+  // and re-embed old vectors that are no longer comparable. NULL on legacy rows triggers a re-embed.
+  if (!cols.some((c) => c.name === "embedding_model")) {
+    d.run("ALTER TABLE neurons ADD COLUMN embedding_model TEXT");
   }
   _db = d;
   return d;

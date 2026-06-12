@@ -10,3 +10,6 @@ export interface NeuronVector {
 export interface ScoredNeuron extends NeuronVector {
   sim: number;
 }
+
+/** A search result: the neuron plus its relevance `score` (cosine, 0..1) so callers can weight by it. */
+export type ScoredResult = Neuron & { score: number };

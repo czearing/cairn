@@ -1,9 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { db } from "./db";
-import { embed } from "./embed";
+import { embed, embedModel } from "./embed";
 import type { Neuron, Row, NeuronPatch } from "./neurons.types";
 
 export const vecText = (text: string, answer: string) => `${text} ${answer}`.trim();
+
+// Defense in depth: never let control/null bytes or the Unicode replacement char into a stored
+// text field. Legacy rows were poisoned by binary (embedding bytes / buffer bleed) leaking into
+// text/answer/citation; stripping on write makes that class of corruption impossible to persist.
+// Keeps tab/newline/return.
+const stripCtrl = (s: string): string =>
+  Array.from(s)
+    .filter((ch) => {
+      const c = ch.charCodeAt(0);
+      return ch === "\t" || ch === "\n" || ch === "\r" || (c >= 32 && c !== 0xfffd);
+    })
+    .join("");
 
 export function toNeuron(r: Row): Neuron {
   let edges: string[] = [];
@@ -12,7 +24,7 @@ export function toNeuron(r: Row): Neuron {
 }
 
 const dedupe = (edges: string[], self: string) => [...new Set(edges)].filter((e) => e && e !== self);
-export const SELECT = "SELECT id, text, answer, citation, edges, embedding FROM neurons";
+export const SELECT = "SELECT id, text, answer, citation, edges, embedding, embedding_model FROM neurons";
 
 export function get(id: string): Neuron | null {
   const r = db().query(`${SELECT} WHERE id = ?`).get(id) as Row | null;
@@ -47,13 +59,14 @@ export function unlink(a: string, b: string): void {
 // Create a new neuron; embeds on write; mirrors edges so the graph stays undirected.
 export async function create(text: string, edges: string[] = []): Promise<Neuron> {
   const id = randomUUID();
+  const safeText = stripCtrl(text);
   const clean = dedupe(edges, id);
-  const vec = JSON.stringify(await embed(vecText(text, "")));
+  const vec = JSON.stringify(await embed(vecText(safeText, "")));
   db()
-    .query("INSERT INTO neurons (id, text, answer, citation, edges, embedding) VALUES (?, ?, '', '', ?, ?)")
-    .run(id, text, JSON.stringify(clean), vec);
+    .query("INSERT INTO neurons (id, text, answer, citation, edges, embedding, embedding_model) VALUES (?, ?, '', '', ?, ?, ?)")
+    .run(id, safeText, JSON.stringify(clean), vec, embedModel());
   for (const t of clean) addEdge(t, id);
-  return { id, text, answer: "", citation: "", edges: clean };
+  return { id, text: safeText, answer: "", citation: "", edges: clean };
 }
 
 // Partial merge. Setting `answer` marks it solved. Re-embeds on content change. Idempotent.
@@ -62,9 +75,9 @@ export async function mutate(id: string, patch: NeuronPatch): Promise<Neuron | n
   if (!cur) return null;
   const next: Neuron = {
     id,
-    text: patch.text ?? cur.text,
-    answer: patch.answer ?? cur.answer,
-    citation: patch.citation ?? cur.citation,
+    text: stripCtrl(patch.text ?? cur.text),
+    answer: stripCtrl(patch.answer ?? cur.answer),
+    citation: stripCtrl(patch.citation ?? cur.citation),
     edges: patch.edges ? dedupe(patch.edges, id) : cur.edges,
   };
   // A neuron with an answer MUST be cited — no uncited claims in the brain.
@@ -73,8 +86,8 @@ export async function mutate(id: string, patch: NeuronPatch): Promise<Neuron | n
   }
   if (next.text !== cur.text || next.answer !== cur.answer) {
     const vec = JSON.stringify(await embed(vecText(next.text, next.answer)));
-    db().query("UPDATE neurons SET text = ?, answer = ?, citation = ?, edges = ?, embedding = ? WHERE id = ?")
-      .run(next.text, next.answer, next.citation, JSON.stringify(next.edges), vec, id);
+    db().query("UPDATE neurons SET text = ?, answer = ?, citation = ?, edges = ?, embedding = ?, embedding_model = ? WHERE id = ?")
+      .run(next.text, next.answer, next.citation, JSON.stringify(next.edges), vec, embedModel(), id);
   } else {
     // text/answer unchanged → only citation/edges can differ; leave the embedding intact
     db().query("UPDATE neurons SET citation = ?, edges = ? WHERE id = ?")

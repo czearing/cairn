@@ -6,11 +6,18 @@ import type { Settings } from "./install.types";
 import { checks, report } from "./doctor";
 import { verify } from "./verify";
 import { c, sym, line, step } from "./term";
+import {
+  copilotTargeted,
+  installCopilotMcp,
+  installCopilotHook,
+  copilotMcpPath,
+} from "./hosts/copilot-cli/setup";
 
-// Registers Cairn with Claude Code as a measured, verified flow (not a hopeful one):
-//   1 preflight  2 hooks(+.bak)  3 idempotent MCP register  4 warm model  5 smoke test  6 summary
+// Registers Cairn with Claude Code AND GitHub Copilot CLI as a measured, verified flow:
+//   1 preflight  2 Claude hooks(+.bak)  3 Claude MCP  4 Copilot CLI  5 cairn cmd  6 warm+verify  7 summary
 // Idempotent; writes a .bak of settings.json on first change.
-// Set CAIRN_SETTINGS_PATH to target a different settings file (used by tests).
+// Set CAIRN_SETTINGS_PATH (Claude) or CAIRN_COPILOT_MCP_PATH/CAIRN_COPILOT_HOOK_PATH (Copilot) to
+// target different files (used by tests). CAIRN_SKIP_COPILOT skips the Copilot phase.
 
 const MARKER = "cairn";
 const ROOT = resolve(import.meta.dir, "..");
@@ -91,10 +98,10 @@ function linkCommand(dryRun: boolean): { path: string; created: boolean; onBunPa
 
 export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   const dryRun = opts.dryRun ?? false;
-  line(c.bold(`\nInstalling Cairn for Claude Code${dryRun ? c.yellow("  [DRY RUN: nothing is written]") : ""}\n`));
+  line(c.bold(`\nInstalling Cairn for Claude Code + GitHub Copilot CLI${dryRun ? c.yellow("  [DRY RUN: nothing is written]") : ""}\n`));
 
   // ── Phase 1: preflight ────────────────────────────────────────────────────────────────────
-  line(c.dim("1/6  Preflight"));
+  line(c.dim("1/7  Preflight"));
   if (!report(await checks())) {
     line();
     line(`${sym.bad} ${c.red("Required checks failed.")} Fix the items above and re-run ${c.cyan("cairn install")}.`);
@@ -103,13 +110,13 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   }
 
   // ── Phase 2: hooks ────────────────────────────────────────────────────────────────────────
-  line(c.dim("\n2/6  Prompt-injection hooks"));
+  line(c.dim("\n2/7  Claude Code prompt-injection hooks"));
   const { added, bak } = await installHooks(dryRun);
   const wouldOr = dryRun ? "Would add" : "Added";
   step(added.length ? `${sym.ok} ${wouldOr}: ${added.join(", ")}` : `${sym.dot} Already installed. No change.`);
 
   // ── Phase 3: MCP registration ─────────────────────────────────────────────────────────────
-  line(c.dim("\n3/6  MCP server (brain_* tools)"));
+  line(c.dim("\n3/7  Claude Code MCP server (brain_* tools)"));
   const mcp = process.env.CAIRN_SKIP_MCP ? "skipped" : registerMcp(dryRun);
   const manual = `claude mcp add ${mcpName()} --scope user -- "${bun()}" "${SERVER}"`;
   if (mcp === "skipped") step(`${sym.dot} Skipped (CAIRN_SKIP_MCP set).`);
@@ -124,15 +131,38 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
     step(`    ${c.cyan(manual)}`);
   }
 
-  // ── Phase 4: global `cairn` command ─────────────────────────────────────────────────────────
-  line(c.dim("\n4/6  Global `cairn` command"));
+  // ── Phase 4: GitHub Copilot CLI (MCP tools + sessionStart injection hook) ─────────────────────
+  line(c.dim("\n4/7  GitHub Copilot CLI"));
+  if (!copilotTargeted()) {
+    step(
+      process.env.CAIRN_SKIP_COPILOT
+        ? `${sym.dot} Skipped (CAIRN_SKIP_COPILOT set).`
+        : `${sym.dot} Copilot CLI not detected — skipped. Re-run ${c.cyan("cairn install")} after installing it.`
+    );
+  } else {
+    const cmcp = await installCopilotMcp(dryRun);
+    step(
+      cmcp === "added" ? `${sym.ok} Registered brain_* tools in ${c.dim("~/.copilot/mcp-config.json")}.`
+        : cmcp === "would-add" ? `${sym.dot} Would register brain_* tools in ~/.copilot/mcp-config.json.`
+          : `${sym.dot} brain_* tools already registered. No change.`
+    );
+    const chook = await installCopilotHook(dryRun);
+    step(
+      chook === "added" ? `${sym.ok} Installed the sessionStart recall hook ${c.dim("(forces brain use each session)")}.`
+        : chook === "would-add" ? `${sym.dot} Would install the sessionStart recall hook.`
+          : `${sym.dot} sessionStart hook already installed. No change.`
+    );
+  }
+
+  // ── Phase 5: global `cairn` command ─────────────────────────────────────────────────────────
+  line(c.dim("\n5/7  Global `cairn` command"));
   const link = linkCommand(dryRun);
   if (dryRun) step(`${sym.dot} Would create ${c.cyan("cairn")} at ${c.dim(link.path)}`);
   else step(`${sym.ok} ${c.cyan("cairn")} installed at ${c.dim(link.path)}`);
   if (!link.onBunPath) step(`    ${sym.warn} ${c.dim(`If 'cairn' isn't found, add ${dirname(link.path)} to your PATH.`)}`);
 
-  // ── Phase 5: warm the model and prove a real create -> recall round-trip ─────────────────────
-  line(c.dim("\n5/6  Warming the embedding model + verifying end-to-end"));
+  // ── Phase 6: warm the model and prove a real create -> recall round-trip ─────────────────────
+  line(c.dim("\n6/7  Warming the embedding model + verifying end-to-end"));
   step(c.dim("(first run downloads a small local model, so we do it now to keep your first search fast)"));
   const v = process.env.CAIRN_SKIP_VERIFY
     ? { ok: true, recalled: true, warmMs: 0, smokeMs: 0 }
@@ -146,9 +176,10 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
     step(`    ${sym.arrow} Check connectivity (the local model downloads once), then run ${c.cyan("cairn verify")}.`);
   }
 
-  // ── Phase 6: what changed + next step ───────────────────────────────────────────────────────
-  line(c.dim("\n6/6  Summary"));
+  // ── Phase 7: what changed + next step ───────────────────────────────────────────────────────
+  line(c.dim("\n7/7  Summary"));
   step(`${sym.dot} settings.json  ${c.dim(settingsPath().replace(/\\/g, "/") + (bak ? "  (.bak written)" : ""))}`);
+  if (copilotTargeted()) step(`${sym.dot} copilot config ${c.dim(copilotMcpPath().replace(/\\/g, "/") + " + hooks/cairn.json")}`);
   step(`${sym.dot} brain          ${c.dim(join(homedir(), ".cairn", "cairn.db").replace(/\\/g, "/"))}`);
   step(`${sym.dot} commands       ${c.dim("cairn doctor · cairn verify · cairn update · cairn uninstall")}`);
   step(`${sym.dot} viewer         ${c.dim("cairn ui  →  http://localhost:3737")}`);
@@ -157,7 +188,8 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   if (dryRun) {
     line(`${sym.ok} ${c.green(c.bold("Dry run complete."))} Nothing was written. Re-run without ${c.cyan("--dry-run")} to apply.`);
   } else {
-    line(`${sym.ok} ${c.green(c.bold("Done."))} ${c.bold("Restart Claude Code")}, then ask it something. It will recall and grow the brain.`);
+    line(`${sym.ok} ${c.green(c.bold("Done."))} ${c.bold("Restart Claude Code")} (or reconnect the cairn MCP server), then ask it something. It will recall and grow the brain.`);
+    if (copilotTargeted()) line(c.dim("   GitHub Copilot CLI picks up the brain on its next session — new `copilot` sessions recall automatically."));
     line(c.dim("   (New terminal? The `cairn` command is ready. Try `cairn doctor`.)"));
   }
 }

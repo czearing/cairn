@@ -13,23 +13,32 @@ import { verify } from "../src/verify";
 
 let settings: string;
 let binDir: string;
+let copilotMcp: string;
+let copilotHook: string;
 
 beforeEach(() => {
   settings = join(tmpdir(), `cairn-settings-${randomUUID()}.json`);
   binDir = mkdtempSync(join(tmpdir(), "cairn-bin-"));
+  copilotMcp = join(tmpdir(), `cairn-copilot-mcp-${randomUUID()}.json`);
+  copilotHook = join(tmpdir(), `cairn-copilot-hook-${randomUUID()}.json`);
   process.env.CAIRN_SETTINGS_PATH = settings;
   process.env.CAIRN_SKIP_MCP = "1";
   process.env.CAIRN_SKIP_VERIFY = "1";
   process.env.CAIRN_BIN_DIR = binDir; // keep the shim out of the real bun bin dir during tests
+  process.env.CAIRN_COPILOT_MCP_PATH = copilotMcp; // keep Copilot writes off the real ~/.copilot
+  process.env.CAIRN_COPILOT_HOOK_PATH = copilotHook;
 });
 
 afterEach(() => {
-  for (const p of [settings, `${settings}.bak`]) if (existsSync(p)) rmSync(p);
+  for (const p of [settings, `${settings}.bak`, copilotMcp, copilotHook]) if (existsSync(p)) rmSync(p);
   rmSync(binDir, { recursive: true, force: true });
   delete process.env.CAIRN_SETTINGS_PATH;
   delete process.env.CAIRN_SKIP_MCP;
   delete process.env.CAIRN_SKIP_VERIFY;
   delete process.env.CAIRN_BIN_DIR;
+  delete process.env.CAIRN_COPILOT_MCP_PATH;
+  delete process.env.CAIRN_COPILOT_HOOK_PATH;
+  delete process.env.CAIRN_SKIP_COPILOT;
 });
 
 const read = () => JSON.parse(readFileSync(settings, "utf8"));
@@ -74,6 +83,49 @@ test("install creates a global cairn shim in CAIRN_BIN_DIR", async () => {
   const shim = join(binDir, isWin ? "cairn.cmd" : "cairn");
   expect(existsSync(shim)).toBe(true);
   expect(readFileSync(shim, "utf8")).toContain("cli.ts"); // shim invokes the CLI entrypoint
+});
+
+test("install registers cairn in the Copilot mcp-config and writes the sessionStart hook", async () => {
+  await install();
+  const mcp = JSON.parse(readFileSync(copilotMcp, "utf8"));
+  expect(mcp.mcpServers.cairn).toBeDefined();
+  expect(mcp.mcpServers.cairn.type).toBe("local"); // Copilot CLI's local-stdio type
+  expect(mcp.mcpServers.cairn.tools).toEqual(["*"]); // required to enable the tools
+  expect(JSON.stringify(mcp.mcpServers.cairn.args)).toContain("server.ts");
+  const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
+  expect(hook.hooks.sessionStart[0].type).toBe("command"); // sessionStart is the channel Copilot injects
+  expect(JSON.stringify(hook)).toContain("hook.ts");
+});
+
+test("install Copilot setup is idempotent and preserves other MCP servers", async () => {
+  writeFileSync(copilotMcp, JSON.stringify({ mcpServers: { other: { type: "local", command: "x" } } }));
+  await install();
+  await install();
+  const mcp = JSON.parse(readFileSync(copilotMcp, "utf8"));
+  expect(mcp.mcpServers.other).toBeDefined(); // user's own server untouched
+  expect(mcp.mcpServers.cairn).toBeDefined();
+  expect(Object.keys(mcp.mcpServers).length).toBe(2); // no duplicate cairn on the second run
+});
+
+test("CAIRN_SKIP_COPILOT skips the Copilot phase entirely", async () => {
+  process.env.CAIRN_SKIP_COPILOT = "1";
+  await install();
+  expect(existsSync(copilotMcp)).toBe(false);
+  expect(existsSync(copilotHook)).toBe(false);
+  delete process.env.CAIRN_SKIP_COPILOT;
+});
+
+test("uninstall removes the Copilot cairn server and hook, keeping other servers", async () => {
+  const { uninstall } = await import("../src/uninstall");
+  writeFileSync(copilotMcp, JSON.stringify({ mcpServers: { other: { command: "x" } } }));
+  await install();
+  expect(JSON.parse(readFileSync(copilotMcp, "utf8")).mcpServers.cairn).toBeDefined();
+  expect(existsSync(copilotHook)).toBe(true);
+  await uninstall();
+  const mcp = JSON.parse(readFileSync(copilotMcp, "utf8"));
+  expect(mcp.mcpServers.cairn).toBeUndefined(); // ours removed
+  expect(mcp.mcpServers.other).toBeDefined(); // theirs preserved
+  expect(existsSync(copilotHook)).toBe(false); // hook file deleted
 });
 
 test("doctor reports bun and a settings-writable check", async () => {

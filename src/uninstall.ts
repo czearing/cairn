@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Settings } from "./install.types";
 import { c, sym, line, step } from "./term";
+import { copilotTargeted, removeCopilot } from "./hosts/copilot-cli/setup";
 
 // Clean reversal of `cairn install`: strip Cairn's hooks from settings.json and remove the MCP
 // registration. clig.dev calls for a prominent, real uninstall path — no hand-editing JSON.
@@ -65,6 +66,12 @@ export async function uninstall(): Promise<void> {
           ? `${sym.dot} Skipped MCP removal (CAIRN_SKIP_MCP set).`
           : `${sym.warn} Claude CLI not found. Remove manually: ${c.cyan(`claude mcp remove ${mcpName()} --scope user`)}`
   );
+
+  if (copilotTargeted()) {
+    const { mcp: cm, hook: ch } = await removeCopilot();
+    const parts = [cm && "mcp-config", ch && "hook"].filter(Boolean).join(" + ");
+    step(parts ? `${sym.ok} Removed Copilot CLI config (${parts}).` : `${sym.dot} No Copilot CLI config present.`);
+  }
 
   line();
   line(`${sym.ok} ${c.green("Cairn removed from Claude Code.")} Your brain at ${c.cyan("~/.cairn/cairn.db")} is untouched.`);

@@ -4,7 +4,10 @@
   "description": "A shared semantic-graph memory that AI agents read, write, and recall from. Markers left for whoever comes next.",
   "type": "module",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/czearing/cairn.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/czearing/cairn.git"
+  },
   "homepage": "https://github.com/czearing/cairn#readme",
   "bugs": "https://github.com/czearing/cairn/issues",
   "bin": {
@@ -28,6 +31,7 @@
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "libsql": "^0.5.29",
     "zod": "^4.4.3"
   },
   "devDependencies": {

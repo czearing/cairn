@@ -7,6 +7,12 @@ const uiPort = Number(process.env.CAIRN_UI_PORT || "3737");
 // All configuration comes from the environment — one place, no config files to hunt for.
 export const config: CairnConfig = {
   dbPath: process.env.CAIRN_DB_PATH || join(homedir(), ".cairn", "cairn.db"),
+  libsql: {
+    url: process.env.CAIRN_LIBSQL_URL || "",
+    token: process.env.CAIRN_LIBSQL_TOKEN || "",
+    localPath: process.env.CAIRN_LIBSQL_LOCAL || join(homedir(), ".cairn", "cairn-replica.db"),
+    syncPeriod: Number(process.env.CAIRN_LIBSQL_SYNC_PERIOD || "60"),
+  },
   embed: {
     provider: (process.env.CAIRN_EMBED_PROVIDER || "local") as EmbedProvider,
     model: process.env.CAIRN_EMBED_MODEL || "",

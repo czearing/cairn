@@ -106,7 +106,11 @@ Everything is set with environment variables. There are no config files to find.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CAIRN_DB_PATH` | `~/.cairn/cairn.db` | Where the brain lives. |
+| `CAIRN_DB_PATH` | `~/.cairn/cairn.db` | Where the local brain lives. |
+| `CAIRN_LIBSQL_URL` | none | Turso primary `libsql://…` URL. Set together with the token to sync the brain across devices (see below). |
+| `CAIRN_LIBSQL_TOKEN` | none | Auth token for the Turso primary. |
+| `CAIRN_LIBSQL_LOCAL` | `~/.cairn/cairn-replica.db` | Local replica file used in sync mode, kept separate from the local-only brain. |
+| `CAIRN_LIBSQL_SYNC_PERIOD` | `60` | Seconds between automatic background pulls from the primary. |
 | `CAIRN_EMBED_PROVIDER` | `local` | `local` runs MiniLM in process; `openai` calls an API. |
 | `CAIRN_EMBED_MODEL` | provider default | For example, `text-embedding-3-small`. |
 | `CAIRN_EMBED_API_KEY` | none | For the `openai` provider. |
@@ -120,6 +124,29 @@ Everything is set with environment variables. There are no config files to find.
 | `CAIRN_PROXY_MEMORIES` | `5` | How many recalled neurons to inject per request. |
 
 Swap the embedding model by changing these. No code change.
+
+## Sync across devices (Turso)
+
+By default the brain is a single local SQLite file. To share one brain across machines, point Cairn at
+a free [Turso](https://turso.tech) database and it runs as a **libSQL embedded replica**: reads stay
+local and fast, writes go straight to the cloud primary, and other devices' changes are pulled in the
+background. No server to run, and it falls back to the local replica when offline.
+
+1. In the [Turso dashboard](https://app.turso.tech), create a database and copy its URL, then create a token.
+2. Set both variables wherever Cairn runs (your MCP host's `env`, or your shell):
+
+   ```bash
+   CAIRN_LIBSQL_URL=libsql://your-db.turso.io
+   CAIRN_LIBSQL_TOKEN=your-token
+   ```
+3. To move an existing local brain into the cloud once, run:
+
+   ```bash
+   CAIRN_LIBSQL_URL=… CAIRN_LIBSQL_TOKEN=… bun scripts/migrate-to-turso.ts
+   ```
+
+With the variables unset, nothing changes — Cairn stays a local-only `bun:sqlite` brain. The local
+file at `CAIRN_DB_PATH` is left untouched as a backup; sync uses a separate replica file.
 
 ## Trying it safely
 

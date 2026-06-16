@@ -112,8 +112,8 @@ Everything is set with environment variables. There are no config files to find.
 | `CAIRN_EMBED_API_KEY` | none | For the `openai` provider. |
 | `CAIRN_EMBED_BASE_URL` | OpenAI | For Azure or other OpenAI-compatible endpoints. |
 | `CAIRN_RELEVANCE_THRESHOLD` | `0.3` | How similar a neuron must be to count as relevant. |
-| `CAIRN_RELATIVE_FLOOR` | `0` (off) | Adaptive trim. When set (e.g. `0.5`), also drops results scoring below `top × this` for the query — tightening a confident query without capping the count. Diffuse queries fall back to the absolute threshold. |
-| `CAIRN_SEARCH_LIMIT` | `8` | Max thoughts the `brain_search` MCP tool returns (top-N by score), so a broad query doesn't flood the agent. `0` returns every match. |
+| `CAIRN_RELATIVE_FLOOR` | `0.7` | Adaptive relevance gate: keep results scoring `>= max(threshold, top × this)` for the query. At `0.7` a dense query is trimmed to its strongest cluster while a narrow query still returns its answer. `0` disables it. |
+| `CAIRN_SEARCH_LIMIT` | `0` (off) | Optional top-N count cap on the `brain_search` MCP tool, as a backstop on top of the relevance floor. `0` lets the floor alone decide. |
 | `CAIRN_PROXY_UPSTREAM` | `ollama` | Which model backend the proxy forwards to (`ollama`, `openai`). |
 | `CAIRN_PROXY_BASE_URL` | preset | Override the upstream URL for any OpenAI-compatible server. |
 | `CAIRN_PROXY_PORT` | `11435` | Port the proxy listens on. |

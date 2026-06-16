@@ -18,11 +18,10 @@ const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }]
 // result keeps its `score` field in the output (and type) alongside the url.
 const withUrl = <T extends Neuron>(n: T) => ({ ...n, url: `${config.uiUrl}/node/${n.id}` });
 
-// Cap the agent-facing result set to the top matches by score, so a broad query on a dense brain
-// doesn't flood the agent with dozens of weakly-related thoughts. Tunable via CAIRN_SEARCH_LIMIT;
-// set it to 0 to return every match. (The proxy gates injected recall separately via
-// CAIRN_PROXY_MEMORIES.) core search() is unchanged — it still returns all matches, ranked.
-const SEARCH_LIMIT = Number(process.env.CAIRN_SEARCH_LIMIT || "8");
+// Optional hard cap on the agent-facing result set, OFF by default (0): the breadth is controlled by
+// the adaptive relevance floor in core search() (CAIRN_RELATIVE_FLOOR), a relevance bar rather than a
+// count cap. Set CAIRN_SEARCH_LIMIT > 0 to also impose a top-N count cap as a backstop.
+const SEARCH_LIMIT = Number(process.env.CAIRN_SEARCH_LIMIT || "0");
 
 server.tool(
   "brain_search",

@@ -18,11 +18,20 @@ const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }]
 // result keeps its `score` field in the output (and type) alongside the url.
 const withUrl = <T extends Neuron>(n: T) => ({ ...n, url: `${config.uiUrl}/node/${n.id}` });
 
+// Cap the agent-facing result set to the top matches by score, so a broad query on a dense brain
+// doesn't flood the agent with dozens of weakly-related thoughts. Tunable via CAIRN_SEARCH_LIMIT;
+// set it to 0 to return every match. (The proxy gates injected recall separately via
+// CAIRN_PROXY_MEMORIES.) core search() is unchanged — it still returns all matches, ranked.
+const SEARCH_LIMIT = Number(process.env.CAIRN_SEARCH_LIMIT || "8");
+
 server.tool(
   "brain_search",
-  "Returns every relevant thought ranked most-relevant-first. Each result has a `score` (0-1 cosine relevance): weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. Use this as much as possible to learn from previous thoughts",
+  "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a `score` (0-1 cosine relevance): weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. Use this as much as possible to learn from previous thoughts",
   { query: z.string().describe("What you are looking for, in natural language.") },
-  async ({ query }) => json((await search(query)).map(withUrl))
+  async ({ query }) => {
+    const hits = await search(query);
+    return json((SEARCH_LIMIT > 0 ? hits.slice(0, SEARCH_LIMIT) : hits).map(withUrl));
+  }
 );
 
 server.tool(

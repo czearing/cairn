@@ -14,7 +14,7 @@ beforeAll(async () => {
   const transport = new StdioClientTransport({
     command: "bun",
     args: ["src/mcp/server.ts"],
-    env: { ...process.env, CAIRN_DB_PATH: TEST_DB },
+    env: { ...process.env, CAIRN_DB_PATH: TEST_DB, CAIRN_SEARCH_LIMIT: "5" },
   });
   client = new Client({ name: "cairn-test", version: "1.0.0" });
   await client.connect(transport);
@@ -56,6 +56,13 @@ test("brain_search finds a neuron by meaning", async () => {
   await call("brain_create", { text: "How do I write a haiku poem?" });
   const results = parse(await call("brain_search", { query: "compose some verse" }));
   expect(results.some((r: { text: string }) => r.text.includes("haiku"))).toBe(true);
+});
+
+test("brain_search caps the result set at CAIRN_SEARCH_LIMIT and stays score-ordered", async () => {
+  for (let i = 0; i < 9; i++) await call("brain_create", { text: `a short poem about season number ${i}` });
+  const results = parse(await call("brain_search", { query: "poetry and verse" })) as { score: number }[];
+  expect(results.length).toBeLessThanOrEqual(5); // capped, even though 9+ neurons match
+  for (let i = 1; i < results.length; i++) expect(results[i - 1]!.score).toBeGreaterThanOrEqual(results[i]!.score);
 });
 
 test("brain_mutate sets an answer + citation and it is findable by it", async () => {

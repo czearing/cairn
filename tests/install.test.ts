@@ -93,8 +93,12 @@ test("install registers cairn in the Copilot mcp-config and writes the sessionSt
   expect(mcp.mcpServers.cairn.tools).toEqual(["*"]); // required to enable the tools
   expect(JSON.stringify(mcp.mcpServers.cairn.args)).toContain("server.ts");
   const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
-  expect(hook.hooks.sessionStart[0].type).toBe("command"); // sessionStart is the channel Copilot injects
-  expect(JSON.stringify(hook)).toContain("hook.ts");
+  expect(hook.hooks.sessionStart[0].type).toBe("command"); // workflow injected once per session
+  expect(hook.hooks.postToolUse[0].type).toBe("command"); // per-tool reminders after brain_* calls
+  const blob = JSON.stringify(hook);
+  expect(blob).toContain("hook.ts");
+  expect(blob).toContain("session-start"); // sessionStart entry carries the session-start mode arg
+  expect(blob).toContain("post-tool"); // postToolUse entry carries the post-tool mode arg
 });
 
 test("install Copilot setup is idempotent and preserves other MCP servers", async () => {

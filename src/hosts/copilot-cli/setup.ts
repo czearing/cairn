@@ -59,28 +59,33 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   return "added";
 }
 
+// Two events — the ones Copilot CLI actually injects: sessionStart (the full brain workflow, once
+// per session) and postToolUse (per-tool reminders after a brain_* call). hook.ts picks the mode
+// from its argv. userPromptSubmitted and a Stop loop are intentionally absent — Copilot ignores the
+// former's output and has no stop event.
 function hookConfig(): object {
   const win = (p: string) => p.replace(/\//g, "\\");
   const nix = (p: string) => p.replace(/\\/g, "/");
   const bun = bunExe();
+  const cmd = (mode: string) => ({
+    type: "command",
+    powershell: `& '${win(bun)}' '${win(HOOK)}' ${mode}`,
+    bash: `'${nix(bun)}' '${nix(HOOK)}' ${mode}`,
+  });
   return {
     version: 1,
     hooks: {
-      sessionStart: [
-        {
-          type: "command",
-          powershell: `& '${win(bun)}' '${win(HOOK)}'`,
-          bash: `'${nix(bun)}' '${nix(HOOK)}'`,
-        },
-      ],
+      sessionStart: [cmd("session-start")],
+      postToolUse: [cmd("post-tool")],
     },
   };
 }
 
-// Write the sessionStart hook file (its own file, so it never collides with the user's other hooks).
+// Write the cairn hook file (its own file, so it never collides with the user's other hooks). The
+// idempotency marker is "post-tool": an older single-event file lacks it and gets upgraded in place.
 export async function installCopilotHook(dryRun: boolean): Promise<Result> {
   const path = copilotHookPath();
-  if (existsSync(path) && (await readFile(path, "utf8")).includes("copilot-cli")) return "already";
+  if (existsSync(path) && (await readFile(path, "utf8")).includes("post-tool")) return "already";
   if (dryRun) return "would-add";
   mkdirSync(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(hookConfig(), null, 2)}\n`, "utf8");

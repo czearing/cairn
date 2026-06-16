@@ -148,9 +148,9 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
     );
     const chook = await installCopilotHook(dryRun);
     step(
-      chook === "added" ? `${sym.ok} Installed the sessionStart recall hook ${c.dim("(forces brain use each session)")}.`
-        : chook === "would-add" ? `${sym.dot} Would install the sessionStart recall hook.`
-          : `${sym.dot} sessionStart hook already installed. No change.`
+      chook === "added" ? `${sym.ok} Installed the sessionStart + postToolUse hooks ${c.dim("(workflow each session, per-tool reminders)")}.`
+        : chook === "would-add" ? `${sym.dot} Would install the sessionStart + postToolUse hooks.`
+          : `${sym.dot} Injection hooks already installed. No change.`
     );
   }
 

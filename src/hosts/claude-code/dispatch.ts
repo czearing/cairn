@@ -4,22 +4,16 @@
 // etc.) hit the no-match branch and exit in ~12ms.
 //
 // A hook must NEVER fail the user's turn. The brain is read from a separate short-lived process
-// while the long-lived MCP server may hold the same SQLite file, so a read can occasionally throw
-// (a transient lock, a cloud-sync hiccup, a malformed transcript). All of that is swallowed here:
-// on any error we emit nothing and exit 0, so Claude Code never shows a "non-blocking status code"
-// error for a harmless, recoverable miss. The explicit final exit(0) also stops a libSQL background
-// sync timer from keeping this process alive (which, in cloud mode, would otherwise hang until the
-// hook times out).
+// while the long-lived MCP server may hold the same SQLite file, so something can throw (a transient
+// lock, a cloud-sync hiccup, a malformed transcript) — even at *import* time (a native module that
+// won't load). Everything below runs inside one try/catch, including the module imports themselves
+// (done dynamically), so on any failure we emit nothing and exit 0. Claude Code therefore never shows
+// a "non-blocking status code" error for a harmless, recoverable miss. The explicit final exit(0)
+// also stops a libSQL background sync timer from keeping this process alive.
 
-import { inject } from "../../inject/inject";
-import { getEventName, normalizeClaudeCode } from "./normalize";
-import { respond, denyPreTool } from "./respond";
-import { rootId, openBranchExists, isClosedQuestion } from "../../core/audit";
-
-// Hooks only READ the brain (audit + injection), so declare read-only before the first db() open.
-// db() then opens the brain with bun:sqlite read-only — never a syncing libSQL connection — so every
-// fire stays a fast, lock-free local read even when the brain is a cloud-synced replica. (db() reads
-// this lazily, so setting it here, before main() calls into the brain, is enough.)
+// Read-only before the first brain open: hooks only READ (audit + injection), so db() opens the brain
+// with bun:sqlite read-only — never a syncing libSQL connection — keeping every fire fast and
+// lock-free even when the brain is a cloud-synced replica.
 process.env.CAIRN_READONLY = "1";
 
 const isBrainCreate = (t: string) => t === "brain_create" || t.endsWith("__brain_create");
@@ -29,6 +23,13 @@ const isBrainCreate = (t: string) => t === "brain_create" || t.endsWith("__brain
 const emit = (obj: object) => Bun.write(Bun.stdout, JSON.stringify(obj));
 
 async function main(): Promise<void> {
+  // Imported here, not at top level, so a module that fails to load is caught by the guard below
+  // rather than crashing the process before it can exit cleanly.
+  const { inject } = await import("../../inject/inject");
+  const { getEventName, normalizeClaudeCode } = await import("./normalize");
+  const { respond, denyPreTool } = await import("./respond");
+  const { rootId, openBranchExists, isClosedQuestion } = await import("../../core/audit");
+
   const raw = await Bun.stdin.text();
 
   let payload: unknown;

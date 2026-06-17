@@ -67,7 +67,7 @@ function ensureSchema(query: (sql: string) => Stmt, exec: (sql: string) => void,
          answer          TEXT NOT NULL DEFAULT '',
          citation        TEXT NOT NULL DEFAULT '',
          edges           TEXT NOT NULL DEFAULT '[]',
-         embedding       TEXT,
+         embedding       BLOB,
          embedding_model TEXT
        )`
     );

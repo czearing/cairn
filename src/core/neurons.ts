@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { db } from "./db";
 import { embed, embedModel } from "./embed";
+import { encodeVector } from "./vector";
 import type { Neuron, Row, NeuronPatch } from "./neurons.types";
 
 export const vecText = (text: string, answer: string) => `${text} ${answer}`.trim();
@@ -61,7 +62,7 @@ export async function create(text: string, edges: string[] = []): Promise<Neuron
   const id = randomUUID();
   const safeText = stripCtrl(text);
   const clean = dedupe(edges, id);
-  const vec = JSON.stringify(await embed(vecText(safeText, "")));
+  const vec = encodeVector(await embed(vecText(safeText, "")));
   db()
     .query("INSERT INTO neurons (id, text, answer, citation, edges, embedding, embedding_model) VALUES (?, ?, '', '', ?, ?, ?)")
     .run(id, safeText, JSON.stringify(clean), vec, embedModel());
@@ -85,7 +86,7 @@ export async function mutate(id: string, patch: NeuronPatch): Promise<Neuron | n
     throw new Error("citation required: set `citation` to a real source link when giving a neuron an answer.");
   }
   if (next.text !== cur.text || next.answer !== cur.answer) {
-    const vec = JSON.stringify(await embed(vecText(next.text, next.answer)));
+    const vec = encodeVector(await embed(vecText(next.text, next.answer)));
     db().query("UPDATE neurons SET text = ?, answer = ?, citation = ?, edges = ?, embedding = ?, embedding_model = ? WHERE id = ?")
       .run(next.text, next.answer, next.citation, JSON.stringify(next.edges), vec, embedModel(), id);
   } else {

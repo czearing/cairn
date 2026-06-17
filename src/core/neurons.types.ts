@@ -20,8 +20,9 @@ export interface Row {
   citation: string;
   /** JSON-encoded `string[]` of edge ids. */
   edges: string;
-  /** JSON-encoded embedding vector, or null until it has been computed. */
-  embedding: string | null;
+  /** The embedding vector: a packed little-endian float32 BLOB (Uint8Array), or the legacy
+   * JSON-encoded string on un-migrated rows, or null until it has been computed. */
+  embedding: string | Uint8Array | null;
   /** Id of the embedding model that produced {@link embedding}; null on legacy rows. A mismatch with
    * the current model means the vector is stale/incomparable and must be re-embedded before use. */
   embedding_model: string | null;

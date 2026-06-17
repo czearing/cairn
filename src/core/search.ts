@@ -2,6 +2,7 @@ import { db } from "./db";
 import { config } from "./config";
 import { embed, embedModel, cosine } from "./embed";
 import { toNeuron, vecText, SELECT } from "./neurons";
+import { encodeVector, decodeVector } from "./vector";
 import type { Neuron, Row } from "./neurons.types";
 import type { NeuronVector, ScoredNeuron, ScoredResult } from "./search.types";
 
@@ -21,21 +22,30 @@ async function vectors(expectDim: number): Promise<NeuronVector[]> {
   const current = embedModel();
   const out: NeuronVector[] = [];
   for (const r of rows) {
-    let vec: number[] | null = null;
-    if (r.embedding) { try { vec = JSON.parse(r.embedding); } catch { vec = null; } }
+    // decodeVector reads both the current BLOB format and the legacy JSON string, so an un-migrated
+    // brain keeps working. `legacy` marks a row still stored as the old JSON string.
+    const legacy = typeof r.embedding === "string";
+    let vec = decodeVector(r.embedding);
     const dimOk = !!vec && vec.length === expectDim;
     if (!dimOk) {
       vec = await embed(vecText(r.text, r.answer));
       db().query("UPDATE neurons SET embedding = ?, embedding_model = ? WHERE id = ?")
-        .run(JSON.stringify(vec), current, r.id);
+        .run(encodeVector(vec), current, r.id);
     } else if (r.embedding_model !== current) {
       if (r.embedding_model == null) {
-        db().query("UPDATE neurons SET embedding_model = ? WHERE id = ?").run(current, r.id);
+        // legacy NULL-labeled row from the previous default: adopt the vector (keep it, stamp the
+        // model) and, if it was the old JSON string, upgrade its storage to a BLOB in the same write.
+        if (legacy) db().query("UPDATE neurons SET embedding = ?, embedding_model = ? WHERE id = ?").run(encodeVector(vec!), current, r.id);
+        else db().query("UPDATE neurons SET embedding_model = ? WHERE id = ?").run(current, r.id);
       } else {
         vec = await embed(vecText(r.text, r.answer));
         db().query("UPDATE neurons SET embedding = ?, embedding_model = ? WHERE id = ?")
-          .run(JSON.stringify(vec), current, r.id);
+          .run(encodeVector(vec), current, r.id);
       }
+    } else if (legacy) {
+      // Steady state but still JSON: rewrite the SAME vector as a BLOB in place (no re-embed), so an
+      // existing brain migrates itself gradually as it is searched.
+      try { db().query("UPDATE neurons SET embedding = ? WHERE id = ?").run(encodeVector(vec!), r.id); } catch { /* read-only context: skip */ }
     }
     out.push({ neuron: toNeuron(r), vec: vec! });
   }

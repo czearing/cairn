@@ -3,6 +3,7 @@
 // blindly, and (2) self-heal it by re-embedding with the current model. Guards the silent-garbage
 // failure that a model/provider change (e.g. 384-dim MiniLM -> 1536-dim OpenAI) would otherwise cause.
 import { test, expect, beforeAll, beforeEach } from "bun:test";
+import { decodeVector } from "../src/core/vector";
 
 let N: typeof import("../src/core/neurons");
 let S: typeof import("../src/core/search");
@@ -44,25 +45,26 @@ test("search self-heals a vector left by a different model", async () => {
   expect(res.map((r) => r.id)).toContain(n.id); // recalled despite the stale vector
 
   const row = DB.db().query("SELECT embedding, embedding_model FROM neurons WHERE id = ?").get(n.id) as
-    { embedding: string; embedding_model: string };
+    { embedding: unknown; embedding_model: string };
   expect(row.embedding_model).toBe(E.embedModel());        // re-stamped to the current model
-  expect((JSON.parse(row.embedding) as number[]).length).toBeGreaterThan(3); // re-embedded to full dim
+  expect(decodeVector(row.embedding)!.length).toBeGreaterThan(3); // re-embedded to full dim
 });
 
 test("search adopts a legacy NULL-labeled vector of the right dimension WITHOUT re-embedding", async () => {
   const n = await N.create("training deep neural networks");
   // A legacy row: vector present and the current dimension, but no model label. Overwrite it with a
   // recognizable sentinel of the SAME length so we can prove the vector was kept, not recomputed.
-  const dim = (JSON.parse((DB.db().query("SELECT embedding FROM neurons WHERE id = ?").get(n.id) as { embedding: string }).embedding) as number[]).length;
+  const dim = decodeVector((DB.db().query("SELECT embedding FROM neurons WHERE id = ?").get(n.id) as { embedding: unknown }).embedding)!.length;
   const sentinel = Array.from({ length: dim }, (_, i) => (i === 0 ? 1 : 0));
+  // Seed it in the LEGACY JSON-string format on purpose — search must still read it and adopt it.
   DB.db().query("UPDATE neurons SET embedding = ?, embedding_model = NULL WHERE id = ?").run(JSON.stringify(sentinel), n.id);
 
   await S.search("machine learning model training");
 
   const row = DB.db().query("SELECT embedding, embedding_model FROM neurons WHERE id = ?").get(n.id) as
-    { embedding: string; embedding_model: string };
+    { embedding: unknown; embedding_model: string };
   expect(row.embedding_model).toBe(E.embedModel());                 // label stamped
-  expect(JSON.parse(row.embedding)).toEqual(sentinel);              // vector untouched (no re-embed)
+  expect(decodeVector(row.embedding)).toEqual(sentinel);            // vector values kept (not re-embedded)
 });
 
 test("search still backfills a missing embedding", async () => {

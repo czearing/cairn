@@ -1,17 +1,33 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import type { CairnConfig, EmbedProvider } from "./config.types";
 
 const uiPort = Number(process.env.CAIRN_UI_PORT || "3737");
 
-// All configuration comes from the environment — one place, no config files to hunt for.
+// Sync settings persist to ~/.cairn/config.json so EVERY Cairn process agrees on whether cloud sync
+// is on and where the replica lives — including the short-lived hook processes, which don't inherit
+// the MCP server's env. Environment variables still win when set (tests, migration/CLI scripts). The
+// file path is overridable (CAIRN_CONFIG_PATH) so tests never read the real file.
+const configFilePath = process.env.CAIRN_CONFIG_PATH || join(homedir(), ".cairn", "config.json");
+function fileLibsql(): { url?: string; token?: string; localPath?: string; syncPeriod?: number } {
+  try {
+    if (!existsSync(configFilePath)) return {};
+    const parsed = JSON.parse(readFileSync(configFilePath, "utf8"));
+    return parsed && typeof parsed === "object" && parsed.libsql ? parsed.libsql : {};
+  } catch {
+    return {}; // a malformed config file must never crash a process — fall back to env / local mode
+  }
+}
+const fileCfg = fileLibsql();
+
 export const config: CairnConfig = {
   dbPath: process.env.CAIRN_DB_PATH || join(homedir(), ".cairn", "cairn.db"),
   libsql: {
-    url: process.env.CAIRN_LIBSQL_URL || "",
-    token: process.env.CAIRN_LIBSQL_TOKEN || "",
-    localPath: process.env.CAIRN_LIBSQL_LOCAL || join(homedir(), ".cairn", "cairn-replica.db"),
-    syncPeriod: Number(process.env.CAIRN_LIBSQL_SYNC_PERIOD || "60"),
+    url: process.env.CAIRN_LIBSQL_URL || fileCfg.url || "",
+    token: process.env.CAIRN_LIBSQL_TOKEN || fileCfg.token || "",
+    localPath: process.env.CAIRN_LIBSQL_LOCAL || fileCfg.localPath || join(homedir(), ".cairn", "cairn-replica.db"),
+    syncPeriod: Number(process.env.CAIRN_LIBSQL_SYNC_PERIOD || fileCfg.syncPeriod || "60"),
   },
   embed: {
     provider: (process.env.CAIRN_EMBED_PROVIDER || "local") as EmbedProvider,

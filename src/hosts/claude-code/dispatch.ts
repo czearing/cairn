@@ -16,6 +16,12 @@ import { getEventName, normalizeClaudeCode } from "./normalize";
 import { respond, denyPreTool } from "./respond";
 import { rootId, openBranchExists, isClosedQuestion } from "../../core/audit";
 
+// Hooks only READ the brain (audit + injection), so declare read-only before the first db() open.
+// db() then opens the brain with bun:sqlite read-only — never a syncing libSQL connection — so every
+// fire stays a fast, lock-free local read even when the brain is a cloud-synced replica. (db() reads
+// this lazily, so setting it here, before main() calls into the brain, is enough.)
+process.env.CAIRN_READONLY = "1";
+
 const isBrainCreate = (t: string) => t === "brain_create" || t.endsWith("__brain_create");
 
 // Awaited write so the buffer is fully flushed before we force-exit (a bare process.exit() right

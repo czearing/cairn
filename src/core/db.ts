@@ -1,17 +1,20 @@
 import { Database as BunDatabase } from "bun:sqlite";
 import { createRequire } from "node:module";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { config } from "./config";
 
-// The brain runs on one of two interchangeable SQLite backends, chosen at open time:
-//   • bun:sqlite (default) — a local file, zero config.
-//   • libSQL embedded replica — a local file that write-throughs to a Turso cloud primary and
-//     pulls remote changes, so the same brain syncs across devices. Active only when
-//     CAIRN_LIBSQL_URL + CAIRN_LIBSQL_TOKEN are set.
-// Both expose the exact same prepared-statement surface (all/get/run), so the rest of core (neurons,
-// search) is backend-agnostic and the test suite — which never sets the libSQL vars — is unchanged.
+// The brain is opened in one of three modes, decided at open time:
+//   • writer, local (default)  — bun:sqlite on a local file. Zero config; what every test uses.
+//   • writer, cloud            — a libSQL embedded replica that write-throughs to a Turso primary and
+//                                pulls remote changes. Active when CAIRN_LIBSQL_URL + TOKEN are set.
+//   • reader (CAIRN_READONLY=1) — a read-only consumer (the Claude Code hooks, read-only CLI). Opens
+//                                the current brain file with bun:sqlite read-only: no sync, no write,
+//                                no cloud connection. Because bun:sqlite can read a libSQL replica
+//                                file, a hook stays a ~10ms local read even while the server syncs.
+// All three expose the same prepared-statement surface (all/get/run), so the rest of core (neurons,
+// search) is mode-agnostic.
 
 /** The slice of a prepared statement the brain actually uses. Satisfied by both bun:sqlite's and
  * libSQL's (better-sqlite3-compatible) Statement. */
@@ -130,11 +133,33 @@ function openLibsql(url: string, token: string): Db {
   };
 }
 
-// One shared connection, opened lazily. Schema is created on first open; the backend is decided by
-// whether the libSQL sync vars are present.
+// Read-only consumer: hooks and read-only CLI set CAIRN_READONLY=1 so they never sync, write, or hold
+// the cloud connection. They open whatever file currently holds the brain — the cloud replica when
+// sync is configured (shared via ~/.cairn/config.json so a hook agrees with the server on the path),
+// else the local db — with bun:sqlite read-only. This keeps a hook fire fast and lock-free, and never
+// stale: it reads the very replica the server maintains.
+function openReader(): Db {
+  const path = config.libsql.url && config.libsql.token ? config.libsql.localPath : config.dbPath;
+  if (!existsSync(path)) {
+    // No brain on disk yet (e.g. the server hasn't bootstrapped the replica). Behave as an empty
+    // brain rather than throwing, so a hook that happens to fire first is a harmless no-op.
+    const empty: Stmt = { all: () => [], get: () => undefined, run: () => ({ changes: 0 }) };
+    return { query: () => empty, run: () => {} };
+  }
+  const d = new BunDatabase(path, { readonly: true });
+  try { d.run("PRAGMA busy_timeout = 2000"); } catch { /* a readonly handle may reject it; a rare miss is tolerated */ }
+  return {
+    query: (sql) => d.query(sql) as unknown as Stmt,
+    run: () => { throw new Error("brain is open read-only (CAIRN_READONLY=1); writes are not allowed here"); },
+  };
+}
+
+// One shared connection, opened lazily. The mode is decided once: read-only consumers first, then the
+// cloud writer when sync is configured, otherwise the local bun:sqlite writer.
 export function db(): Db {
   if (_db) return _db;
-  _db = config.libsql.url && config.libsql.token ? openLibsql(config.libsql.url, config.libsql.token) : openBun();
+  if (process.env.CAIRN_READONLY === "1") _db = openReader();
+  else _db = config.libsql.url && config.libsql.token ? openLibsql(config.libsql.url, config.libsql.token) : openBun();
   return _db;
 }
 

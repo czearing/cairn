@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -108,6 +108,22 @@ function linkCommand(dryRun: boolean): { path: string; created: boolean; onBunPa
   return { path: target, created: true, onBunPath };
 }
 
+// Persist the cloud-sync settings to ~/.cairn/config.json when they are present in the environment.
+// This is the shared source of truth that lets the short-lived hook processes (which don't inherit
+// the MCP server's env) see that sync is on and read the same replica the server maintains. The
+// secret lives only in this local file, never in the repo.
+function writeSyncConfig(dryRun: boolean): "written" | "would-write" | "none" {
+  const env = libsqlEnv();
+  if (!env.CAIRN_LIBSQL_URL || !env.CAIRN_LIBSQL_TOKEN) return "none";
+  if (dryRun) return "would-write";
+  const path = process.env.CAIRN_CONFIG_PATH || join(homedir(), ".cairn", "config.json");
+  const libsql: Record<string, string | number> = { url: env.CAIRN_LIBSQL_URL, token: env.CAIRN_LIBSQL_TOKEN };
+  if (env.CAIRN_LIBSQL_SYNC_PERIOD) libsql.syncPeriod = Number(env.CAIRN_LIBSQL_SYNC_PERIOD);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify({ libsql }, null, 2)}\n`, "utf8");
+  return "written";
+}
+
 export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   const dryRun = opts.dryRun ?? false;
   line(c.bold(`\nInstalling Cairn for Claude Code + GitHub Copilot CLI${dryRun ? c.yellow("  [DRY RUN: nothing is written]") : ""}\n`));
@@ -143,6 +159,9 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
     step(`${sym.warn} Auto-register failed. Run it manually:`);
     step(`    ${c.cyan(manual)}`);
   }
+  const synced = writeSyncConfig(dryRun);
+  if (synced === "written") step(`${sym.ok} Cloud sync enabled — wrote ${c.dim("~/.cairn/config.json")} ${c.dim("(shared by the server + hooks)")}.`);
+  else if (synced === "would-write") step(`${sym.dot} Would write cloud-sync config to ~/.cairn/config.json.`);
 
   // ── Phase 4: GitHub Copilot CLI (MCP tools + sessionStart injection hook) ─────────────────────
   line(c.dim("\n4/7  GitHub Copilot CLI"));

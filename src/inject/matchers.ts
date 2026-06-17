@@ -17,11 +17,14 @@ export function matchEvent(event: NormalizedEvent): Match {
     return null;
   }
 
-  // Before a write (PreToolUse) → remind the agent of the entry format.
+  // PreToolUse → remind before the action runs. A brain write gets the entry-format rules; a Task
+  // spawn (and ONLY a Task spawn — no other tool) gets the orchestration protocol injected the moment
+  // the agent reaches for subagents, so the user never has to remember to ask for disjoint,
+  // brain-coordinated delegation.
   if (event.kind === "tool_pending") {
-    return isTool(event.tool, "brain_create") || isTool(event.tool, "brain_mutate")
-      ? { promptFile: "entry-format.md" }
-      : null;
+    if (isTool(event.tool, "brain_create") || isTool(event.tool, "brain_mutate")) return { promptFile: "entry-format.md" };
+    if (event.tool === "Task") return { promptFile: "orchestrate.md" };
+    return null;
   }
 
   const { tool, input } = event;

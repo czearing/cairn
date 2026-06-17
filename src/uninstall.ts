@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { copyFile, readFile, writeFile } from "node:fs/promises";
+import { copyFile, readFile, writeFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Settings } from "./install.types";
@@ -35,6 +35,15 @@ async function removeHooks(): Promise<string[]> {
 }
 
 const mcpName = () => process.env.CAIRN_MCP_NAME || "cairn";
+const agentPath = () => process.env.CAIRN_AGENT_PATH || join(homedir(), ".claude", "agents", "cairn.md");
+
+// Remove the generated `cairn` subagent definition (only ours — it carries the dispatch command).
+async function removeSubagent(): Promise<boolean> {
+  const path = agentPath();
+  if (!existsSync(path) || !(await readFile(path, "utf8")).includes("dispatch.ts")) return false;
+  await rm(path);
+  return true;
+}
 
 function removeMcp(): "removed" | "absent" | "no-cli" | "skipped" {
   if (process.env.CAIRN_SKIP_MCP) return "skipped";
@@ -65,6 +74,12 @@ export async function uninstall(): Promise<void> {
         : mcp === "skipped"
           ? `${sym.dot} Skipped MCP removal (CAIRN_SKIP_MCP set).`
           : `${sym.warn} Claude CLI not found. Remove manually: ${c.cyan(`claude mcp remove ${mcpName()} --scope user`)}`
+  );
+
+  step(
+    (await removeSubagent())
+      ? `${sym.ok} Removed the ${c.cyan("cairn")} subagent definition.`
+      : `${sym.dot} No cairn subagent definition present.`
   );
 
   if (copilotTargeted()) {

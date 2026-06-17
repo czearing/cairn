@@ -39,6 +39,19 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Subagent lifecycle: a spawned subagent runs this same dispatch via its definition's frontmatter
+  // hooks, so it gets the identical injected prompts. Two events need mapping. SessionStart is the
+  // subagent's first-prompt moment (UserPromptSubmit never fires for a subagent), so inject the same
+  // workflow prompt the main agent gets. A subagent's Stop arrives as SubagentStop — treat it exactly
+  // like Stop so the same record/split-leaves enforcement runs (the response shape is identical).
+  const hookName = (payload as { hook_event_name?: unknown }).hook_event_name;
+  if (hookName === "SessionStart") {
+    const content = await inject({ kind: "user_message", text: "" });
+    if (content) await emit(respond("SessionStart", content));
+    return;
+  }
+  if (hookName === "SubagentStop") (payload as { hook_event_name?: string }).hook_event_name = "Stop";
+
   const event = await normalizeClaudeCode(payload);
   if (!event) return;
 

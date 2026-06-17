@@ -25,9 +25,12 @@ const ROOT = resolve(import.meta.dir, "..");
 const DISPATCH = join(ROOT, "src", "hosts", "claude-code", "dispatch.ts").replace(/\\/g, "/");
 const SERVER = join(ROOT, "src", "mcp", "server.ts").replace(/\\/g, "/");
 const CLI = join(ROOT, "src", "cli.ts").replace(/\\/g, "/");
+const AGENT_BODY = join(ROOT, "prompts", "agent-system.md");
 
 const settingsPath = () =>
   process.env.CAIRN_SETTINGS_PATH || join(homedir(), ".claude", "settings.json");
+// Subagent definition path, overridable so tests/sandbox don't touch the real ~/.claude/agents.
+const agentPath = () => process.env.CAIRN_AGENT_PATH || join(homedir(), ".claude", "agents", "cairn.md");
 const bun = () => (Bun.which("bun") ?? "bun").replace(/\\/g, "/");
 // Server name is overridable so a sandbox can rehearse the real `claude mcp` path under a
 // throwaway name (e.g. CAIRN_MCP_NAME=cairn-sandbox) without touching the live `cairn` registration.
@@ -124,6 +127,38 @@ function writeSyncConfig(dryRun: boolean): "written" | "would-write" | "none" {
   return "written";
 }
 
+// Install a `cairn` subagent definition so spawned subagents AND agent-team teammates run under the
+// SAME injected brain prompts. Its frontmatter hooks run this same dispatch (SessionStart injects the
+// workflow, PreToolUse/PostToolUse the per-tool reminders, Stop→SubagentStop the record/split gate);
+// its body carries the policy for the agent-teams path, where only the body is appended. Idempotent.
+async function installSubagent(dryRun: boolean): Promise<"written" | "would-write" | "already"> {
+  const path = agentPath();
+  const command = `"${bun()}" "${DISPATCH}"`;
+  const group = `    - hooks:\n        - type: command\n          command: '${command}'`;
+  const frontmatter =
+    [
+      "---",
+      "name: cairn",
+      "description: >-",
+      "  A worker wired into the shared Cairn brain: it searches the brain before acting and records",
+      "  atomic, cited findings. Use for any research, build, or debug subtask that should read and",
+      "  grow the team's memory.",
+      "hooks:",
+      `  SessionStart:\n${group}`,
+      `  PreToolUse:\n${group}`,
+      `  PostToolUse:\n${group}`,
+      `  Stop:\n${group}`,
+      "---",
+      "",
+    ].join("\n");
+  const content = frontmatter + (await readFile(AGENT_BODY, "utf8"));
+  if (existsSync(path) && (await readFile(path, "utf8")) === content) return "already";
+  if (dryRun) return "would-write";
+  mkdirSync(dirname(path), { recursive: true });
+  await writeFile(path, content, "utf8");
+  return "written";
+}
+
 export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   const dryRun = opts.dryRun ?? false;
   line(c.bold(`\nInstalling Cairn for Claude Code + GitHub Copilot CLI${dryRun ? c.yellow("  [DRY RUN: nothing is written]") : ""}\n`));
@@ -162,6 +197,11 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   const synced = writeSyncConfig(dryRun);
   if (synced === "written") step(`${sym.ok} Cloud sync enabled — wrote ${c.dim("~/.cairn/config.json")} ${c.dim("(shared by the server + hooks)")}.`);
   else if (synced === "would-write") step(`${sym.dot} Would write cloud-sync config to ~/.cairn/config.json.`);
+
+  const agent = await installSubagent(dryRun);
+  if (agent === "written") step(`${sym.ok} Installed the ${c.cyan("cairn")} subagent ${c.dim("(~/.claude/agents/cairn.md — same brain prompts for spawned agents/teams)")}.`);
+  else if (agent === "would-write") step(`${sym.dot} Would install the cairn subagent at ~/.claude/agents/cairn.md.`);
+  else step(`${sym.dot} cairn subagent already installed. No change.`);
 
   // ── Phase 4: GitHub Copilot CLI (MCP tools + sessionStart injection hook) ─────────────────────
   line(c.dim("\n4/7  GitHub Copilot CLI"));

@@ -145,8 +145,21 @@ background. No server to run, and it falls back to the local replica when offlin
    CAIRN_LIBSQL_URL=… CAIRN_LIBSQL_TOKEN=… bun scripts/migrate-to-turso.ts
    ```
 
+**Adding another device:** export the same two variables and run `cairn install` (or
+`bun run install:claude`). The installer bakes them into the Claude Code and Copilot MCP
+registrations for you — no config files to hand-edit. The new machine pulls the existing brain from
+the cloud on first use; don't re-run the migrate script there.
+
 With the variables unset, nothing changes — Cairn stays a local-only `bun:sqlite` brain. The local
 file at `CAIRN_DB_PATH` is left untouched as a backup; sync uses a separate replica file.
+
+### Cost and the Turso free plan
+
+Reads never touch the network — every search runs against the local replica — so they don't count
+against Turso's quota at all. Only writes (new/edited neurons) and `sync()` pulls do. The free plan's
+500M rows-read / 10M rows-written per month is far more than a personal brain needs. The one knob that
+affects cost is `CAIRN_LIBSQL_SYNC_PERIOD`: every pull costs a little even when nothing changed, so
+the default 60s is the economical choice — lower it only if you need faster cross-device freshness.
 
 ## Trying it safely
 

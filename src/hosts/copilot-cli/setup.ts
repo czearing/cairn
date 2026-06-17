@@ -12,6 +12,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { readFile, writeFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { libsqlEnv } from "../../libsql-env";
 
 const ROOT = resolve(import.meta.dir, "..", "..", ".."); // src/hosts/copilot-cli → repo root
 const SERVER = join(ROOT, "src", "mcp", "server.ts");
@@ -40,18 +41,31 @@ interface McpConfig {
   [k: string]: unknown;
 }
 
-// Merge the cairn server into mcp-config.json, preserving any other servers and unknown keys.
+// Merge the cairn server into mcp-config.json, preserving any other servers and unknown keys. Any
+// CAIRN_LIBSQL_* vars in the environment are written into the server's `env` so cloud sync is set up
+// by `cairn install` alone. If the server already exists but is missing those vars (sync added after
+// the fact), they are folded into its env in place.
 export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   const path = copilotMcpPath();
   const cfg: McpConfig = existsSync(path) ? JSON.parse(await readFile(path, "utf8")) : {};
   const servers = cfg.mcpServers ?? (cfg.mcpServers = {});
-  if (servers[mcpName()]) return "already";
+  const env = libsqlEnv();
+  const existing = servers[mcpName()] as { env?: Record<string, string> } | undefined;
+  if (existing) {
+    const cur = existing.env ?? (existing.env = {});
+    const missing = Object.entries(env).filter(([k, v]) => cur[k] !== v);
+    if (!missing.length) return "already";
+    if (dryRun) return "would-add";
+    for (const [k, v] of missing) cur[k] = v;
+    await writeFile(path, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+    return "added";
+  }
   if (dryRun) return "would-add";
   servers[mcpName()] = {
     type: "local", // Copilot CLI's name for a local stdio server
     command: bunExe(),
     args: [SERVER],
-    env: {}, // inherit CAIRN_DB_PATH (default ~/.cairn/cairn.db) so a custom brain path is respected
+    env, // CAIRN_LIBSQL_* if set (cloud sync), else {} — CAIRN_DB_PATH is still inherited from the env
     tools: ["*"], // required by Copilot CLI to enable the server's tools
   };
   mkdirSync(dirname(path), { recursive: true });

@@ -12,6 +12,7 @@ import {
   installCopilotHook,
   copilotMcpPath,
 } from "./hosts/copilot-cli/setup";
+import { libsqlEnv } from "./libsql-env";
 
 // Registers Cairn with Claude Code AND GitHub Copilot CLI as a measured, verified flow:
 //   1 preflight  2 Claude hooks(+.bak)  3 Claude MCP  4 Copilot CLI  5 cairn cmd  6 warm+verify  7 summary
@@ -60,17 +61,28 @@ async function installHooks(dryRun: boolean): Promise<{ added: string[]; bak: bo
 }
 
 // Phase 3 — register the MCP server at user scope, but probe first so a re-run is a no-op, not an
-// error. In dryRun mode it only probes and reports what WOULD happen. Returns what happened.
-function registerMcp(dryRun: boolean): "registered" | "already" | "failed" | "no-cli" | "would-register" {
+// error. Any CAIRN_LIBSQL_* vars in the environment are baked into the registration as `-e` flags, so
+// `cairn install` is all a new device needs to join cloud sync. If the server is already registered
+// but lacks those creds (e.g. sync was set up after the fact), it is re-registered to add them.
+// In dryRun mode it only probes and reports what WOULD happen. Returns what happened.
+function registerMcp(dryRun: boolean): "registered" | "updated" | "already" | "failed" | "no-cli" | "would-register" {
   const claude = Bun.which("claude");
   if (!claude) return "no-cli";
-  const exists = Bun.spawnSync([claude, "mcp", "get", mcpName()], { stdout: "ignore", stderr: "ignore" });
-  if (exists.exitCode === 0) return "already";
+  const env = libsqlEnv();
+  const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+  const addArgs = [claude, "mcp", "add", mcpName(), "--scope", "user", ...envArgs, "--", bun(), SERVER];
+  const exists = Bun.spawnSync([claude, "mcp", "get", mcpName()], { stdout: "pipe", stderr: "ignore" });
+  if (exists.exitCode === 0) {
+    // Already registered. Re-register only to fold in cloud-sync creds that aren't recorded yet.
+    const hasSync = (exists.stdout?.toString() ?? "").includes("CAIRN_LIBSQL_URL");
+    if (!Object.keys(env).length || hasSync) return "already";
+    if (dryRun) return "would-register";
+    Bun.spawnSync([claude, "mcp", "remove", mcpName(), "--scope", "user"], { stdout: "ignore", stderr: "ignore" });
+    const u = Bun.spawnSync(addArgs, { stdout: "ignore", stderr: "ignore" });
+    return u.exitCode === 0 ? "updated" : "failed";
+  }
   if (dryRun) return "would-register";
-  const r = Bun.spawnSync([claude, "mcp", "add", mcpName(), "--scope", "user", "--", bun(), SERVER], {
-    stdout: "ignore",
-    stderr: "ignore",
-  });
+  const r = Bun.spawnSync(addArgs, { stdout: "ignore", stderr: "ignore" });
   return r.exitCode === 0 ? "registered" : "failed";
 }
 
@@ -120,7 +132,8 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   const mcp = process.env.CAIRN_SKIP_MCP ? "skipped" : registerMcp(dryRun);
   const manual = `claude mcp add ${mcpName()} --scope user -- "${bun()}" "${SERVER}"`;
   if (mcp === "skipped") step(`${sym.dot} Skipped (CAIRN_SKIP_MCP set).`);
-  else if (mcp === "registered") step(`${sym.ok} Registered '${mcpName()}' at user scope.`);
+  else if (mcp === "registered") step(`${sym.ok} Registered '${mcpName()}' at user scope.${Object.keys(libsqlEnv()).length ? c.dim(" (cloud sync wired in)") : ""}`);
+  else if (mcp === "updated") step(`${sym.ok} Updated '${mcpName()}' with cloud-sync credentials.`);
   else if (mcp === "would-register") step(`${sym.dot} Would register '${mcpName()}' at user scope.`);
   else if (mcp === "already") step(`${sym.dot} Already registered. No change.`);
   else if (mcp === "no-cli") {

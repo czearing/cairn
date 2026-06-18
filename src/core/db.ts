@@ -148,6 +148,46 @@ function probeIntegrity(prepare: (sql: string) => Stmt): void {
   if (v !== "ok") throw new Error(`database disk image is malformed (quick_check: ${String(v).slice(0, 80)})`);
 }
 
+const offlineWrite = () => new Error(
+  "Cairn can't reach the cloud sync right now, so it's read-only: recall still works, and new memories " +
+  "will save once you're back online (restart Cairn when reconnected). This is usually a network/VPN/proxy issue."
+);
+
+// A write can fail at delegation time even when the replica opened fine (a flaky network or a proxy
+// mangling the libSQL protocol — e.g. "Invalid header bit", a handshake timeout). Match those so the
+// write surfaces a plain-language message instead of a raw libSQL error.
+const isCloudDown = (err: unknown): boolean => {
+  const m = errMessage(err).toLowerCase();
+  return m.includes("timeout") || m.includes("connect") || m.includes("handshake") || m.includes("delegation") ||
+    m.includes("unreachable") || m.includes("invalid header") || m.includes("stream closed") || m.includes("transport");
+};
+const cloudWriteFailed = () => new Error(
+  "Cairn couldn't reach the cloud to save that — it was NOT saved (usually a network/VPN/proxy issue). " +
+  "Recall still works; try again once you're reconnected."
+);
+
+// Cloud sync is configured but the primary is unreachable (handshake timeout, network/proxy error) or
+// the replica couldn't be rebuilt. Rather than crash every command with a raw libSQL error, degrade to
+// the last-synced local cache: recall keeps working read-only and writes return a plain-language
+// message. Normal cloud mode resumes on the next start once connectivity is back.
+function openOffline(reason: string): Db {
+  console.error(`[cairn] ${reason} — running read-only on the local cache; recall works, writes pause until you reconnect.`);
+  const path = config.libsql.localPath;
+  if (!existsSync(path)) {
+    const empty: Stmt = { all: () => [], get: () => undefined, run: () => ({ changes: 0 }) };
+    return { query: () => empty, run: () => { throw offlineWrite(); } };
+  }
+  const ro = new BunDatabase(path, { readonly: true });
+  try { ro.run("PRAGMA busy_timeout = 2000"); } catch { /* a readonly handle may reject it; tolerated */ }
+  // Reads pass through; any .run() (a write, including via query().run()) raises the friendly message
+  // instead of bun:sqlite's raw "readonly database" error.
+  const offlineStmt = (s: Stmt): Stmt => ({ all: (...p) => s.all(...p), get: (...p) => s.get(...p), run: () => { throw offlineWrite(); } });
+  return {
+    query: (sql) => offlineStmt(ro.query(sql) as unknown as Stmt),
+    run: () => { throw offlineWrite(); },
+  };
+}
+
 // Cloud-synced brain on a libSQL embedded replica. Writes go straight to the Turso primary
 // (read-your-writes keeps this process consistent without a sync), while `syncPeriod` pulls other
 // devices' changes in the background. We also pull once up front so the process starts current.
@@ -171,12 +211,20 @@ function openLibsql(url: string, token: string): Db {
   try {
     d = bootstrap();
   } catch (err) {
-    if (!isReplicaCorruption(err)) throw err;
-    // The replica is only a local cache of the Turso primary, so a corrupt one is safe to discard:
-    // delete it with its companions and re-bootstrap a clean copy from the cloud. No data is lost.
-    console.error("[cairn] local replica unreadable — re-bootstrapping from the cloud:", errMessage(err));
-    for (const s of ["", "-wal", "-shm", "-client_wal_index", "-info"]) { try { rmSync(localPath + s, { force: true }); } catch { /* locked file: best effort */ } }
-    d = bootstrap();
+    if (isReplicaCorruption(err)) {
+      // The replica is only a local cache of the primary, so a corrupt one is safe to discard: delete
+      // it with its companions and re-bootstrap a clean copy from the cloud. No data is lost.
+      console.error("[cairn] local replica unreadable — re-bootstrapping from the cloud:", errMessage(err));
+      for (const s of ["", "-wal", "-shm", "-client_wal_index", "-info"]) { try { rmSync(localPath + s, { force: true }); } catch { /* locked file: best effort */ } }
+      try { d = bootstrap(); } catch (again) { return openOffline(`cloud replica could not be rebuilt (${errMessage(again).slice(0, 70)})`); }
+    } else {
+      // Not corruption — the primary is unreachable (handshake timeout, network/proxy, server error).
+      // Retry a couple of times for a transient blip, then degrade to the local cache rather than crash.
+      let recovered: ReturnType<typeof bootstrap> | null = null;
+      for (let i = 0; i < 2 && !recovered; i++) { try { recovered = bootstrap(); } catch { /* keep trying, then degrade */ } }
+      if (!recovered) return openOffline(`cloud unreachable (${errMessage(err).slice(0, 70)})`);
+      d = recovered;
+    }
   }
 
   _sync = () => {
@@ -190,10 +238,13 @@ function openLibsql(url: string, token: string): Db {
     }
   };
   ensureSchema((sql) => d.prepare(sql), (sql) => { d.exec(sql); }, false);
+  // Translate a cloud-down write error into a plain-language message; reads pass straight through.
+  const translateWrite = <T>(fn: () => T): T => { try { return fn(); } catch (err) { throw isCloudDown(err) ? cloudWriteFailed() : err; } };
+  const cloudStmt = (s: Stmt): Stmt => ({ all: (...p) => s.all(...p), get: (...p) => s.get(...p), run: (...p) => { markWrite(); return translateWrite(() => s.run(...p)); } });
   return {
-    query: (sql) => countingStmt(d.prepare(sql)),
+    query: (sql) => cloudStmt(d.prepare(sql)),
     // libSQL has no parameterless `run`; exec covers DDL/DELETE, prepare+run covers bound params.
-    run: (sql, ...params) => { markWrite(); if (params.length) d.prepare(sql).run(...params); else d.exec(sql); },
+    run: (sql, ...params) => { markWrite(); translateWrite(() => { if (params.length) d.prepare(sql).run(...params); else d.exec(sql); }); },
   };
 }
 

@@ -165,6 +165,12 @@ const cloudWriteFailed = () => new Error(
   "no internet). Recall still works; retry once reconnected."
 );
 
+// libSQL ships as a CommonJS native addon; require it lazily so the native module loads only when
+// cloud sync is actually configured (never in the default local path or in tests).
+function loadLibsql(): new (path: string, opts: Record<string, unknown>) => { prepare(sql: string): Stmt; exec(sql: string): unknown; sync(): unknown } {
+  return createRequire(import.meta.url)("libsql") as new (path: string, opts: Record<string, unknown>) => { prepare(sql: string): Stmt; exec(sql: string): unknown; sync(): unknown };
+}
+
 // Cloud sync is configured but the primary is unreachable (handshake timeout, network/proxy error) or
 // the replica couldn't be rebuilt. Rather than crash every command with a raw libSQL error, degrade to
 // the last-synced local cache: recall keeps working read-only and writes return a plain-language
@@ -201,17 +207,14 @@ function wrapCloud(d: { prepare(sql: string): Stmt; exec(sql: string): unknown }
   };
 }
 
-// Direct remote connection to the primary: no local replica, no replicator/sync stream. Each query is
-// a network round-trip (the in-memory cache absorbs reads after the first). This is the fallback when
-// embedded-replica sync can't work on a machine — a handshake timeout or a proxy mangling the sync
-// stream ("Invalid header bit") — because the remote protocol is different and usually still gets through.
+// The default cloud transport: a direct HTTP connection (stateless POST /v2/pipeline via https://). No
+// local replica, no streaming sync, and crucially no blocking sync() that can hang the process. Each
+// query is a network round-trip; the in-memory cache absorbs reads after the first.
 function openRemote(LibsqlDatabase: new (p: string, o: Record<string, unknown>) => { prepare(sql: string): Stmt; exec(sql: string): unknown }, url: string, token: string): Db {
-  // Force the HTTP transport (stateless POST /v2/pipeline) by using https:// instead of libsql://.
-  // libsql:// can negotiate the Hrana streaming connection that corporate proxies / TLS-inspection
-  // drop mid-response ("connection closed before message completed"); the HTTP pipeline is short
-  // requests that survive those proxies.
+  // https:// (not libsql://) selects the HTTP pipeline and avoids the Hrana streaming path, which on
+  // some clients/versions fails with "connection closed before message completed".
   const httpUrl = url.replace(/^libsql:\/\//i, "https://").replace(/^wss?:\/\//i, "https://");
-  console.error("[cairn] using a direct cloud connection over HTTP (works through proxies that block the sync stream; each query hits the cloud, the in-memory cache absorbs reads).");
+  console.error("[cairn] cloud over HTTP (each query hits the cloud; the in-memory cache absorbs reads).");
   const d = new LibsqlDatabase(httpUrl, { authToken: token });
   ensureSchema((sql) => d.prepare(sql), (sql) => { d.exec(sql); }, false);
   return wrapCloud(d);
@@ -223,18 +226,7 @@ function openRemote(LibsqlDatabase: new (p: string, o: Record<string, unknown>) 
 function openLibsql(url: string, token: string): Db {
   const localPath = config.libsql.localPath;
   mkdirSync(dirname(localPath), { recursive: true });
-  // libSQL ships as a CommonJS native addon; require it lazily so the native module loads only when
-  // sync is actually configured (never in the default local path or in tests).
-  const requireCjs = createRequire(import.meta.url);
-  const LibsqlDatabase = requireCjs("libsql") as new (path: string, opts: Record<string, unknown>) => {
-    prepare(sql: string): Stmt;
-    exec(sql: string): unknown;
-    sync(): unknown;
-  };
-  // Escape hatch for a machine that can't run an embedded replica at all (corporate proxy mangling the
-  // sync stream, etc.): CAIRN_LIBSQL_REMOTE=1 forces the direct remote connection. The automatic
-  // fallback below reaches the same place on a sync failure, so most machines never need this.
-  if (process.env.CAIRN_LIBSQL_REMOTE === "1") return openRemote(LibsqlDatabase, url, token);
+  const LibsqlDatabase = loadLibsql();
   const opts = { syncUrl: url, authToken: token, syncPeriod: config.libsql.syncPeriod, readYourWrites: true };
   // Open the replica and pull once so the process starts on the latest cloud state. Either step can
   // throw if the local replica file is stale or corrupt (a half-finished bootstrap or a torn page).
@@ -251,9 +243,8 @@ function openLibsql(url: string, token: string): Db {
       for (const s of ["", "-wal", "-shm", "-client_wal_index", "-info"]) { try { rmSync(localPath + s, { force: true }); } catch { /* locked file: best effort */ } }
       try { d = bootstrap(); } catch (again) { return openOffline(`cloud replica could not be rebuilt (${errMessage(again).slice(0, 70)})`); }
     } else {
-      // Not corruption — embedded-replica sync failed (handshake timeout, or a proxy dropping the sync
-      // stream). Don't burn minutes retrying it; go straight to a direct HTTP connection, which gets
-      // through those proxies. Offline (local cache) only if that fails too.
+      // Not corruption — embedded-replica sync failed or hung. Fall back to the HTTP connection (the
+      // default transport); offline (local cache) only if that fails too.
       try { return openRemote(LibsqlDatabase, url, token); }
       catch { return openOffline(`cloud unreachable (${errMessage(err).slice(0, 70)})`); }
     }
@@ -294,11 +285,17 @@ function openReader(): Db {
   };
 }
 
-// One shared connection, opened lazily. The mode is decided once: read-only consumers first, then the
-// cloud writer when sync is configured, otherwise the local bun:sqlite writer.
+// One shared connection, opened lazily. Read-only consumers first; then cloud when configured —
+// defaulting to the robust HTTP transport (never hangs), with the embedded replica opt-in via
+// CAIRN_LIBSQL_EMBEDDED=1 for fast local reads where its blocking sync is known to work; else local.
 export function db(): Db {
   if (_db) return _db;
-  if (process.env.CAIRN_READONLY === "1") _db = openReader();
-  else _db = config.libsql.url && config.libsql.token ? openLibsql(config.libsql.url, config.libsql.token) : openBun();
+  if (process.env.CAIRN_READONLY === "1") { _db = openReader(); return _db; }
+  const { url, token } = config.libsql;
+  if (url && token) {
+    _db = process.env.CAIRN_LIBSQL_EMBEDDED === "1" ? openLibsql(url, token) : openRemote(loadLibsql(), url, token);
+  } else {
+    _db = openBun();
+  }
   return _db;
 }

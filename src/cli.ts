@@ -42,7 +42,9 @@ switch (cmd) {
     // Hidden: runs the isolated smoke test in this clean child process and prints a JSON result.
     const v = await (await import("./verify")).smokeMain();
     console.log(JSON.stringify(v));
-    break;
+    // The embedding runtime (ONNX/transformers) leaves handles open, so the process won't exit on its
+    // own — forcing the parent's `await proc.exited` to hang. Exit now that the result is flushed.
+    process.exit(0);
   }
   case "proxy": {
     const { start } = await import("./proxy/server");

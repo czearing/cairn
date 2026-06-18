@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { config } from "./config";
 import type { Embedder } from "./embed.types";
 
@@ -37,9 +39,26 @@ export function cosine(a: number[], b: number[]): number {
   return d;
 }
 
+// Bound a model load/download so a slow or blocked fetch can never hang the process forever.
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() =>
+      reject(new Error(`Cairn timed out ${what} after ${Math.round(ms / 1000)}s — the local model download is slow or blocked. Check your connection; it is cached after the first successful load.`)), ms)),
+  ]);
+}
+
 async function localEmbedder(): Promise<Embedder> {
-  const { pipeline } = await import("@huggingface/transformers");
-  const extract = await pipeline("feature-extraction", embedModel());
+  const tf = await import("@huggingface/transformers");
+  // Cache the model in one fixed place so EVERY Cairn process (MCP server, hooks, verify) shares a
+  // single download. The library's default cache is working-directory-relative, so the server (a
+  // different cwd than `cairn verify`) can re-download — and stall — a model verify already fetched.
+  try { (tf.env as { cacheDir?: string }).cacheDir = join(homedir(), ".cairn", "models"); } catch { /* older builds: ignore */ }
+  const model = embedModel();
+  console.error(`[cairn] loading embedding model ${model} (first run downloads ~25MB, then it is cached)…`);
+  const timeoutMs = Number(process.env.CAIRN_EMBED_TIMEOUT_MS || "120000");
+  const extract = await withTimeout(tf.pipeline("feature-extraction", model), timeoutMs, `loading the embedding model "${model}"`);
+  console.error("[cairn] embedding model ready.");
   return async (text) => {
     const out = await extract(blank(text), { pooling: "mean", normalize: true });
     return Array.from(out.data as Float32Array);
@@ -65,8 +84,11 @@ function apiEmbedder(): Embedder {
 let _embedder: Promise<Embedder> | null = null;
 
 function embedder(): Promise<Embedder> {
-  return (_embedder ??=
-    config.embed.provider === "openai" ? Promise.resolve(apiEmbedder()) : localEmbedder());
+  if (!_embedder) {
+    _embedder = config.embed.provider === "openai" ? Promise.resolve(apiEmbedder()) : localEmbedder();
+    _embedder.catch(() => { _embedder = null; }); // a transient load failure can be retried next call
+  }
+  return _embedder;
 }
 
 export async function embed(text: string): Promise<number[]> {

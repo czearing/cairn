@@ -220,17 +220,19 @@ function openRemote(LibsqlDatabase: new (p: string, o: Record<string, unknown>) 
   return wrapCloud(d);
 }
 
-// Cloud-synced brain on a libSQL embedded replica. Writes go straight to the Turso primary
-// (read-your-writes keeps this process consistent without a sync), while `syncPeriod` pulls other
-// devices' changes in the background. We also pull once up front so the process starts current.
+// Cloud-synced brain on a libSQL embedded replica — local-first. Reads/writes hit the LOCAL replica
+// file (instant, no network on the read path); libSQL pulls other devices' changes in the background
+// on `syncPeriod`. We do NOT call the synchronous sync() up front: it can block/hang the process and
+// it would put the network on the critical path. The local data is served immediately; the background
+// pull catches it up within syncPeriod.
 function openLibsql(url: string, token: string): Db {
   const localPath = config.libsql.localPath;
   mkdirSync(dirname(localPath), { recursive: true });
   const LibsqlDatabase = loadLibsql();
   const opts = { syncUrl: url, authToken: token, syncPeriod: config.libsql.syncPeriod, readYourWrites: true };
-  // Open the replica and pull once so the process starts on the latest cloud state. Either step can
-  // throw if the local replica file is stale or corrupt (a half-finished bootstrap or a torn page).
-  const bootstrap = () => { const h = new LibsqlDatabase(localPath, opts); h.sync(); probeIntegrity((s) => h.prepare(s)); return h; };
+  // Open the local replica with NO blocking sync — instant local reads, background pulls via syncPeriod.
+  // probeIntegrity is a local read that catches (and triggers recovery of) a corrupt replica.
+  const bootstrap = () => { const h = new LibsqlDatabase(localPath, opts); probeIntegrity((s) => h.prepare(s)); return h; };
 
   let d: ReturnType<typeof bootstrap>;
   try {
@@ -292,8 +294,10 @@ export function db(): Db {
   if (_db) return _db;
   if (process.env.CAIRN_READONLY === "1") { _db = openReader(); return _db; }
   const { url, token } = config.libsql;
+  // Cloud = local-first embedded replica (instant local reads, background sync). CAIRN_LIBSQL_REMOTE=1
+  // forces the direct-HTTP path for the rare machine where the local replica can't open at all.
   if (url && token) {
-    _db = process.env.CAIRN_LIBSQL_EMBEDDED === "1" ? openLibsql(url, token) : openRemote(loadLibsql(), url, token);
+    _db = process.env.CAIRN_LIBSQL_REMOTE === "1" ? openRemote(loadLibsql(), url, token) : openLibsql(url, token);
   } else {
     _db = openBun();
   }

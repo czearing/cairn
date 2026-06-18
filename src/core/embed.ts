@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { config } from "./config";
 import type { Embedder } from "./embed.types";
 
@@ -49,16 +47,12 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 }
 
 async function localEmbedder(): Promise<Embedder> {
-  const tf = await import("@huggingface/transformers");
-  // Cache the model in one fixed place so EVERY Cairn process (MCP server, hooks, verify) shares a
-  // single download. The library's default cache is working-directory-relative, so the server (a
-  // different cwd than `cairn verify`) can re-download — and stall — a model verify already fetched.
-  try { (tf.env as { cacheDir?: string }).cacheDir = join(homedir(), ".cairn", "models"); } catch { /* older builds: ignore */ }
+  const { pipeline } = await import("@huggingface/transformers");
   const model = embedModel();
-  console.error(`[cairn] loading embedding model ${model} (first run downloads ~25MB, then it is cached)…`);
+  // Use the library's own model cache (where it was already downloaded). Bound the load so a slow or
+  // blocked first download can never hang the process forever.
   const timeoutMs = Number(process.env.CAIRN_EMBED_TIMEOUT_MS || "120000");
-  const extract = await withTimeout(tf.pipeline("feature-extraction", model), timeoutMs, `loading the embedding model "${model}"`);
-  console.error("[cairn] embedding model ready.");
+  const extract = await withTimeout(pipeline("feature-extraction", model), timeoutMs, `loading the embedding model "${model}"`);
   return async (text) => {
     const out = await extract(blank(text), { pooling: "mean", normalize: true });
     return Array.from(out.data as Float32Array);

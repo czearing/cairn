@@ -206,8 +206,13 @@ function wrapCloud(d: { prepare(sql: string): Stmt; exec(sql: string): unknown }
 // embedded-replica sync can't work on a machine — a handshake timeout or a proxy mangling the sync
 // stream ("Invalid header bit") — because the remote protocol is different and usually still gets through.
 function openRemote(LibsqlDatabase: new (p: string, o: Record<string, unknown>) => { prepare(sql: string): Stmt; exec(sql: string): unknown }, url: string, token: string): Db {
-  console.error("[cairn] embedded replica unavailable on this machine — using a direct cloud connection (each query hits the cloud; slower, but reads and writes fully work).");
-  const d = new LibsqlDatabase(url, { authToken: token });
+  // Force the HTTP transport (stateless POST /v2/pipeline) by using https:// instead of libsql://.
+  // libsql:// can negotiate the Hrana streaming connection that corporate proxies / TLS-inspection
+  // drop mid-response ("connection closed before message completed"); the HTTP pipeline is short
+  // requests that survive those proxies.
+  const httpUrl = url.replace(/^libsql:\/\//i, "https://").replace(/^wss?:\/\//i, "https://");
+  console.error("[cairn] using a direct cloud connection over HTTP (works through proxies that block the sync stream; each query hits the cloud, the in-memory cache absorbs reads).");
+  const d = new LibsqlDatabase(httpUrl, { authToken: token });
   ensureSchema((sql) => d.prepare(sql), (sql) => { d.exec(sql); }, false);
   return wrapCloud(d);
 }
@@ -246,16 +251,11 @@ function openLibsql(url: string, token: string): Db {
       for (const s of ["", "-wal", "-shm", "-client_wal_index", "-info"]) { try { rmSync(localPath + s, { force: true }); } catch { /* locked file: best effort */ } }
       try { d = bootstrap(); } catch (again) { return openOffline(`cloud replica could not be rebuilt (${errMessage(again).slice(0, 70)})`); }
     } else {
-      // Not corruption — embedded-replica sync failed (handshake timeout, replicator-stream error, a
-      // proxy mangling it). Retry a couple times for a transient blip; then try a DIRECT remote
-      // connection (different protocol, usually gets through); only then degrade to the local cache.
-      let recovered: ReturnType<typeof bootstrap> | null = null;
-      for (let i = 0; i < 2 && !recovered; i++) { try { recovered = bootstrap(); } catch { /* retry, then fall back */ } }
-      if (!recovered) {
-        try { return openRemote(LibsqlDatabase, url, token); }
-        catch { return openOffline(`cloud unreachable (${errMessage(err).slice(0, 70)})`); }
-      }
-      d = recovered;
+      // Not corruption — embedded-replica sync failed (handshake timeout, or a proxy dropping the sync
+      // stream). Don't burn minutes retrying it; go straight to a direct HTTP connection, which gets
+      // through those proxies. Offline (local cache) only if that fails too.
+      try { return openRemote(LibsqlDatabase, url, token); }
+      catch { return openOffline(`cloud unreachable (${errMessage(err).slice(0, 70)})`); }
     }
   }
 

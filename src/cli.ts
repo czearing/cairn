@@ -17,9 +17,6 @@ switch (cmd) {
   case "update":
     await (await import("./update")).update();
     break;
-  case "sync":
-    await (await import("./sync")).sync(process.argv.slice(3));
-    break;
   case "uninstall":
     await (await import("./uninstall")).uninstall();
     break;
@@ -76,8 +73,6 @@ Usage:
   cairn doctor      Check your environment and print the fix for anything missing
   cairn verify      Prove the brain works: create & recall a memory in a throwaway DB
   cairn update      Pull the latest version, reinstall deps, re-apply config
-  cairn sync        Connect this device to a shared cloud brain, or show/copy the connection
-  cairn sync <url> <token>   Validate + save cloud creds so every device shares one brain
   cairn uninstall   Remove Cairn's hooks and MCP registration from Claude Code
   cairn --version   Print the installed version
   cairn proxy       Run the OpenAI-compatible memory proxy (recall for Ollama and others)

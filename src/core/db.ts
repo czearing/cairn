@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { config } from "./config";
+import { startBackgroundSync } from "./sync";
 
 // The brain is opened in one of three modes, decided at open time:
 //   • writer, local (default)  — bun:sqlite on a local file. Zero config; what every test uses.
@@ -272,7 +273,7 @@ function openLibsql(url: string, token: string): Db {
 // else the local db — with bun:sqlite read-only. This keeps a hook fire fast and lock-free, and never
 // stale: it reads the very replica the server maintains.
 function openReader(): Db {
-  const path = config.libsql.url && config.libsql.token ? config.libsql.localPath : config.dbPath;
+  const path = config.dbPath; // hooks read the same local bun:sqlite brain the server writes
   if (!existsSync(path)) {
     // No brain on disk yet (e.g. the server hasn't bootstrapped the replica). Behave as an empty
     // brain rather than throwing, so a hook that happens to fire first is a harmless no-op.
@@ -293,13 +294,13 @@ function openReader(): Db {
 export function db(): Db {
   if (_db) return _db;
   if (process.env.CAIRN_READONLY === "1") { _db = openReader(); return _db; }
+  // The brain is ALWAYS a local bun:sqlite file: instant reads/writes, and safe under concurrent hook
+  // readers via standard SQLite WAL. When cloud sync is configured it runs in the BACKGROUND over HTTP
+  // (sync.ts), never on this path — so a slow/broken/unreachable cloud can't hang or corrupt the brain.
+  // (The libSQL embedded replica, which wedged its WAL under concurrent access and blocked on sync, is
+  // no longer on the critical path.)
+  _db = openBun();
   const { url, token } = config.libsql;
-  // Cloud = local-first embedded replica (instant local reads, background sync). CAIRN_LIBSQL_REMOTE=1
-  // forces the direct-HTTP path for the rare machine where the local replica can't open at all.
-  if (url && token) {
-    _db = process.env.CAIRN_LIBSQL_REMOTE === "1" ? openRemote(loadLibsql(), url, token) : openLibsql(url, token);
-  } else {
-    _db = openBun();
-  }
+  if (url && token) { try { startBackgroundSync(_db, url, token); } catch { /* sync is best-effort, never fatal */ } }
   return _db;
 }

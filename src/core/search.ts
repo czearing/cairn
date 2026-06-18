@@ -1,4 +1,4 @@
-import { db } from "./db";
+import { db, changeToken } from "./db";
 import { config } from "./config";
 import { embed, embedModel, cosine } from "./embed";
 import { toNeuron, vecText, SELECT } from "./neurons";
@@ -17,9 +17,18 @@ import type { NeuronVector, ScoredNeuron, ScoredResult } from "./search.types";
 //   • dimension matches, label is a DIFFERENT model → a deliberate same-dim model switch into another
 //     space → re-embed to make it comparable.
 // This self-heals after a CAIRN_EMBED_MODEL/PROVIDER change and backfills seed/legacy rows.
+// In-memory vector cache: the long-lived server holds the decoded vectors and rebuilds only when
+// db().changeToken() moves, so repeated searches skip the re-read+decode that dominates query cost
+// (measured ~25x). A one-shot hook process just pays the same single load as before.
+let _cache: { token: string; model: string; dim: number; vecs: NeuronVector[] } | null = null;
+
 async function vectors(expectDim: number): Promise<NeuronVector[]> {
-  const rows = db().query(SELECT).all() as Row[];
   const current = embedModel();
+  const token = changeToken();
+  if (_cache && _cache.token === token && _cache.model === current && _cache.dim === expectDim) {
+    return _cache.vecs;
+  }
+  const rows = db().query(SELECT).all() as Row[];
   const out: NeuronVector[] = [];
   for (const r of rows) {
     // decodeVector reads both the current BLOB format and the legacy JSON string, so an un-migrated
@@ -49,6 +58,9 @@ async function vectors(expectDim: number): Promise<NeuronVector[]> {
     }
     out.push({ neuron: toNeuron(r), vec: vec! });
   }
+  // Read the token AFTER building: the self-heal UPDATEs above may have bumped it, and we want the
+  // cache to reflect the post-rebuild state so the very next query is a hit rather than a rebuild.
+  _cache = { token: changeToken(), model: current, dim: expectDim, vecs: out };
   return out;
 }
 
@@ -75,34 +87,35 @@ export async function search(query: string): Promise<ScoredResult[]> {
       ? Math.max(config.relevanceThreshold, topSim * config.relativeFloor)
       : config.relevanceThreshold;
 
-  const order = new Map<string, number>();
-  (db().query("SELECT id FROM neurons ORDER BY rowid").all() as { id: string }[])
-    .forEach((r, i) => order.set(r.id, i));
-
-  const adj = new Map<string, Set<string>>();
-  for (const s of scored) adj.set(s.neuron.id, new Set());
-  for (const s of scored) {
-    for (const e of s.neuron.edges) {
-      if (!adj.has(e)) continue;
-      adj.get(s.neuron.id)!.add(e);
-      adj.get(e)!.add(s.neuron.id);
-    }
-  }
-
   const included = new Set<string>();
-  const stack: string[] = [];
-  for (const s of scored) {
-    if (s.sim >= floor) { included.add(s.neuron.id); stack.push(s.neuron.id); }
-  }
+  for (const s of scored) if (s.sim >= floor) included.add(s.neuron.id);
   if (included.size === 0) return [];
-  // Subtree expansion is toggleable (CAIRN_SEARCH_EXPAND=1). Off by default so search returns only
-  // the direct matches, not their descendants, to keep results tight.
-  while (config.expandSubtree && stack.length) {
-    const id = stack.pop()!;
-    const rank = order.get(id) ?? -1;
-    for (const nb of adj.get(id) ?? []) {
-      if (included.has(nb)) continue;
-      if ((order.get(nb) ?? -1) > rank) { included.add(nb); stack.push(nb); } // descend only
+
+  // Subtree expansion is opt-in (CAIRN_SEARCH_EXPAND=1, off by default). Only when on do we pay for
+  // the rowid ordering and adjacency map; the default path skips that scan entirely.
+  if (config.expandSubtree) {
+    const order = new Map<string, number>();
+    (db().query("SELECT id FROM neurons ORDER BY rowid").all() as { id: string }[])
+      .forEach((r, i) => order.set(r.id, i));
+
+    const adj = new Map<string, Set<string>>();
+    for (const s of scored) adj.set(s.neuron.id, new Set());
+    for (const s of scored) {
+      for (const e of s.neuron.edges) {
+        if (!adj.has(e)) continue;
+        adj.get(s.neuron.id)!.add(e);
+        adj.get(e)!.add(s.neuron.id);
+      }
+    }
+
+    const stack = [...included];
+    while (stack.length) {
+      const id = stack.pop()!;
+      const rank = order.get(id) ?? -1;
+      for (const nb of adj.get(id) ?? []) {
+        if (included.has(nb)) continue;
+        if ((order.get(nb) ?? -1) > rank) { included.add(nb); stack.push(nb); } // descend only
+      }
     }
   }
 

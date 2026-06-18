@@ -1,6 +1,6 @@
 import { Database as BunDatabase } from "bun:sqlite";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { config } from "./config";
@@ -33,6 +33,34 @@ export interface Db {
 
 let _db: Db | null = null;
 let _sync: (() => void) | null = null;
+
+// Monotonic write epoch, bumped on every write through this connection and every sync pull that
+// applied frames. With PRAGMA data_version (which moves when another connection writes) it gives
+// search.ts a cheap change-token for its in-memory vector cache.
+let _writeEpoch = 0;
+function markWrite(): void { _writeEpoch++; }
+
+// Wrap a prepared statement so any .run() (a write) bumps the epoch; reads pass straight through. A
+// fresh wrapper per query() call avoids double-counting bun's internally-cached statement objects.
+function countingStmt(s: Stmt): Stmt {
+  return {
+    all: (...p) => s.all(...p),
+    get: (...p) => s.get(...p),
+    run: (...p) => { markWrite(); return s.run(...p); },
+  };
+}
+
+/** A cheap token that changes whenever the brain may have changed — local writes and sync pulls
+ * (_writeEpoch), or another connection/process writing the file (PRAGMA data_version). search.ts
+ * rebuilds its vector cache only when this token moves. */
+export function changeToken(): string {
+  let dv = 0;
+  try {
+    const row = _db?.query("PRAGMA data_version").get() as { data_version?: number } | undefined;
+    dv = row?.data_version ?? 0;
+  } catch { /* pragma unsupported on this backend → rely on the write epoch alone */ }
+  return `${_writeEpoch}:${dv}`;
+}
 
 // Safety net (learned the hard way): tests wipe the table in beforeEach. They are isolated onto a
 // temp DB by tests/setup.ts — but ONLY if bunfig.toml's preload loads, which requires `bun test`
@@ -94,9 +122,30 @@ function openBun(): Db {
     true
   );
   return {
-    query: (sql) => d.query(sql) as unknown as Stmt,
-    run: (sql, ...params) => { d.run(sql, ...(params as never[])); },
+    query: (sql) => countingStmt(d.query(sql) as unknown as Stmt),
+    run: (sql, ...params) => { markWrite(); d.run(sql, ...(params as never[])); },
   };
+}
+
+const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+// A corrupt/stale local replica surfaces as one of a few libSQL errors (missing wal_index, missing
+// metadata, a malformed page). All are recoverable by discarding the local cache and re-syncing the
+// primary, so we match them to trigger that recovery rather than dead-ending the user.
+function isReplicaCorruption(err: unknown): boolean {
+  const m = errMessage(err).toLowerCase();
+  return m.includes("wal_index") || m.includes("metadata file") || m.includes("malformed") ||
+    m.includes("invalidlocalstate") || m.includes("disk image");
+}
+
+// A corrupt data page can open cleanly and only throw on the first read, so an open-time catch isn't
+// enough. quick_check forces that read up front; a non-"ok" result is reported as malformed so the
+// same recovery fires. If the pragma is unavailable we skip rather than risk a false re-bootstrap.
+function probeIntegrity(prepare: (sql: string) => Stmt): void {
+  let v: unknown;
+  try { const r = prepare("PRAGMA quick_check(1)").get() as Record<string, unknown> | undefined; v = r ? Object.values(r)[0] : "ok"; }
+  catch { return; }
+  if (v !== "ok") throw new Error(`database disk image is malformed (quick_check: ${String(v).slice(0, 80)})`);
 }
 
 // Cloud-synced brain on a libSQL embedded replica. Writes go straight to the Turso primary
@@ -113,23 +162,38 @@ function openLibsql(url: string, token: string): Db {
     exec(sql: string): unknown;
     sync(): unknown;
   };
-  const d = new LibsqlDatabase(localPath, {
-    syncUrl: url,
-    authToken: token,
-    syncPeriod: config.libsql.syncPeriod, // background pull cadence, in seconds (0 = manual only)
-    readYourWrites: true,
-  });
+  const opts = { syncUrl: url, authToken: token, syncPeriod: config.libsql.syncPeriod, readYourWrites: true };
+  // Open the replica and pull once so the process starts on the latest cloud state. Either step can
+  // throw if the local replica file is stale or corrupt (a half-finished bootstrap or a torn page).
+  const bootstrap = () => { const h = new LibsqlDatabase(localPath, opts); h.sync(); probeIntegrity((s) => h.prepare(s)); return h; };
+
+  let d: ReturnType<typeof bootstrap>;
+  try {
+    d = bootstrap();
+  } catch (err) {
+    if (!isReplicaCorruption(err)) throw err;
+    // The replica is only a local cache of the Turso primary, so a corrupt one is safe to discard:
+    // delete it with its companions and re-bootstrap a clean copy from the cloud. No data is lost.
+    console.error("[cairn] local replica unreadable — re-bootstrapping from the cloud:", errMessage(err));
+    for (const s of ["", "-wal", "-shm", "-client_wal_index", "-info"]) { try { rmSync(localPath + s, { force: true }); } catch { /* locked file: best effort */ } }
+    d = bootstrap();
+  }
+
   _sync = () => {
-    try { d.sync(); } catch (err) {
-      console.error("[cairn] Turso sync failed:", err instanceof Error ? err.message : err);
+    try {
+      const res = d.sync() as { frames_synced?: number } | null | undefined;
+      // A pull that applied frames means another device's changes landed → invalidate the cache. If
+      // the binding doesn't report a count, bump anyway (a needless rebuild is cheap; a miss is not).
+      if (!res || typeof res.frames_synced !== "number" || res.frames_synced > 0) markWrite();
+    } catch (err) {
+      console.error("[cairn] Turso sync failed:", errMessage(err));
     }
   };
-  _sync(); // initial pull: start from the latest cloud state (degrades to the local replica if offline)
   ensureSchema((sql) => d.prepare(sql), (sql) => { d.exec(sql); }, false);
   return {
-    query: (sql) => d.prepare(sql),
+    query: (sql) => countingStmt(d.prepare(sql)),
     // libSQL has no parameterless `run`; exec covers DDL/DELETE, prepare+run covers bound params.
-    run: (sql, ...params) => { if (params.length) d.prepare(sql).run(...params); else d.exec(sql); },
+    run: (sql, ...params) => { markWrite(); if (params.length) d.prepare(sql).run(...params); else d.exec(sql); },
   };
 }
 
@@ -161,10 +225,4 @@ export function db(): Db {
   if (process.env.CAIRN_READONLY === "1") _db = openReader();
   else _db = config.libsql.url && config.libsql.token ? openLibsql(config.libsql.url, config.libsql.token) : openBun();
   return _db;
-}
-
-/** Pull the latest from the Turso primary now. No-op unless cloud sync is active. `sync()` is
- * synchronous in the libSQL binding, so this blocks briefly until the pull completes. */
-export function syncNow(): void {
-  _sync?.();
 }

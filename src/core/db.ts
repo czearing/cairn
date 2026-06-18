@@ -190,6 +190,28 @@ function openOffline(reason: string): Db {
   return { query: (sql) => offlineStmt(ro.query(sql) as unknown as Stmt), run: () => { throw offlineWrite(); } };
 }
 
+// Wrap a libSQL connection (embedded replica OR direct remote) as a Db: writes bump the epoch and
+// translate a cloud-down failure into a plain-language message; reads pass straight through.
+function wrapCloud(d: { prepare(sql: string): Stmt; exec(sql: string): unknown }): Db {
+  const translateWrite = <T>(fn: () => T): T => { try { return fn(); } catch (err) { throw isCloudDown(err) ? cloudWriteFailed() : err; } };
+  const cloudStmt = (s: Stmt): Stmt => ({ all: (...p) => s.all(...p), get: (...p) => s.get(...p), run: (...p) => { markWrite(); return translateWrite(() => s.run(...p)); } });
+  return {
+    query: (sql) => cloudStmt(d.prepare(sql)),
+    run: (sql, ...params) => { markWrite(); translateWrite(() => { if (params.length) d.prepare(sql).run(...params); else d.exec(sql); }); },
+  };
+}
+
+// Direct remote connection to the primary: no local replica, no replicator/sync stream. Each query is
+// a network round-trip (the in-memory cache absorbs reads after the first). This is the fallback when
+// embedded-replica sync can't work on a machine — a handshake timeout or a proxy mangling the sync
+// stream ("Invalid header bit") — because the remote protocol is different and usually still gets through.
+function openRemote(LibsqlDatabase: new (p: string, o: Record<string, unknown>) => { prepare(sql: string): Stmt; exec(sql: string): unknown }, url: string, token: string): Db {
+  console.error("[cairn] embedded replica unavailable on this machine — using a direct cloud connection (each query hits the cloud; slower, but reads and writes fully work).");
+  const d = new LibsqlDatabase(url, { authToken: token });
+  ensureSchema((sql) => d.prepare(sql), (sql) => { d.exec(sql); }, false);
+  return wrapCloud(d);
+}
+
 // Cloud-synced brain on a libSQL embedded replica. Writes go straight to the Turso primary
 // (read-your-writes keeps this process consistent without a sync), while `syncPeriod` pulls other
 // devices' changes in the background. We also pull once up front so the process starts current.
@@ -204,6 +226,10 @@ function openLibsql(url: string, token: string): Db {
     exec(sql: string): unknown;
     sync(): unknown;
   };
+  // Escape hatch for a machine that can't run an embedded replica at all (corporate proxy mangling the
+  // sync stream, etc.): CAIRN_LIBSQL_REMOTE=1 forces the direct remote connection. The automatic
+  // fallback below reaches the same place on a sync failure, so most machines never need this.
+  if (process.env.CAIRN_LIBSQL_REMOTE === "1") return openRemote(LibsqlDatabase, url, token);
   const opts = { syncUrl: url, authToken: token, syncPeriod: config.libsql.syncPeriod, readYourWrites: true };
   // Open the replica and pull once so the process starts on the latest cloud state. Either step can
   // throw if the local replica file is stale or corrupt (a half-finished bootstrap or a torn page).
@@ -220,11 +246,15 @@ function openLibsql(url: string, token: string): Db {
       for (const s of ["", "-wal", "-shm", "-client_wal_index", "-info"]) { try { rmSync(localPath + s, { force: true }); } catch { /* locked file: best effort */ } }
       try { d = bootstrap(); } catch (again) { return openOffline(`cloud replica could not be rebuilt (${errMessage(again).slice(0, 70)})`); }
     } else {
-      // Not corruption — the primary is unreachable (handshake timeout, network/proxy, server error).
-      // Retry a couple of times for a transient blip, then degrade to the local cache rather than crash.
+      // Not corruption — embedded-replica sync failed (handshake timeout, replicator-stream error, a
+      // proxy mangling it). Retry a couple times for a transient blip; then try a DIRECT remote
+      // connection (different protocol, usually gets through); only then degrade to the local cache.
       let recovered: ReturnType<typeof bootstrap> | null = null;
-      for (let i = 0; i < 2 && !recovered; i++) { try { recovered = bootstrap(); } catch { /* keep trying, then degrade */ } }
-      if (!recovered) return openOffline(`cloud unreachable (${errMessage(err).slice(0, 70)})`);
+      for (let i = 0; i < 2 && !recovered; i++) { try { recovered = bootstrap(); } catch { /* retry, then fall back */ } }
+      if (!recovered) {
+        try { return openRemote(LibsqlDatabase, url, token); }
+        catch { return openOffline(`cloud unreachable (${errMessage(err).slice(0, 70)})`); }
+      }
       d = recovered;
     }
   }
@@ -240,14 +270,7 @@ function openLibsql(url: string, token: string): Db {
     }
   };
   ensureSchema((sql) => d.prepare(sql), (sql) => { d.exec(sql); }, false);
-  // Translate a cloud-down write error into a plain-language message; reads pass straight through.
-  const translateWrite = <T>(fn: () => T): T => { try { return fn(); } catch (err) { throw isCloudDown(err) ? cloudWriteFailed() : err; } };
-  const cloudStmt = (s: Stmt): Stmt => ({ all: (...p) => s.all(...p), get: (...p) => s.get(...p), run: (...p) => { markWrite(); return translateWrite(() => s.run(...p)); } });
-  return {
-    query: (sql) => cloudStmt(d.prepare(sql)),
-    // libSQL has no parameterless `run`; exec covers DDL/DELETE, prepare+run covers bound params.
-    run: (sql, ...params) => { markWrite(); translateWrite(() => { if (params.length) d.prepare(sql).run(...params); else d.exec(sql); }); },
-  };
+  return wrapCloud(d);
 }
 
 // Read-only consumer: hooks and read-only CLI set CAIRN_READONLY=1 so they never sync, write, or hold

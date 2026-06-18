@@ -139,13 +139,12 @@ function isReplicaCorruption(err: unknown): boolean {
 }
 
 // A corrupt data page can open cleanly and only throw on the first read, so an open-time catch isn't
-// enough. quick_check forces that read up front; a non-"ok" result is reported as malformed so the
-// same recovery fires. If the pragma is unavailable we skip rather than risk a false re-bootstrap.
+// enough — do a real read up front. A genuinely corrupt page throws "malformed" here (triggering
+// recovery), while benign integrity noise (e.g. a freelist-size mismatch) doesn't throw on read and a
+// fresh brain with no table yet throws "no such table"; neither is corruption, so both are ignored.
 function probeIntegrity(prepare: (sql: string) => Stmt): void {
-  let v: unknown;
-  try { const r = prepare("PRAGMA quick_check(1)").get() as Record<string, unknown> | undefined; v = r ? Object.values(r)[0] : "ok"; }
-  catch { return; }
-  if (v !== "ok") throw new Error(`database disk image is malformed (quick_check: ${String(v).slice(0, 80)})`);
+  try { prepare("SELECT id FROM neurons LIMIT 1").get(); }
+  catch (err) { if (isReplicaCorruption(err)) throw err; }
 }
 
 const offlineWrite = () => new Error(
@@ -172,20 +171,23 @@ const cloudWriteFailed = () => new Error(
 // message. Normal cloud mode resumes on the next start once connectivity is back.
 function openOffline(reason: string): Db {
   console.error(`[cairn] ${reason} — running read-only on the local cache; recall works, writes pause until you reconnect.`);
+  // An empty brain: reads return nothing, any write raises the friendly offline message. Used when
+  // there is no usable local cache, so the tool degrades cleanly instead of throwing.
+  const emptyStmt: Stmt = { all: () => [], get: () => undefined, run: () => { throw offlineWrite(); } };
+  const emptyDb: Db = { query: () => emptyStmt, run: () => { throw offlineWrite(); } };
   const path = config.libsql.localPath;
-  if (!existsSync(path)) {
-    const empty: Stmt = { all: () => [], get: () => undefined, run: () => ({ changes: 0 }) };
-    return { query: () => empty, run: () => { throw offlineWrite(); } };
-  }
-  const ro = new BunDatabase(path, { readonly: true });
+  if (!existsSync(path)) return emptyDb;
+  let ro: BunDatabase;
+  try { ro = new BunDatabase(path, { readonly: true }); } catch { return emptyDb; }
   try { ro.run("PRAGMA busy_timeout = 2000"); } catch { /* a readonly handle may reject it; tolerated */ }
-  // Reads pass through; any .run() (a write, including via query().run()) raises the friendly message
-  // instead of bun:sqlite's raw "readonly database" error.
+  // A never-synced replica has no neurons table; serve the empty brain rather than throwing
+  // "no such table" on the first read or write.
+  let hasSchema = false;
+  try { hasSchema = !!ro.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='neurons'").get(); } catch { hasSchema = false; }
+  if (!hasSchema) return emptyDb;
+  // Reads pass through; any .run() (a write, including via query().run()) raises the friendly message.
   const offlineStmt = (s: Stmt): Stmt => ({ all: (...p) => s.all(...p), get: (...p) => s.get(...p), run: () => { throw offlineWrite(); } });
-  return {
-    query: (sql) => offlineStmt(ro.query(sql) as unknown as Stmt),
-    run: () => { throw offlineWrite(); },
-  };
+  return { query: (sql) => offlineStmt(ro.query(sql) as unknown as Stmt), run: () => { throw offlineWrite(); } };
 }
 
 // Cloud-synced brain on a libSQL embedded replica. Writes go straight to the Turso primary

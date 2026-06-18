@@ -197,6 +197,7 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   const synced = writeSyncConfig(dryRun);
   if (synced === "written") step(`${sym.ok} Cloud sync enabled — wrote ${c.dim("~/.cairn/config.json")} ${c.dim("(shared by the server + hooks)")}.`);
   else if (synced === "would-write") step(`${sym.dot} Would write cloud-sync config to ~/.cairn/config.json.`);
+  else step(`${sym.dot} Cloud sync ${c.bold("off")} ${c.dim("(local brain)")}. Share one brain across devices: ${c.cyan("cairn sync <url> <token>")}.`);
 
   const agent = await installSubagent(dryRun);
   if (agent === "written") step(`${sym.ok} Installed the ${c.cyan("cairn")} subagent ${c.dim("(~/.claude/agents/cairn.md — same brain prompts for spawned agents/teams)")}.`);
@@ -253,7 +254,7 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   step(`${sym.dot} settings.json  ${c.dim(settingsPath().replace(/\\/g, "/") + (bak ? "  (.bak written)" : ""))}`);
   if (copilotTargeted()) step(`${sym.dot} copilot config ${c.dim(copilotMcpPath().replace(/\\/g, "/") + " + hooks/cairn.json")}`);
   step(`${sym.dot} brain          ${c.dim(join(homedir(), ".cairn", "cairn.db").replace(/\\/g, "/"))}`);
-  step(`${sym.dot} commands       ${c.dim("cairn doctor · cairn verify · cairn update · cairn uninstall")}`);
+  step(`${sym.dot} commands       ${c.dim("cairn doctor · cairn verify · cairn sync · cairn update · cairn uninstall")}`);
   step(`${sym.dot} viewer         ${c.dim("cairn ui  →  http://localhost:3737")}`);
 
   line();

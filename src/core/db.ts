@@ -148,8 +148,8 @@ function probeIntegrity(prepare: (sql: string) => Stmt): void {
 }
 
 const offlineWrite = () => new Error(
-  "Cairn can't reach the cloud sync right now, so it's read-only: recall still works, and new memories " +
-  "will save once you're back online (restart Cairn when reconnected). This is usually a network/VPN/proxy issue."
+  "Cairn can't reach the cloud sync right now, so it's read-only: recall still works, and new memories will " +
+  "save once you're reconnected (restart Cairn). Run `cairn sync` to check the connection (it says exactly what's wrong)."
 );
 
 // A write can fail at delegation time even when the replica opened fine (a flaky network or a proxy
@@ -161,8 +161,8 @@ const isCloudDown = (err: unknown): boolean => {
     m.includes("unreachable") || m.includes("invalid header") || m.includes("stream closed") || m.includes("transport");
 };
 const cloudWriteFailed = () => new Error(
-  "Cairn couldn't reach the cloud to save that — it was NOT saved (usually a network/VPN/proxy issue). " +
-  "Recall still works; try again once you're reconnected."
+  "Cairn couldn't reach the cloud to save that — it was NOT saved. Run `cairn sync` to check the connection " +
+  "(it names the exact cause); recall still works, and you can retry once reconnected."
 );
 
 // Cloud sync is configured but the primary is unreachable (handshake timeout, network/proxy error) or

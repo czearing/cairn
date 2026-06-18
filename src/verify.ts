@@ -65,7 +65,7 @@ export async function verify(): Promise<VerifyResult> {
   const proc = Bun.spawn([bun, cli, "__smoke"], { stdout: "pipe", stderr: "pipe" });
   // A public installer must NEVER hang. If the smoke child stalls (a slow/blocked model download, a
   // wedged dependency), kill it after a bounded wait and report cleanly so install always finishes.
-  const timeoutMs = Number(process.env.CAIRN_VERIFY_TIMEOUT_MS || "60000");
+  const timeoutMs = Number(process.env.CAIRN_VERIFY_TIMEOUT_MS || "150000"); // room for the one-time ~25MB model download
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; try { proc.kill(); } catch { /* already gone */ } }, timeoutMs);
   let out = "";

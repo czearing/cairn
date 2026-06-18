@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { config } from "./config";
 import type { Embedder } from "./embed.types";
 
@@ -47,12 +49,16 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 }
 
 async function localEmbedder(): Promise<Embedder> {
-  const { pipeline } = await import("@huggingface/transformers");
+  const tf = await import("@huggingface/transformers");
+  // ONE shared model cache (~/.cairn/models) so the model downloads ONCE — during install — and every
+  // Cairn process reuses it. transformers.js's default cache is cwd-relative, so the MCP server (a
+  // different cwd than install) would otherwise re-download it on the user's first search.
+  try { (tf.env as { cacheDir?: string }).cacheDir = join(homedir(), ".cairn", "models"); } catch { /* older builds */ }
   const model = embedModel();
-  // Use the library's own model cache (where it was already downloaded). Bound the load so a slow or
-  // blocked first download can never hang the process forever.
   const timeoutMs = Number(process.env.CAIRN_EMBED_TIMEOUT_MS || "120000");
-  const extract = await withTimeout(pipeline("feature-extraction", model), timeoutMs, `loading the embedding model "${model}"`);
+  console.error(`[cairn] loading the embedding model (q8, ~25MB one-time download, then cached)…`);
+  // q8 quantized weights are ~25MB vs ~80MB fp32 — 3x smaller download, ranking unchanged for this model.
+  const extract = await withTimeout(tf.pipeline("feature-extraction", model, { dtype: "q8" }), timeoutMs, `loading the embedding model "${model}"`);
   return async (text) => {
     const out = await extract(blank(text), { pooling: "mean", normalize: true });
     return Array.from(out.data as Float32Array);

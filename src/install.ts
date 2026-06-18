@@ -235,8 +235,8 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   if (!link.onBunPath) step(`    ${sym.warn} ${c.dim(`If 'cairn' isn't found, add ${dirname(link.path)} to your PATH.`)}`);
 
   // ── Phase 6: warm the model and prove a real create -> recall round-trip ─────────────────────
-  line(c.dim("\n6/7  Warming the embedding model + verifying end-to-end"));
-  step(c.dim("(first run downloads a small local model, so we do it now to keep your first search fast)"));
+  line(c.dim("\n6/7  Downloading the embedding model + verifying end-to-end"));
+  step(c.dim("(semantic search needs a local embedding model — a ~25MB binary, downloaded ONCE here so your first search is instant, never mid-use)"));
   const v = process.env.CAIRN_SKIP_VERIFY
     ? { ok: true, recalled: true, warmMs: 0, smokeMs: 0 }
     : await verify();

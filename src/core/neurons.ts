@@ -18,10 +18,14 @@ const stripCtrl = (s: string): string =>
     })
     .join("");
 
+// Parse a stored edges array, tolerating anything malformed (a non-array or unparseable JSON → []).
+// Shared by toNeuron and the edges-only helpers below so the decode rule lives in one place.
+function parseEdges(json: string): string[] {
+  try { const e = JSON.parse(json); return Array.isArray(e) ? e : []; } catch { return []; }
+}
+
 export function toNeuron(r: Row): Neuron {
-  let edges: string[] = [];
-  try { edges = JSON.parse(r.edges); } catch { edges = []; }
-  return { id: r.id, text: r.text, answer: r.answer, citation: r.citation, edges };
+  return { id: r.id, text: r.text, answer: r.answer, citation: r.citation, edges: parseEdges(r.edges) };
 }
 
 const dedupe = (edges: string[], self: string) => [...new Set(edges)].filter((e) => e && e !== self);
@@ -36,16 +40,27 @@ export function all(): Neuron[] {
   return (db().query(SELECT).all() as Row[]).map(toNeuron);
 }
 
+// Edge edits read and write ONLY the `edges` column — never SELECT the row's embedding (a ~1.5KB
+// BLOB) just to append or drop one id. addEdge runs once per edge on every create, so pulling the
+// vector here put the embedding on the node-creation hot path for nothing.
+function edgesOf(id: string): string[] | null {
+  const r = db().query("SELECT edges FROM neurons WHERE id = ?").get(id) as { edges: string } | null;
+  return r ? parseEdges(r.edges) : null;
+}
+function setEdges(id: string, edges: string[]): void {
+  db().query("UPDATE neurons SET edges = ? WHERE id = ?").run(JSON.stringify(edges), id);
+}
+
 function addEdge(from: string, to: string): void {
-  const n = get(from);
-  if (!n || n.edges.includes(to)) return;
-  db().query("UPDATE neurons SET edges = ? WHERE id = ?").run(JSON.stringify([...n.edges, to]), from);
+  const edges = edgesOf(from);
+  if (!edges || edges.includes(to)) return;
+  setEdges(from, [...edges, to]);
 }
 
 function removeEdge(from: string, to: string): void {
-  const n = get(from);
-  if (!n || !n.edges.includes(to)) return;
-  db().query("UPDATE neurons SET edges = ? WHERE id = ?").run(JSON.stringify(n.edges.filter((e) => e !== to)), from);
+  const edges = edgesOf(from);
+  if (!edges || !edges.includes(to)) return;
+  setEdges(from, edges.filter((e) => e !== to));
 }
 
 // Connect/disconnect two thoughts (mirrored, so the link shows on both).
@@ -99,11 +114,14 @@ export async function mutate(id: string, patch: NeuronPatch): Promise<Neuron | n
 
 export function remove(id: string): boolean {
   const info = db().query("DELETE FROM neurons WHERE id = ?").run(id);
-  for (const n of all()) {
-    if (n.edges.includes(id)) {
-      db().query("UPDATE neurons SET edges = ? WHERE id = ?")
-        .run(JSON.stringify(n.edges.filter((e) => e !== id)), n.id);
-    }
+  // Detach back-references WITHOUT loading the whole table: all() pulls every row's text/answer AND
+  // its ~1.5KB embedding just to find a few neighbors. Only rows whose edges JSON contains this id can
+  // reference it, so LIKE narrows to those and we read just id+edges. The exact edges.includes(id)
+  // check still gates each write, so a rare LIKE substring false-positive is simply a no-op.
+  const refs = db().query("SELECT id, edges FROM neurons WHERE edges LIKE ?").all(`%${id}%`) as { id: string; edges: string }[];
+  for (const r of refs) {
+    const edges = parseEdges(r.edges);
+    if (edges.includes(id)) setEdges(r.id, edges.filter((e) => e !== id));
   }
   return info.changes > 0;
 }

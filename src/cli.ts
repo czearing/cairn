@@ -55,6 +55,26 @@ switch (cmd) {
     line(c.dim(`   Switch backend with CAIRN_PROXY_UPSTREAM (ollama, openai) or CAIRN_PROXY_BASE_URL.`));
     break;
   }
+  case "compact": {
+    const { compact } = await import("./core/compact");
+    const { c, sym, line, step } = await import("./term");
+    const mb = (b: number) => `${(b / 1048576).toFixed(2)} MB`;
+    try {
+      line(c.bold("\nCairn compact: reclaiming dead pages\n"));
+      const r = compact({ backup: !process.argv.includes("--no-backup") });
+      const saved = r.beforeBytes - r.afterBytes;
+      const pct = r.beforeBytes > 0 ? Math.round((100 * saved) / r.beforeBytes) : 0;
+      step(`${sym.ok} ${mb(r.beforeBytes)} ${sym.arrow} ${mb(r.afterBytes)}  ${c.green(`(${mb(saved)} reclaimed, ${pct}% smaller)`)}`);
+      step(`${sym.dot} ${r.rows} thoughts preserved · integrity ${r.integrityOk ? c.green("ok") : c.red("FAILED")}`);
+      if (r.backupPath) step(`${sym.dot} backup ${c.dim(r.backupPath.replace(/\\/g, "/"))}`);
+      if (!r.integrityOk) { line(`\n${sym.bad} ${c.red("integrity check failed — restore the backup above.")}`); process.exitCode = 1; }
+      line();
+    } catch (err) {
+      line(`${sym.bad} ${c.red("compact failed")} ${c.dim(err instanceof Error ? err.message : String(err))}`);
+      process.exitCode = 1;
+    }
+    break;
+  }
   case "mcp":
     await import("./mcp/server"); // starts the stdio server (connects on import)
     break;
@@ -79,6 +99,7 @@ Usage:
   cairn --version   Print the installed version
   cairn proxy       Run the OpenAI-compatible memory proxy (recall for Ollama and others)
   cairn mcp         Run the MCP server over stdio
+  cairn compact     Reclaim freed space in the brain (safe; writes a backup first; stop the server first)
   cairn ui          Serve the read-only viewer (deep-linkable at /node/<id>)
   cairn seed        Write a few demo neurons to the brain
 

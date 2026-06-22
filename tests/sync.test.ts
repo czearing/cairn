@@ -1,31 +1,32 @@
 import { test, expect } from "bun:test";
-import { needsFullSync, type SyncState } from "../src/core/sync";
+import { decideSync, type SyncInputs } from "../src/core/sync";
 
-// The O(1) gate that keeps an idle sync tick at a single remote read. A full O(N) reconcile runs only
-// when something actually changed, or on the periodic safety-net pass for older clients.
-const base: SyncState = { tick: 5, localCount: 10, lastLocalCount: 10, remoteSeq: 7, lastRemoteSeq: 7 };
+// The per-tick decision that keeps cloud sync O(delta): skip on a single marker read when nothing
+// changed, run the cheap cursor path on a real change, and fall back to the full backstop only on the
+// first pass / periodic safety net / an un-provisioned marker.
+const base: SyncInputs = { tick: 5, fullEvery: 30, remoteSeq: 7, lastRemoteSeq: 7, localMaxRowid: 100, pushCursor: 100 };
 
-test("needsFullSync: a quiet tick skips (marker + local count unchanged)", () => {
-  expect(needsFullSync(base, 30)).toBe(false);
+test("decideSync: skips when the marker and the push cursor are both unchanged", () => {
+  expect(decideSync(base)).toBe("skip");
 });
 
-test("needsFullSync: the first pass always bootstraps", () => {
-  expect(needsFullSync({ ...base, tick: 1 }, 30)).toBe(true);
+test("decideSync: the first pass bootstraps with a full reconcile", () => {
+  expect(decideSync({ ...base, tick: 1 })).toBe("full");
 });
 
-test("needsFullSync: the periodic safety net fires every fullEvery ticks; 0 disables it", () => {
-  expect(needsFullSync({ ...base, tick: 30 }, 30)).toBe(true);
-  expect(needsFullSync({ ...base, tick: 30 }, 0)).toBe(false); // 0 = trust the marker only
+test("decideSync: the periodic backstop forces a full pass; fullEvery=0 disables it", () => {
+  expect(decideSync({ ...base, tick: 30 })).toBe("full");
+  expect(decideSync({ ...base, tick: 30, fullEvery: 0 })).toBe("skip");
 });
 
-test("needsFullSync: a local row to push forces a pass", () => {
-  expect(needsFullSync({ ...base, localCount: 11 }, 30)).toBe(true);
+test("decideSync: a moved remote marker takes the fast (cursor) path", () => {
+  expect(decideSync({ ...base, remoteSeq: 8 })).toBe("fast");
 });
 
-test("needsFullSync: a moved remote marker forces a pull", () => {
-  expect(needsFullSync({ ...base, remoteSeq: 8 }, 30)).toBe(true);
+test("decideSync: unpushed local rows (max rowid past the push cursor) take the fast path", () => {
+  expect(decideSync({ ...base, localMaxRowid: 105 })).toBe("fast");
 });
 
-test("needsFullSync: an absent marker is treated as changed (safe default)", () => {
-  expect(needsFullSync({ ...base, remoteSeq: null }, 30)).toBe(true);
+test("decideSync: an absent/unreadable marker falls back to the full backstop", () => {
+  expect(decideSync({ ...base, remoteSeq: null })).toBe("full");
 });

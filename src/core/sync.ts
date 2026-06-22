@@ -66,6 +66,7 @@ export function needsFullSync(s: SyncState, fullEvery: number): boolean {
 let tick = 0;
 let lastLocalCount = -1;
 let lastRemoteSeq: number | null = null;
+let remoteReady = false; // schema + marker table ensured on the primary (once per process)
 
 // Read the remote marker with a single primary-key lookup (1 billed row read). null when the marker
 // table doesn't exist yet on the primary (an older server) — which forces a safe full pass.
@@ -87,8 +88,9 @@ function bumpRemoteSeq(remote: Remote): void {
 async function reconcile(local: Db, url: string, token: string): Promise<void> {
   try {
     const remote = openRemote(url, token);
-    remote.exec(SCHEMA);
-    remote.exec(META);
+    // Ensure the schema + marker table exist once per process — the server keeps them across our
+    // stateless HTTP connections, so re-running the idempotent DDL every tick is just wasted round-trips.
+    if (!remoteReady) { remote.exec(SCHEMA); remote.exec(META); remoteReady = true; }
     tick++;
 
     // O(1) read-amplification gate. The local count is free (local bun:sqlite); the remote side is probed

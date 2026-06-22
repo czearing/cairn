@@ -1,20 +1,21 @@
 import { Database as BunDatabase } from "bun:sqlite";
-import { createRequire } from "node:module";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { config } from "./config";
 import { startBackgroundSync } from "./sync";
 
-// The brain is opened in one of three modes, decided at open time:
-//   • writer, local (default)  — bun:sqlite on a local file. Zero config; what every test uses.
-//   • writer, cloud            — a libSQL embedded replica that write-throughs to a Turso primary and
-//                                pulls remote changes. Active when CAIRN_LIBSQL_URL + TOKEN are set.
+// The brain is opened in one of two modes, decided at open time:
+//   • writer (default)         — bun:sqlite on a local file. Instant local reads/writes; what every
+//                                test uses. When CAIRN_LIBSQL_URL + TOKEN are set, cloud sync runs in
+//                                the BACKGROUND over libSQL's HTTP query API (sync.ts) — never as an
+//                                embedded replica. The embedded replica was removed deliberately: its
+//                                sync() ships DB frames and bills Turso "bytes synced" (which blew our
+//                                quota), and it wedged its WAL under concurrent hook access. HTTP sync
+//                                bills per-row instead and never blocks the read path.
 //   • reader (CAIRN_READONLY=1) — a read-only consumer (the Claude Code hooks, read-only CLI). Opens
-//                                the current brain file with bun:sqlite read-only: no sync, no write,
-//                                no cloud connection. Because bun:sqlite can read a libSQL replica
-//                                file, a hook stays a ~10ms local read even while the server syncs.
-// All three expose the same prepared-statement surface (all/get/run), so the rest of core (neurons,
+//                                the current brain file with bun:sqlite read-only: no sync, no write.
+// Both expose the same prepared-statement surface (all/get/run), so the rest of core (neurons,
 // search) is mode-agnostic.
 
 /** The slice of a prepared statement the brain actually uses. Satisfied by both bun:sqlite's and
@@ -33,11 +34,10 @@ export interface Db {
 }
 
 let _db: Db | null = null;
-let _sync: (() => void) | null = null;
 
-// Monotonic write epoch, bumped on every write through this connection and every sync pull that
-// applied frames. With PRAGMA data_version (which moves when another connection writes) it gives
-// search.ts a cheap change-token for its in-memory vector cache.
+// Monotonic write epoch, bumped on every write through this connection. With PRAGMA data_version
+// (which moves when another connection writes) it gives search.ts a cheap change-token for its
+// in-memory vector cache.
 let _writeEpoch = 0;
 function markWrite(): void { _writeEpoch++; }
 
@@ -51,9 +51,9 @@ function countingStmt(s: Stmt): Stmt {
   };
 }
 
-/** A cheap token that changes whenever the brain may have changed — local writes and sync pulls
- * (_writeEpoch), or another connection/process writing the file (PRAGMA data_version). search.ts
- * rebuilds its vector cache only when this token moves. */
+/** A cheap token that changes whenever the brain may have changed — local writes (_writeEpoch), or
+ * another connection/process writing the file (PRAGMA data_version). search.ts rebuilds its vector
+ * cache only when this token moves. */
 export function changeToken(): string {
   let dv = 0;
   try {
@@ -81,12 +81,10 @@ function assertNotRealBrainInTests(dbPath: string): void {
   }
 }
 
-// Create the neurons table and backfill columns added in later versions. Backend-neutral: it talks
-// only through the `query`/`exec` callbacks so it serves both bun:sqlite and libSQL. Reads the schema
-// first and only writes DDL when something is missing, so the cloud primary isn't churned on every
-// open.
+// Create the neurons table and backfill columns added in later versions. Reads the schema first and
+// only writes DDL when something is missing.
 function ensureSchema(query: (sql: string) => Stmt, exec: (sql: string) => void, wal: boolean): void {
-  if (wal) exec("PRAGMA journal_mode = WAL"); // replicas manage journaling themselves; skip it there
+  if (wal) exec("PRAGMA journal_mode = WAL");
   const cols = query("PRAGMA table_info(neurons)").all() as { name: string }[];
   if (cols.length === 0) {
     exec(
@@ -128,155 +126,13 @@ function openBun(): Db {
   };
 }
 
-const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-
-// A corrupt/stale local replica surfaces as one of a few libSQL errors (missing wal_index, missing
-// metadata, a malformed page). All are recoverable by discarding the local cache and re-syncing the
-// primary, so we match them to trigger that recovery rather than dead-ending the user.
-function isReplicaCorruption(err: unknown): boolean {
-  const m = errMessage(err).toLowerCase();
-  return m.includes("wal_index") || m.includes("metadata file") || m.includes("malformed") ||
-    m.includes("invalidlocalstate") || m.includes("disk image");
-}
-
-// A corrupt data page can open cleanly and only throw on the first read, so an open-time catch isn't
-// enough — do a real read up front. A genuinely corrupt page throws "malformed" here (triggering
-// recovery), while benign integrity noise (e.g. a freelist-size mismatch) doesn't throw on read and a
-// fresh brain with no table yet throws "no such table"; neither is corruption, so both are ignored.
-function probeIntegrity(prepare: (sql: string) => Stmt): void {
-  try { prepare("SELECT id FROM neurons LIMIT 1").get(); }
-  catch (err) { if (isReplicaCorruption(err)) throw err; }
-}
-
-const offlineWrite = () => new Error(
-  "Cairn can't reach the cloud sync right now, so it's read-only: recall still works, and new memories will save " +
-  "once you're reconnected (restart Cairn). Likely a wrong/expired CAIRN_LIBSQL_TOKEN or no internet."
-);
-
-// A write can fail at delegation time even when the replica opened fine (a flaky network or a proxy
-// mangling the libSQL protocol — e.g. "Invalid header bit", a handshake timeout). Match those so the
-// write surfaces a plain-language message instead of a raw libSQL error.
-const isCloudDown = (err: unknown): boolean => {
-  const m = errMessage(err).toLowerCase();
-  return m.includes("timeout") || m.includes("connect") || m.includes("handshake") || m.includes("delegation") ||
-    m.includes("unreachable") || m.includes("invalid header") || m.includes("stream closed") || m.includes("transport");
-};
-const cloudWriteFailed = () => new Error(
-  "Cairn couldn't reach the cloud to save that — it was NOT saved (likely a wrong/expired CAIRN_LIBSQL_TOKEN or " +
-  "no internet). Recall still works; retry once reconnected."
-);
-
-// libSQL ships as a CommonJS native addon; require it lazily so the native module loads only when
-// cloud sync is actually configured (never in the default local path or in tests).
-function loadLibsql(): new (path: string, opts: Record<string, unknown>) => { prepare(sql: string): Stmt; exec(sql: string): unknown; sync(): unknown } {
-  return createRequire(import.meta.url)("libsql") as new (path: string, opts: Record<string, unknown>) => { prepare(sql: string): Stmt; exec(sql: string): unknown; sync(): unknown };
-}
-
-// Cloud sync is configured but the primary is unreachable (handshake timeout, network/proxy error) or
-// the replica couldn't be rebuilt. Rather than crash every command with a raw libSQL error, degrade to
-// the last-synced local cache: recall keeps working read-only and writes return a plain-language
-// message. Normal cloud mode resumes on the next start once connectivity is back.
-function openOffline(reason: string): Db {
-  console.error(`[cairn] ${reason} — running read-only on the local cache; recall works, writes pause until you reconnect.`);
-  // An empty brain: reads return nothing, any write raises the friendly offline message. Used when
-  // there is no usable local cache, so the tool degrades cleanly instead of throwing.
-  const emptyStmt: Stmt = { all: () => [], get: () => undefined, run: () => { throw offlineWrite(); } };
-  const emptyDb: Db = { query: () => emptyStmt, run: () => { throw offlineWrite(); } };
-  const path = config.libsql.localPath;
-  if (!existsSync(path)) return emptyDb;
-  let ro: BunDatabase;
-  try { ro = new BunDatabase(path, { readonly: true }); } catch { return emptyDb; }
-  try { ro.run("PRAGMA busy_timeout = 2000"); } catch { /* a readonly handle may reject it; tolerated */ }
-  // A never-synced replica has no neurons table; serve the empty brain rather than throwing
-  // "no such table" on the first read or write.
-  let hasSchema = false;
-  try { hasSchema = !!ro.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='neurons'").get(); } catch { hasSchema = false; }
-  if (!hasSchema) return emptyDb;
-  // Reads pass through; any .run() (a write, including via query().run()) raises the friendly message.
-  const offlineStmt = (s: Stmt): Stmt => ({ all: (...p) => s.all(...p), get: (...p) => s.get(...p), run: () => { throw offlineWrite(); } });
-  return { query: (sql) => offlineStmt(ro.query(sql) as unknown as Stmt), run: () => { throw offlineWrite(); } };
-}
-
-// Wrap a libSQL connection (embedded replica OR direct remote) as a Db: writes bump the epoch and
-// translate a cloud-down failure into a plain-language message; reads pass straight through.
-function wrapCloud(d: { prepare(sql: string): Stmt; exec(sql: string): unknown }): Db {
-  const translateWrite = <T>(fn: () => T): T => { try { return fn(); } catch (err) { throw isCloudDown(err) ? cloudWriteFailed() : err; } };
-  const cloudStmt = (s: Stmt): Stmt => ({ all: (...p) => s.all(...p), get: (...p) => s.get(...p), run: (...p) => { markWrite(); return translateWrite(() => s.run(...p)); } });
-  return {
-    query: (sql) => cloudStmt(d.prepare(sql)),
-    run: (sql, ...params) => { markWrite(); translateWrite(() => { if (params.length) d.prepare(sql).run(...params); else d.exec(sql); }); },
-  };
-}
-
-// The default cloud transport: a direct HTTP connection (stateless POST /v2/pipeline via https://). No
-// local replica, no streaming sync, and crucially no blocking sync() that can hang the process. Each
-// query is a network round-trip; the in-memory cache absorbs reads after the first.
-function openRemote(LibsqlDatabase: new (p: string, o: Record<string, unknown>) => { prepare(sql: string): Stmt; exec(sql: string): unknown }, url: string, token: string): Db {
-  // https:// (not libsql://) selects the HTTP pipeline and avoids the Hrana streaming path, which on
-  // some clients/versions fails with "connection closed before message completed".
-  const httpUrl = url.replace(/^libsql:\/\//i, "https://").replace(/^wss?:\/\//i, "https://");
-  console.error("[cairn] cloud over HTTP (each query hits the cloud; the in-memory cache absorbs reads).");
-  const d = new LibsqlDatabase(httpUrl, { authToken: token });
-  ensureSchema((sql) => d.prepare(sql), (sql) => { d.exec(sql); }, false);
-  return wrapCloud(d);
-}
-
-// Cloud-synced brain on a libSQL embedded replica — local-first. Reads/writes hit the LOCAL replica
-// file (instant, no network on the read path); libSQL pulls other devices' changes in the background
-// on `syncPeriod`. We do NOT call the synchronous sync() up front: it can block/hang the process and
-// it would put the network on the critical path. The local data is served immediately; the background
-// pull catches it up within syncPeriod.
-function openLibsql(url: string, token: string): Db {
-  const localPath = config.libsql.localPath;
-  mkdirSync(dirname(localPath), { recursive: true });
-  const LibsqlDatabase = loadLibsql();
-  const opts = { syncUrl: url, authToken: token, syncPeriod: config.libsql.syncPeriod, readYourWrites: true };
-  // Open the local replica with NO blocking sync — instant local reads, background pulls via syncPeriod.
-  // probeIntegrity is a local read that catches (and triggers recovery of) a corrupt replica.
-  const bootstrap = () => { const h = new LibsqlDatabase(localPath, opts); probeIntegrity((s) => h.prepare(s)); return h; };
-
-  let d: ReturnType<typeof bootstrap>;
-  try {
-    d = bootstrap();
-  } catch (err) {
-    if (isReplicaCorruption(err)) {
-      // The replica is only a local cache of the primary, so a corrupt one is safe to discard: delete
-      // it with its companions and re-bootstrap a clean copy from the cloud. No data is lost.
-      console.error("[cairn] local replica unreadable — re-bootstrapping from the cloud:", errMessage(err));
-      for (const s of ["", "-wal", "-shm", "-client_wal_index", "-info"]) { try { rmSync(localPath + s, { force: true }); } catch { /* locked file: best effort */ } }
-      try { d = bootstrap(); } catch (again) { return openOffline(`cloud replica could not be rebuilt (${errMessage(again).slice(0, 70)})`); }
-    } else {
-      // Not corruption — embedded-replica sync failed or hung. Fall back to the HTTP connection (the
-      // default transport); offline (local cache) only if that fails too.
-      try { return openRemote(LibsqlDatabase, url, token); }
-      catch { return openOffline(`cloud unreachable (${errMessage(err).slice(0, 70)})`); }
-    }
-  }
-
-  _sync = () => {
-    try {
-      const res = d.sync() as { frames_synced?: number } | null | undefined;
-      // A pull that applied frames means another device's changes landed → invalidate the cache. If
-      // the binding doesn't report a count, bump anyway (a needless rebuild is cheap; a miss is not).
-      if (!res || typeof res.frames_synced !== "number" || res.frames_synced > 0) markWrite();
-    } catch (err) {
-      console.error("[cairn] Turso sync failed:", errMessage(err));
-    }
-  };
-  ensureSchema((sql) => d.prepare(sql), (sql) => { d.exec(sql); }, false);
-  return wrapCloud(d);
-}
-
-// Read-only consumer: hooks and read-only CLI set CAIRN_READONLY=1 so they never sync, write, or hold
-// the cloud connection. They open whatever file currently holds the brain — the cloud replica when
-// sync is configured (shared via ~/.cairn/config.json so a hook agrees with the server on the path),
-// else the local db — with bun:sqlite read-only. This keeps a hook fire fast and lock-free, and never
-// stale: it reads the very replica the server maintains.
+// Read-only consumer: hooks and the read-only CLI set CAIRN_READONLY=1 so they never sync or write.
+// They open the local bun:sqlite brain read-only, which keeps a hook fire fast and lock-free.
 function openReader(): Db {
   const path = config.dbPath; // hooks read the same local bun:sqlite brain the server writes
   if (!existsSync(path)) {
-    // No brain on disk yet (e.g. the server hasn't bootstrapped the replica). Behave as an empty
-    // brain rather than throwing, so a hook that happens to fire first is a harmless no-op.
+    // No brain on disk yet. Behave as an empty brain rather than throwing, so a hook that happens to
+    // fire first is a harmless no-op.
     const empty: Stmt = { all: () => [], get: () => undefined, run: () => ({ changes: 0 }) };
     return { query: () => empty, run: () => {} };
   }
@@ -288,17 +144,15 @@ function openReader(): Db {
   };
 }
 
-// One shared connection, opened lazily. Read-only consumers first; then cloud when configured —
-// defaulting to the robust HTTP transport (never hangs), with the embedded replica opt-in via
-// CAIRN_LIBSQL_EMBEDDED=1 for fast local reads where its blocking sync is known to work; else local.
+// One shared connection, opened lazily. Read-only consumers open read-only; everyone else opens the
+// local bun:sqlite brain. Cloud sync, when configured, runs in the BACKGROUND over HTTP (sync.ts).
 export function db(): Db {
   if (_db) return _db;
   if (process.env.CAIRN_READONLY === "1") { _db = openReader(); return _db; }
   // The brain is ALWAYS a local bun:sqlite file: instant reads/writes, and safe under concurrent hook
   // readers via standard SQLite WAL. When cloud sync is configured it runs in the BACKGROUND over HTTP
-  // (sync.ts), never on this path — so a slow/broken/unreachable cloud can't hang or corrupt the brain.
-  // (The libSQL embedded replica, which wedged its WAL under concurrent access and blocked on sync, is
-  // no longer on the critical path.)
+  // (sync.ts), never on this path — so a slow/broken/unreachable cloud can't hang or corrupt the brain,
+  // and cairn never opens a libSQL embedded replica (whose sync() would bill Turso "bytes synced").
   _db = openBun();
   const { url, token } = config.libsql;
   if (url && token) { try { startBackgroundSync(_db, url, token); } catch { /* sync is best-effort, never fatal */ } }

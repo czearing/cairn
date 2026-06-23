@@ -75,6 +75,27 @@ switch (cmd) {
     }
     break;
   }
+  case "pref": {
+    const { readPrefs, addPref, removePref, clearPrefs, prefsPath } = await import("./core/prefs");
+    const { c, sym, line, step } = await import("./term");
+    const sub = process.argv[3];
+    const arg = process.argv.slice(4).join(" ").trim();
+    const show = (lines: string[]) => {
+      if (lines.length === 0) { line(`${sym.dot} No preferences set. Add one: ${c.cyan('cairn pref add "no em dashes"')}`); return; }
+      line(c.bold("Cairn preferences ") + c.dim(prefsPath().replace(/\\/g, "/")));
+      lines.forEach((l, i) => step(`${c.dim(`${i + 1}.`)} ${l}`));
+      if (lines.length > 10) line(`${sym.warn} ${c.yellow(`${lines.length} preferences — keep the list short; long injected context gets ignored.`)}`);
+    };
+    switch (sub) {
+      case undefined: case "list": show(readPrefs()); break;
+      case "add": if (!arg) { line(`${sym.bad} usage: ${c.cyan('cairn pref add "your preference"')}`); process.exitCode = 1; } else show(addPref(arg)); break;
+      case "rm": case "remove": if (!arg) { line(`${sym.bad} usage: ${c.cyan("cairn pref rm <number|exact text>")}`); process.exitCode = 1; } else show(removePref(arg)); break;
+      case "clear": clearPrefs(); line(`${sym.ok} Cleared all preferences.`); break;
+      case "path": line(prefsPath().replace(/\\/g, "/")); break;
+      default: line(`${sym.bad} Unknown: ${c.cyan(`cairn pref ${sub}`)}. Use: list | add | rm | clear | path`); process.exitCode = 1;
+    }
+    break;
+  }
   case "mcp":
     await import("./mcp/server"); // starts the stdio server (connects on import)
     break;
@@ -100,6 +121,7 @@ Usage:
   cairn proxy       Run the OpenAI-compatible memory proxy (recall for Ollama and others)
   cairn mcp         Run the MCP server over stdio
   cairn compact     Reclaim freed space in the brain (safe; writes a backup first; stop the server first)
+  cairn pref        Standing style/output preferences injected into every prompt (e.g. "no em dashes")
   cairn ui          Serve the read-only viewer (deep-linkable at /node/<id>)
   cairn seed        Write a few demo neurons to the brain
 

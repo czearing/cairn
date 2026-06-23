@@ -83,8 +83,8 @@ switch (cmd) {
     const show = (lines: string[]) => {
       if (lines.length === 0) { line(`${sym.dot} No preferences set. Add one: ${c.cyan('cairn pref add "no em dashes"')}`); return; }
       line(c.bold("Cairn preferences ") + c.dim(prefsPath().replace(/\\/g, "/")));
-      lines.forEach((l, i) => step(`${c.dim(`${i + 1}.`)} ${l}`));
-      if (lines.length > 10) line(`${sym.warn} ${c.yellow(`${lines.length} preferences — keep the list short; long injected context gets ignored.`)}`);
+      for (const l of lines) step(l);
+      if (lines.length > 10) line(`${sym.warn} ${c.yellow(`${lines.length} preferences. Keep the list short; long injected context gets ignored.`)}`);
     };
     switch (sub) {
       case undefined: case "list": show(readPrefs()); break;

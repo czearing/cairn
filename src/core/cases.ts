@@ -35,15 +35,18 @@ export function reinforce(id: string, success: boolean, steps: number, now: numb
 // ---- Scoring (pure, no db) ----
 // Laplace prior so an unverified node sits at ~0.5, never an undeserved 1.0.
 export const successRate = (s: CaseStat): number => (s.wins + 1) / (s.wins + s.losses + 2);
-// ACT-R base-level approximation: frequency and recency of use, power-law decay.
-export function baseLevel(s: CaseStat, now: number): number {
-  const ageH = Math.max(0, (now - s.lastUsed) / 3_600_000);
-  return Math.log(1 + s.uses) - 0.5 * Math.log(1 + ageH);
+// Recency nudge in (0,1]: a recently-validated case surfaces first; mild, never dominates success.
+export function recency(s: CaseStat, now: number): number {
+  const ageDays = Math.max(0, (now - s.lastUsed) / 86_400_000);
+  return 1 / (1 + ageDays);
 }
-// Effectiveness of a node: how reliably and leanly it has worked, weighted by practice/recency.
+// Effectiveness, DOMINATED by success rate and step efficiency (the "highest positive result, fewest
+// steps" objective); recency is only a nudge. Crucially there is NO raw use-frequency term: an ACT-R
+// base-level over use COUNT over-rewards a frequently-served BAD case (the closed-loop test proves it).
+// Repetition still strengthens a case, but only through the success rate's Laplace confidence.
 export function effScore(s: CaseStat, now: number, minSteps: number): number {
   const stepEff = s.steps > 0 && minSteps > 0 ? minSteps / s.steps : 1;
-  return successRate(s) * stepEff * (1 + Math.max(0, baseLevel(s, now)));
+  return successRate(s) * stepEff * recency(s, now);
 }
 
 const neutral = (id: string, now: number): CaseStat => ({ id, uses: 0, wins: 0, losses: 0, steps: 0, lastUsed: now });

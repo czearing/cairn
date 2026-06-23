@@ -4,6 +4,7 @@ import { z } from "zod";
 import { create, mutate, remove } from "../core/neurons";
 import { isClosedQuestion } from "../core/audit";
 import { search } from "../core/search";
+import { rerank } from "../core/cases";
 import { config } from "../core/config";
 import type { Neuron } from "../core/neurons.types";
 
@@ -28,7 +29,8 @@ server.tool(
   "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a `score` (0-1 cosine relevance): weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. Use this as much as possible to learn from previous thoughts",
   { query: z.string().describe("What you are looking for, in natural language.") },
   async ({ query }) => {
-    const hits = await search(query);
+    // Stage 1 relevance (search), stage 2 effectiveness (rerank by outcome). Reorder only, never drop.
+    const hits = rerank(await search(query), Date.now());
     return json((SEARCH_LIMIT > 0 ? hits.slice(0, SEARCH_LIMIT) : hits).map(withUrl));
   }
 );

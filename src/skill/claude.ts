@@ -15,6 +15,8 @@ export function buildArgs(opts: ClaudeOpts = {}): string[] {
   const args = ["-p", "--setting-sources", "project", "--output-format", "text"];
   if (opts.system) args.push("--append-system-prompt", opts.system);
   if (opts.mcpConfigPath) args.push("--mcp-config", opts.mcpConfigPath);
+  if (opts.resume) args.push("--resume", opts.resume);          // continue the skill's prior reviewer session
+  else if (opts.sessionId) args.push("--session-id", opts.sessionId); // or start it under a fixed id
   args.push("--allowedTools", (opts.allowedTools ?? []).join(",")); // empty string = no tools
   return args;
 }

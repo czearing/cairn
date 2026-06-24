@@ -12,9 +12,16 @@ export interface ClaudeOpts {
   allowedTools?: string[];
   /** Path to an MCP config JSON exposing the cairn brain server. */
   mcpConfigPath?: string;
+  /** Start a NEW persistent session with this id (the reviewer's first run for a skill). */
+  sessionId?: string;
+  /** RESUME an existing session by id (the reviewer's later runs for the same skill). */
+  resume?: string;
   /** Hard timeout for the call; the run is killed and returns ok:false past it. */
   timeoutMs?: number;
 }
+
+/** The reviewer's verdict on one output: a quality score plus what to keep, fix, and improve. */
+export interface Review { score: number; right: string; wrong: string; improve: string; raw: string }
 
 /** Result of a CLI run. `ok` is false on any spawn error, timeout, or non-zero exit. */
 export interface ClaudeResult { ok: boolean; text: string }

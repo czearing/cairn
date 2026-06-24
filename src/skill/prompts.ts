@@ -24,6 +24,33 @@ export function compactionUserPrompt(transcript: string): string {
 // dominated by the topic, not the task.
 export const LABEL_SYSTEM = "You are a task classifier. You never perform or answer requests. You only output their reusable skill labels: the task type, not the topic.";
 
+// System prompt for the reviewer: judge one output for a skill against its prior runs, scoring quality
+// far above speed. Connected to cairn so it can recall how this skill was judged before; its session
+// persists per skill (restored by --resume) so it remembers what worked and what did not.
+export const REVIEW_SYSTEM = `You are the quality reviewer for one skill. Judge the new output against the task and the prior runs: what to keep, what went wrong, what to improve next time.
+
+Quality is 95% of the score, speed 5%. Score low for broken or off-task work, high only for excellent work. Anchor to the prior runs, never inflate.
+
+You may call brain_search to recall how this skill was reviewed before, and stay consistent with it.
+
+Output ONLY compact JSON, nothing else:
+{"score":<0..1>,"right":"what worked","wrong":"what failed","improve":"one concrete change"}`;
+
+export function reviewUserPrompt(task: string, output: string, priors: { quality: number; recipe: string; review: string }[]): string {
+  const history = priors.length
+    ? priors.map((r) => `- q=${r.quality.toFixed(2)} recipe=${r.recipe} review=${r.review}`).join("\n")
+    : "(none yet)";
+  return `Review the OUTPUT for the TASK. Prior runs (best first) are context.
+
+TASK: ${task}
+
+PRIOR RUNS:
+${history}
+
+OUTPUT:
+${output}`;
+}
+
 export function labelUserPrompt(request: string, existing: string[] = []): string {
   const known = existing.length
     ? `Reuse one of these existing labels if it fits, exactly as written: ${existing.join(", ")}. Invent a new label only if none fit.\n`

@@ -11,10 +11,26 @@ import type { Skill, SkillRun } from "./types";
 let ready = false;
 function ensure(): void {
   if (ready) return;
-  db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, master_prompt TEXT NOT NULL DEFAULT '', embedding BLOB, embedding_model TEXT, ts INTEGER NOT NULL)");
+  db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, master_prompt TEXT NOT NULL DEFAULT '', embedding BLOB, embedding_model TEXT, session_started INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)");
   db().run("CREATE TABLE IF NOT EXISTS skill_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, recipe TEXT NOT NULL, quality REAL NOT NULL, review TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL)");
   db().run("CREATE INDEX IF NOT EXISTS skill_runs_skill_q ON skill_runs (skill_id, quality)");
+  const cols = db().query("PRAGMA table_info(skills)").all() as { name: string }[]; // backfill for older skills tables
+  if (!cols.some((c) => c.name === "session_started")) {
+    try { db().run("ALTER TABLE skills ADD COLUMN session_started INTEGER NOT NULL DEFAULT 0"); } catch { /* added concurrently */ }
+  }
   ready = true;
+}
+
+/** Has the reviewer started a persistent session for this skill? Decides --session-id vs --resume. */
+export function hasSession(id: string): boolean {
+  ensure();
+  return ((db().query("SELECT session_started FROM skills WHERE id = ?").get(id) as { session_started?: number } | undefined)?.session_started ?? 0) === 1;
+}
+
+/** Mark the skill's reviewer session as started, so later reviews resume it. */
+export function markSession(id: string): void {
+  ensure();
+  db().run("UPDATE skills SET session_started = 1 WHERE id = ?", id);
 }
 
 /** Insert (or replace) a skill with its task embedding. */

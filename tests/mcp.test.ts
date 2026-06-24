@@ -78,6 +78,14 @@ test("brain_mutate sets an answer + citation and it is findable by it", async ()
   expect(results.some((r: { id: string }) => r.id === n.id)).toBe(true);
 });
 
+test("brain_mutate REJECTS an insanely long answer with a concision prompt", async () => {
+  const n = parse(await call("brain_create", { text: "a node that will get a bloated answer" }));
+  const res = await call("brain_mutate", { id: n.id, answer: "x".repeat(50_000), citation: "https://x" });
+  expect(res.isError).toBe(true);
+  expect(res.content[0]!.text).toMatch(/too long/i);
+  expect(res.content[0]!.text).toMatch(/concis/i);
+});
+
 test("brain_mutate on unknown id errors cleanly", async () => {
   expect((await call("brain_mutate", { id: "nope", answer: "x", citation: "https://x" })).isError).toBe(true);
 });
@@ -87,6 +95,54 @@ test("brain_mutate REJECTS an answer with no citation", async () => {
   const res = await call("brain_mutate", { id: n.id, answer: "an uncited factual claim" });
   expect(res.isError).toBe(true);
   expect(res.content[0]!.text).toContain("citation required");
+});
+
+test("brain_search returns a lean shape: keeps id/text/answer/score, drops edges and url", async () => {
+  const a = parse(await call("brain_create", { text: "How do I prune a bonsai tree?" }));
+  // give it a neighbor so the node genuinely has an edge that must NOT appear in the search payload
+  await call("brain_create", { text: "How do I water a bonsai tree?", edges: [a.id] });
+  await call("brain_mutate", { id: a.id, answer: "Prune in early spring.", citation: "https://example.com/bonsai" });
+  const results = parse(await call("brain_search", { query: "bonsai pruning" })) as Record<string, unknown>[];
+  const hit = results.find((r) => r.id === a.id)!;
+  expect(hit).toBeTruthy();
+  expect(hit.answer).toBe("Prune in early spring.");
+  expect(typeof hit.score).toBe("number");
+  expect(hit.citation).toBe("https://example.com/bonsai");
+  expect(hit).not.toHaveProperty("edges"); // server-only graph data, not shipped to the agent
+  expect(hit).not.toHaveProperty("url"); // derivable from id; only on create/mutate returns
+});
+
+test("brain_search bounds the serialized result to CAIRN_SEARCH_BUDGET without erroring", async () => {
+  // A fresh server with a tiny char budget and several big-answer nodes: the unbudgeted result would
+  // overflow, but the budget must keep the call succeeding with the strongest matches whole.
+  const db2 = join(tmpdir(), `cairn-budget-${randomUUID()}.db`);
+  const BUDGET = 4000;
+  const transport = new StdioClientTransport({
+    command: "bun",
+    args: ["src/mcp/server.ts"],
+    env: { ...process.env, CAIRN_DB_PATH: db2, CAIRN_SEARCH_BUDGET: String(BUDGET) },
+  });
+  const c2 = new Client({ name: "cairn-budget-test", version: "1.0.0" });
+  await c2.connect(transport);
+  const call2 = (name: string, args: Record<string, unknown>) =>
+    c2.callTool({ name, arguments: args }) as Promise<{ isError?: boolean; content: { text: string }[] }>;
+  try {
+    // Topical answers (so they clear the relevance floor), each big enough that all six together far
+    // exceed BUDGET while no single one overflows it: forces a relevance-ordered tail drop.
+    const body = "ocean waves and sea verse about the tide ".repeat(30); // ~1200 chars, on-topic
+    for (let i = 0; i < 6; i++) {
+      const n = parse(await call2("brain_create", { text: `a poem about the sea and ocean, number ${i}` }));
+      await call2("brain_mutate", { id: n.id, answer: body, citation: "https://example.com/sea" });
+    }
+    const res = await call2("brain_search", { query: "a poem about the sea and ocean waves" });
+    expect(res.isError).toBeFalsy(); // the call SUCCEEDS instead of overflowing the token ceiling
+    const results = JSON.parse(res.content[0]!.text) as unknown[];
+    expect(results.length).toBeGreaterThan(0); // a real match is never lost to the budget
+    expect(results.length).toBeLessThan(6); // and the least-relevant tail was dropped to fit
+    expect(res.content[0]!.text.length).toBeLessThanOrEqual(BUDGET); // serialized result stays within it
+  } finally {
+    await c2.close();
+  }
 });
 
 test("brain_delete removes a thought", async () => {

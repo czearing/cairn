@@ -64,6 +64,16 @@ test("mutate: partial merge keeps omitted fields", async () => {
   expect(after.answer).toBe("new");
 });
 
+test("mutate: REJECTS an insanely long answer, asking for concision", async () => {
+  const { config } = await import("../src/core/config");
+  const n = await N.create("Q?");
+  const tooLong = "x".repeat(config.maxAnswerChars + 1);
+  expect(N.mutate(n.id, { answer: tooLong, citation: CITE })).rejects.toThrow(/too long.*concis/is);
+  // exactly at the limit is allowed (the bound is generous room, not a trap)
+  const ok = "x".repeat(config.maxAnswerChars);
+  expect((await N.mutate(n.id, { answer: ok, citation: CITE }))!.answer.length).toBe(config.maxAnswerChars);
+});
+
 test("mutate: REQUIRES a citation when giving an answer", async () => {
   const n = await N.create("Q?");
   expect(N.mutate(n.id, { answer: "an uncited claim" })).rejects.toThrow(/citation required/);
@@ -94,9 +104,48 @@ test("remove: deletes and cleans dangling edges", async () => {
   expect(N.get(a.id)!.edges).not.toContain(b.id);
 });
 
+test("remove: detaches the id from EVERY neighbor, not just one", async () => {
+  const hub = await N.create("hub");
+  const neighbors = await Promise.all([N.create("A"), N.create("B"), N.create("C")]);
+  for (const n of neighbors) N.link(hub.id, n.id);
+  expect(N.remove(hub.id)).toBe(true);
+  for (const n of neighbors) expect(N.get(n.id)!.edges).not.toContain(hub.id);
+});
+
+test("remove: leaves unrelated neurons' edges intact", async () => {
+  const a = await N.create("A");
+  const b = await N.create("B", [a.id]);
+  const victim = await N.create("victim");
+  N.remove(victim.id);
+  expect(N.get(a.id)!.edges).toContain(b.id);
+  expect(N.get(b.id)!.edges).toContain(a.id);
+});
+
 test("all: reflects writes", async () => {
   expect(N.all().length).toBe(0);
   await N.create("one");
   await N.create("two");
   expect(N.all().length).toBe(2);
+});
+
+// Guard against the legacy corruption class: control/null bytes (binary, embedding-byte bleed)
+// must never persist into a text field. Keeps tab/newline/return.
+test("create/mutate: strip control and null bytes from text fields", async () => {
+  const NUL = String.fromCharCode(0);
+  const BIN = String.fromCharCode(2) + String.fromCharCode(27) + String.fromCharCode(0xfffd);
+
+  const n = await N.create(`clean${NUL} text${BIN} end`);
+  expect(n.text).toBe("clean text end");
+
+  const m = (await N.mutate(n.id, {
+    answer: `good${NUL} answer`,
+    citation: "https://example.com/doc",
+  }))!;
+  expect(m.answer).toBe("good answer");
+  expect(m.citation).toBe("https://example.com/doc");
+
+  // tab, newline, and return must survive
+  const TAB = String.fromCharCode(9), NL = String.fromCharCode(10), CR = String.fromCharCode(13);
+  const k = await N.create("line1" + NL + "line2" + TAB + "end" + CR);
+  expect(k.text).toBe("line1" + NL + "line2" + TAB + "end" + CR);
 });

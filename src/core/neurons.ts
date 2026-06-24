@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db } from "./db";
+import { config } from "./config";
 import { embed, embedModel } from "./embed";
 import { encodeVector } from "./vector";
 import type { Neuron, Row, NeuronPatch } from "./neurons.types";
@@ -96,6 +97,14 @@ export async function mutate(id: string, patch: NeuronPatch): Promise<Neuron | n
     citation: stripCtrl(patch.citation ?? cur.citation),
     edges: patch.edges ? dedupe(patch.edges, id) : cur.edges,
   };
+  // Reject an insanely verbose answer. There is generous room for a real thought, but past the bound a
+  // single node bloats every search that returns it and erodes the atomic-node discipline; tell the
+  // caller to tighten it or split it into children rather than silently truncating their content.
+  if (next.answer.length > config.maxAnswerChars) {
+    throw new Error(
+      `answer too long (${next.answer.length} chars, max ${config.maxAnswerChars}): please write it concisely and clearly. If it genuinely needs more room, split it into child nodes, each answering a single fact.`,
+    );
+  }
   // A neuron with an answer MUST be cited — no uncited claims in the brain.
   if (next.answer.trim() && !next.citation.trim()) {
     throw new Error("citation required: set `citation` to a real source link when giving a neuron an answer.");

@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { brainUsedThisTurn } from "../src/hosts/claude-code/transcript";
+import { brainUsedThisTurn, mutatedIdsThisTurn } from "../src/hosts/claude-code/transcript";
 import { matchEvent } from "../src/inject/matchers";
 import { normalizeClaudeCode } from "../src/hosts/claude-code/normalize";
 import { respond } from "../src/hosts/claude-code/respond";
@@ -39,6 +39,28 @@ test("ignores brain use from a PREVIOUS turn", async () => {
 
 test("missing transcript fails safe (no nag)", async () => {
   expect(await brainUsedThisTurn("C:/nope/does-not-exist.jsonl")).toBe(true);
+});
+
+const toolUseInput = (name: string, input: object) => ({
+  message: { role: "assistant", content: [{ type: "tool_use", name, input }] },
+});
+
+test("mutatedIdsThisTurn collects ids from this turn's brain_mutate calls only", async () => {
+  const p = transcript([
+    userMsg("first"),
+    toolUseInput("brain_mutate", { id: "old-id", answer: "a" }), // previous turn — excluded
+    userMsg("second"),
+    toolUseInput("mcp__cairn__brain_mutate", { id: "n1", answer: "x" }),
+    toolUseInput("brain_mutate", { id: "n2", citation: "https://e.x" }),
+    toolUse("brain_create"), // no id on input — ignored
+  ]);
+  const ids = await mutatedIdsThisTurn(p);
+  expect([...ids].sort()).toEqual(["n1", "n2"]);
+  expect(ids.has("old-id")).toBe(false);
+});
+
+test("mutatedIdsThisTurn fails open (empty set) on a missing transcript", async () => {
+  expect((await mutatedIdsThisTurn("C:/nope/does-not-exist.jsonl")).size).toBe(0);
 });
 
 test("turn_finished routing: unused brain, unsplit leaves, or done", () => {

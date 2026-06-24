@@ -6,7 +6,9 @@ import { isClosedQuestion } from "../core/audit";
 import { search } from "../core/search";
 import { rerank } from "../core/cases";
 import { config } from "../core/config";
+import { fitToBudget } from "./budget";
 import type { Neuron } from "../core/neurons.types";
+import type { ScoredResult } from "../core/search.types";
 
 // The bridge that lets an agent read and write the brain. THREE tools, each a thin wrapper
 // over src/core (the same code the tests cover). Run: bun src/mcp/server.ts
@@ -15,14 +17,29 @@ const server = new McpServer({ name: "cairn", version: "1.0.0" });
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
 
-// Attach a viewer deep-link so callers can show/cite the thought in the UI. Generic so a search
-// result keeps its `score` field in the output (and type) alongside the url.
+// Attach a viewer deep-link so callers can show/cite the thought in the UI. Used on the single-node
+// create/mutate returns, where the agent needs the url to report or link the node.
 const withUrl = <T extends Neuron>(n: T) => ({ ...n, url: `${config.uiUrl}/node/${n.id}` });
+
+// Lean agent-facing search hit. Keep the handle (`id`), the knowledge (`text`/`answer`/`citation`) and
+// the relevance (`score`); DROP `edges` and `url`. `edges` is server-only graph data the agent cannot
+// act on (no get-by-id tool), and the things that DO use it (the UI graph, optional subtree expansion)
+// read it from core search()/the DB, not from this payload; `url` is derivable from `id`. Search returns
+// many nodes, so trimming these two cuts a real slice off dense, hub-heavy result sets. The graph stays
+// fully intact in the brain; it just no longer rides along in every result.
+const leanHit = ({ id, text, answer, citation, score }: ScoredResult) => ({ id, text, answer, citation, score });
 
 // Optional hard cap on the agent-facing result set, OFF by default (0): the breadth is controlled by
 // the adaptive relevance floor in core search() (CAIRN_RELATIVE_FLOOR), a relevance bar rather than a
 // count cap. Set CAIRN_SEARCH_LIMIT > 0 to also impose a top-N count cap as a backstop.
 const SEARCH_LIMIT = Number(process.env.CAIRN_SEARCH_LIMIT || "0");
+
+// Character budget for the serialized result. NOT a result-count cap: results are filled most-relevant
+// -first until this budget is spent (see fitToBudget), so a query that hits a big cluster of similar
+// nodes returns the strongest matches whole instead of erroring the whole call by overflowing the
+// transport token ceiling. Default leaves headroom under the typical ~25k-token tool-output limit; set
+// CAIRN_SEARCH_BUDGET to retune, or 0 to disable.
+const SEARCH_BUDGET = Number(process.env.CAIRN_SEARCH_BUDGET ?? "90000");
 
 server.tool(
   "brain_search",
@@ -31,7 +48,10 @@ server.tool(
   async ({ query }) => {
     // Stage 1 relevance (search), stage 2 effectiveness (rerank by outcome). Reorder only, never drop.
     const hits = rerank(await search(query), Date.now());
-    return json((SEARCH_LIMIT > 0 ? hits.slice(0, SEARCH_LIMIT) : hits).map(withUrl));
+    const capped = SEARCH_LIMIT > 0 ? hits.slice(0, SEARCH_LIMIT) : hits;
+    // Project to the lean shape (drop edges/url), then fit the ranked hits into the output budget
+    // (most-relevant-first) so a large result never overflows the transport and fails the whole call.
+    return json(fitToBudget(capped.map(leanHit), SEARCH_BUDGET));
   }
 );
 
@@ -55,7 +75,7 @@ server.tool(
   {
     id: z.string().describe("id of the thought to update."),
     text: z.string().optional().describe("new question text."),
-    answer: z.string().optional().describe("the solution; setting this marks it solved."),
+    answer: z.string().optional().describe("the solution; setting this marks it solved. Keep it concise and clear; an overlong answer is rejected, so split a sprawling one into child nodes instead."),
     citation: z
       .string()
       .optional()

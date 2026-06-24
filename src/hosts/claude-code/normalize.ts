@@ -1,5 +1,5 @@
 import type { NormalizedEvent } from "../../inject/events.types";
-import { brainUsedThisTurn } from "./transcript";
+import { brainUsedThisTurn, mutatedIdsThisTurn } from "./transcript";
 import { unsplitLeaves } from "../../core/audit";
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -38,7 +38,11 @@ export async function normalizeClaudeCode(payload: unknown): Promise<NormalizedE
     if (payload.stop_hook_active) return null;
     const tp = payload.transcript_path;
     if (typeof tp !== "string") return null;
-    return { kind: "turn_finished", usedBrain: await brainUsedThisTurn(tp), unsplit: unsplitLeaves().length };
+    // Scope the split-leaves gate to nodes the agent answered THIS turn — not the whole graph,
+    // which holds thousands of legacy syntheses and would block every turn-end forever.
+    const mutatedThisTurn = await mutatedIdsThisTurn(tp);
+    const unsplit = unsplitLeaves().filter((n) => mutatedThisTurn.has(n.id)).length;
+    return { kind: "turn_finished", usedBrain: await brainUsedThisTurn(tp), unsplit };
   }
 
   return null;

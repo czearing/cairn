@@ -102,34 +102,42 @@ export function rerank<T extends { id: string; score: number }>(results: T[], no
 // (no neurons/sync impact). `topRuns(task, n)` pulls the n best prior runs so the screen can diff their
 // recipes for candidate quality drivers, and the times give the bottleneck view.
 
-export interface RunRecord { task: string; ts: number; recipe: string[]; times: Record<string, number>; quality: number }
+// `review` holds the grader's structured verdict (per-dimension scores + concrete defects), not just the
+// scalar quality, so a later run on the same task reads the recurring defects and refines its recipe (the
+// "revise" step). Optional: a run is logged before it is graded, then the grade + review are appended.
+export interface RunRecord { task: string; ts: number; recipe: string[]; times: Record<string, number>; quality: number; review?: string }
 
 let runsReady = false;
 function ensureRuns(): void {
   if (runsReady) return;
   db().run("CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, ts INTEGER NOT NULL, recipe TEXT NOT NULL, times TEXT NOT NULL, quality REAL NOT NULL)");
   db().run("CREATE INDEX IF NOT EXISTS runs_task_q ON runs (task, quality)");
+  // Backfill `review` for brains whose runs table predates it.
+  const cols = db().query("PRAGMA table_info(runs)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "review")) {
+    try { db().run("ALTER TABLE runs ADD COLUMN review TEXT NOT NULL DEFAULT ''"); } catch { /* added concurrently */ }
+  }
   runsReady = true;
 }
 
 // Append one completed run; returns its id so later feedback can append to THIS run, not a new one.
 export function logRun(r: RunRecord): number {
   ensureRuns();
-  const info = db().query("INSERT INTO runs (task, ts, recipe, times, quality) VALUES (?, ?, ?, ?, ?)").run(r.task, r.ts, JSON.stringify(r.recipe), JSON.stringify(r.times), r.quality);
+  const info = db().query("INSERT INTO runs (task, ts, recipe, times, quality, review) VALUES (?, ?, ?, ?, ?, ?)").run(r.task, r.ts, JSON.stringify(r.recipe), JSON.stringify(r.times), r.quality, r.review ?? "");
   return Number(info.lastInsertRowid ?? 0);
 }
 
 // Append feedback (a critique-driven step + its time, and/or an updated quality) to an EXISTING run,
 // so a follow-up like "make the imagery darker" extends the recipe we already built instead of forking
 // a new one. No-op on an unknown id.
-export function appendToRun(id: number, add: { step?: string; time?: number; quality?: number }): void {
+export function appendToRun(id: number, add: { step?: string; time?: number; quality?: number; review?: string }): void {
   ensureRuns();
-  const row = db().query("SELECT recipe, times, quality FROM runs WHERE id = ?").get(id) as { recipe: string; times: string; quality: number } | undefined;
+  const row = db().query("SELECT recipe, times, quality, review FROM runs WHERE id = ?").get(id) as { recipe: string; times: string; quality: number; review: string } | undefined;
   if (!row) return;
   let recipe: string[]; try { recipe = JSON.parse(row.recipe); } catch { recipe = []; }
   let times: Record<string, number>; try { times = JSON.parse(row.times); } catch { times = {}; }
   if (add.step) { recipe.push(add.step); if (add.time != null) times[add.step] = add.time; }
-  db().query("UPDATE runs SET recipe = ?, times = ?, quality = ? WHERE id = ?").run(JSON.stringify(recipe), JSON.stringify(times), add.quality ?? row.quality, id);
+  db().query("UPDATE runs SET recipe = ?, times = ?, quality = ?, review = ? WHERE id = ?").run(JSON.stringify(recipe), JSON.stringify(times), add.quality ?? row.quality, add.review ?? row.review ?? "", id);
 }
 
 // Route an incoming message to a run bucket. A message that names a DISTINCT task type opens a new run;
@@ -140,8 +148,8 @@ export function routeTask(taskType: string | null, current: string | null): { ta
   return { task: current ?? taskType, isNew: false };
 }
 
-const parseRun = (row: { task: string; ts: number; recipe: string; times: string; quality: number }): RunRecord => ({
-  task: row.task, ts: row.ts, quality: row.quality,
+const parseRun = (row: { task: string; ts: number; recipe: string; times: string; quality: number; review?: string }): RunRecord => ({
+  task: row.task, ts: row.ts, quality: row.quality, review: row.review ?? "",
   recipe: (() => { try { return JSON.parse(row.recipe); } catch { return []; } })(),
   times: (() => { try { return JSON.parse(row.times); } catch { return {}; } })(),
 });
@@ -149,11 +157,11 @@ const parseRun = (row: { task: string; ts: number; recipe: string; times: string
 // The n highest-quality prior runs for a task (the "look at the top 10" the optimizer screens).
 export function topRuns(task: string, n = 10): RunRecord[] {
   ensureRuns();
-  return (db().query("SELECT task, ts, recipe, times, quality FROM runs WHERE task = ? ORDER BY quality DESC, ts DESC LIMIT ?").all(task, n) as Parameters<typeof parseRun>[0][]).map(parseRun);
+  return (db().query("SELECT task, ts, recipe, times, quality, review FROM runs WHERE task = ? ORDER BY quality DESC, ts DESC LIMIT ?").all(task, n) as Parameters<typeof parseRun>[0][]).map(parseRun);
 }
 
 // The n most recent prior runs for a task.
 export function recentRuns(task: string, n = 10): RunRecord[] {
   ensureRuns();
-  return (db().query("SELECT task, ts, recipe, times, quality FROM runs WHERE task = ? ORDER BY ts DESC LIMIT ?").all(task, n) as Parameters<typeof parseRun>[0][]).map(parseRun);
+  return (db().query("SELECT task, ts, recipe, times, quality, review FROM runs WHERE task = ? ORDER BY ts DESC LIMIT ?").all(task, n) as Parameters<typeof parseRun>[0][]).map(parseRun);
 }

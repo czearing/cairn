@@ -9,15 +9,22 @@ import { db } from "./db";
 export interface CaseStat { id: string; uses: number; wins: number; losses: number; steps: number; lastUsed: number }
 
 let ready = false;
+// Create the sidecar if we can. On a READ-ONLY connection (hooks, read-only CLI) the CREATE throws;
+// we swallow it and leave `ready` false so a later writable call can still create the table. Callers
+// must tolerate the table being absent (they degrade to a neutral score), so search never depends on it.
 function ensure(): void {
   if (ready) return;
-  db().run("CREATE TABLE IF NOT EXISTS case_stats (id TEXT PRIMARY KEY, uses INTEGER NOT NULL DEFAULT 0, wins INTEGER NOT NULL DEFAULT 0, losses INTEGER NOT NULL DEFAULT 0, steps INTEGER NOT NULL DEFAULT 0, last_used INTEGER NOT NULL DEFAULT 0)");
-  ready = true;
+  try {
+    db().run("CREATE TABLE IF NOT EXISTS case_stats (id TEXT PRIMARY KEY, uses INTEGER NOT NULL DEFAULT 0, wins INTEGER NOT NULL DEFAULT 0, losses INTEGER NOT NULL DEFAULT 0, steps INTEGER NOT NULL DEFAULT 0, last_used INTEGER NOT NULL DEFAULT 0)");
+    ready = true;
+  } catch { /* read-only or unavailable: stats degrade to neutral, never fatal */ }
 }
 
 export function getStat(id: string): CaseStat | null {
   ensure();
-  return (db().query("SELECT id, uses, wins, losses, steps, last_used AS lastUsed FROM case_stats WHERE id = ?").get(id) as CaseStat | undefined) ?? null;
+  try {
+    return (db().query("SELECT id, uses, wins, losses, steps, last_used AS lastUsed FROM case_stats WHERE id = ?").get(id) as CaseStat | undefined) ?? null;
+  } catch { return null; } // table absent / unreadable -> treat as no history
 }
 
 // Record an outcome for a reused node. `outcome` is a GRADED quality score in [0,1] (a judge's rating
@@ -33,7 +40,10 @@ export function reinforce(id: string, outcome: number | boolean, steps: number, 
   const wins = (cur?.wins ?? 0) + s;
   const losses = (cur?.losses ?? 0) + (1 - s);
   const best = cur && cur.steps > 0 ? (steps > 0 ? Math.min(cur.steps, steps) : cur.steps) : steps;
-  db().run("INSERT OR REPLACE INTO case_stats (id, uses, wins, losses, steps, last_used) VALUES (?, ?, ?, ?, ?, ?)", id, uses, wins, losses, best, now);
+  // A read-only context (e.g. a hook) can't write; recording the outcome is best-effort, never fatal.
+  try {
+    db().run("INSERT OR REPLACE INTO case_stats (id, uses, wins, losses, steps, last_used) VALUES (?, ?, ?, ?, ?, ?)", id, uses, wins, losses, best, now);
+  } catch { /* outcome not recorded this time; the next writable run will */ }
 }
 
 // ---- Scoring (pure, no db) ----
@@ -69,17 +79,21 @@ export const SUCCESS_BAND = 0.15;
 // Never drops a result; a node with no history keeps a neutral baseline (unknown step count).
 export function rerank<T extends { id: string; score: number }>(results: T[], now: number): T[] {
   if (results.length < 2) return results;
-  ensure();
-  const st = new Map(results.map((r) => [r.id, getStat(r.id) ?? neutral(r.id, now)]));
-  return [...results].sort((ra, rb) => {
-    const a = st.get(ra.id)!, b = st.get(rb.id)!;
-    const sd = successRate(b) - successRate(a);
-    if (Math.abs(sd) > SUCCESS_BAND) return sd;
-    const as = a.steps > 0 ? a.steps : Infinity, bs = b.steps > 0 ? b.steps : Infinity;
-    if (as !== bs) return as - bs;
-    const rd = recency(b, now) - recency(a, now);
-    return Math.abs(rd) > 1e-9 ? rd : rb.score - ra.score;
-  });
+  // Effectiveness re-ranking is a BONUS on top of stage-1 relevance. If the stats sidecar is
+  // unavailable for any reason, fall back to the relevance order rather than failing the search.
+  try {
+    ensure();
+    const st = new Map(results.map((r) => [r.id, getStat(r.id) ?? neutral(r.id, now)]));
+    return [...results].sort((ra, rb) => {
+      const a = st.get(ra.id)!, b = st.get(rb.id)!;
+      const sd = successRate(b) - successRate(a);
+      if (Math.abs(sd) > SUCCESS_BAND) return sd;
+      const as = a.steps > 0 ? a.steps : Infinity, bs = b.steps > 0 ? b.steps : Infinity;
+      if (as !== bs) return as - bs;
+      const rd = recency(b, now) - recency(a, now);
+      return Math.abs(rd) > 1e-9 ? rd : rb.score - ra.score;
+    });
+  } catch { return results; } // never let stage-2 effectiveness break stage-1 relevance
 }
 
 // ---- Run log ----

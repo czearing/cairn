@@ -20,20 +20,25 @@ export function getStat(id: string): CaseStat | null {
   return (db().query("SELECT id, uses, wins, losses, steps, last_used AS lastUsed FROM case_stats WHERE id = ?").get(id) as CaseStat | undefined) ?? null;
 }
 
-// Record an outcome for a reused node. success bumps wins, else losses; `steps` keeps the LEANEST run
-// seen (the lean path is what we want to reinforce); `now` is a ms timestamp. Idempotent upsert.
-export function reinforce(id: string, success: boolean, steps: number, now: number): void {
+// Record an outcome for a reused node. `outcome` is a GRADED quality score in [0,1] (a judge's rating
+// of how good AND efficient the run was), or a boolean for the binary case (true=1, false=0). The score
+// accumulates into wins (and 1-score into losses), so `wins` is the sum of scores and the success rate
+// below is the MEAN score: an "adequate" run (~0.5) pulls the mean down just like a partial failure, so
+// adequate-and-slow loses to excellent-and-lean. `steps` keeps the leanest run seen. Idempotent upsert.
+export function reinforce(id: string, outcome: number | boolean, steps: number, now: number): void {
   ensure();
+  const s = outcome === true ? 1 : outcome === false ? 0 : Math.max(0, Math.min(1, outcome));
   const cur = getStat(id);
   const uses = (cur?.uses ?? 0) + 1;
-  const wins = (cur?.wins ?? 0) + (success ? 1 : 0);
-  const losses = (cur?.losses ?? 0) + (success ? 0 : 1);
+  const wins = (cur?.wins ?? 0) + s;
+  const losses = (cur?.losses ?? 0) + (1 - s);
   const best = cur && cur.steps > 0 ? (steps > 0 ? Math.min(cur.steps, steps) : cur.steps) : steps;
   db().run("INSERT OR REPLACE INTO case_stats (id, uses, wins, losses, steps, last_used) VALUES (?, ?, ?, ?, ?, ?)", id, uses, wins, losses, best, now);
 }
 
 // ---- Scoring (pure, no db) ----
-// Laplace prior so an unverified node sits at ~0.5, never an undeserved 1.0.
+// Mean quality score with a Laplace prior, so an unverified node sits at ~0.5, never an undeserved 1.0.
+// (wins is the sum of graded scores, wins+losses is the use count, so this is the average score.)
 export const successRate = (s: CaseStat): number => (s.wins + 1) / (s.wins + s.losses + 2);
 // Recency nudge in (0,1]: a recently-validated case surfaces first; mild, never dominates success.
 export function recency(s: CaseStat, now: number): number {

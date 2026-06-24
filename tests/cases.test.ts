@@ -53,3 +53,11 @@ test("growth: a fresh case's effScore rises with each verified reuse", () => {
     prev = e;
   }
 });
+
+test("graded scores: an EXCELLENT run beats an ADEQUATE one, even with more steps and less similarity", () => {
+  const exc = "exc-" + NOW, adq = "adq-" + NOW;
+  for (let i = 0; i < 8; i++) { reinforce(exc, 0.9, 7, NOW); reinforce(adq, 0.55, 3, NOW); } // exc better but slower
+  expect(successRate(getStat(exc)!)).toBeGreaterThan(successRate(getStat(adq)!)); // mean score, not pass/fail
+  const out = rerank([{ id: adq, score: 0.95 }, { id: exc, score: 0.90 }], NOW);
+  expect(out[0]!.id).toBe(exc); // quality gap beats both fewer steps and higher similarity; "adequate" loses
+});

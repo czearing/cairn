@@ -112,6 +112,24 @@ test("brain_search returns a lean shape: keeps id/text/answer/score, drops edges
   expect(hit).not.toHaveProperty("url"); // derivable from id; only on create/mutate returns
 });
 
+test("brain_search attaches compact prior/next context from the reasoning graph, not raw edges", async () => {
+  const root = parse(await call("brain_create", { text: "How do I brew espresso?" }));
+  const mid = parse(await call("brain_create", { text: "What grind size suits espresso?", edges: [root.id] }));
+  await call("brain_create", { text: "What pressure suits espresso?", edges: [mid.id] }); // a child of mid
+  await call("brain_mutate", { id: mid.id, answer: "Fine, near table-salt grind.", citation: "https://example.com/grind" });
+
+  const results = parse(await call("brain_search", { query: "espresso grind size" })) as Record<string, unknown>[];
+  const hit = results.find((r) => r.id === mid.id)!;
+  expect(hit).toBeTruthy();
+  // The agent recalls the fact AND where it sits in the reasoning: the question above and below it.
+  expect(hit.prior).toBe("How do I brew espresso?"); // parent, the question this came from
+  expect(hit.next).toBe("What pressure suits espresso?"); // child, where the reasoning went
+  expect(hit).not.toHaveProperty("edges"); // still no raw neighbor UUIDs
+  // No bloat: context is two short question strings, not the neighbors' full bodies.
+  expect((hit.prior as string).length).toBeLessThan(160);
+  expect((hit.next as string).length).toBeLessThan(160);
+});
+
 test("brain_search bounds the serialized result to CAIRN_SEARCH_BUDGET without erroring", async () => {
   // A fresh server with a tiny char budget and several big-answer nodes: the unbudgeted result would
   // overflow, but the budget must keep the call succeeding with the strongest matches whole.

@@ -15,7 +15,7 @@ const run = [
   ["01:14", "subagent proofread", "approved, 1 word swap"],
 ];
 console.log("  time  | step                                   | result");
-for (const [t, w, r] of run) console.log(`  ${t} | ${w.padEnd(38)} | ${r}`);
+for (const [t, w, r] of run) console.log(`  ${t} | ${(w ?? "").padEnd(38)} | ${r}`);
 
 // shared noisy judge: says A>B with logistic prob in the true gap; beta = judge skill.
 const judgeAwins = (qa: number, qb: number, beta: number) => rng() < 1 / (1 + Math.exp(-beta * (qa - qb)));

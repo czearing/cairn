@@ -81,3 +81,43 @@ export function rerank<T extends { id: string; score: number }>(results: T[], no
     return Math.abs(rd) > 1e-9 ? rd : rb.score - ra.score;
   });
 }
+
+// ---- Run log ----
+// case_stats above is the AGGREGATE per-node score (fast ranking). This is the per-RUN history a new run
+// inspects: each run's recipe (ordered step names), per-step times, and quality. Sidecar like case_stats
+// (no neurons/sync impact). `topRuns(task, n)` pulls the n best prior runs so the screen can diff their
+// recipes for candidate quality drivers, and the times give the bottleneck view.
+
+export interface RunRecord { task: string; ts: number; recipe: string[]; times: Record<string, number>; quality: number }
+
+let runsReady = false;
+function ensureRuns(): void {
+  if (runsReady) return;
+  db().run("CREATE TABLE IF NOT EXISTS runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT NOT NULL, ts INTEGER NOT NULL, recipe TEXT NOT NULL, times TEXT NOT NULL, quality REAL NOT NULL)");
+  db().run("CREATE INDEX IF NOT EXISTS runs_task_q ON runs (task, quality)");
+  runsReady = true;
+}
+
+// Append one completed run.
+export function logRun(r: RunRecord): void {
+  ensureRuns();
+  db().run("INSERT INTO runs (task, ts, recipe, times, quality) VALUES (?, ?, ?, ?, ?)", r.task, r.ts, JSON.stringify(r.recipe), JSON.stringify(r.times), r.quality);
+}
+
+const parseRun = (row: { task: string; ts: number; recipe: string; times: string; quality: number }): RunRecord => ({
+  task: row.task, ts: row.ts, quality: row.quality,
+  recipe: (() => { try { return JSON.parse(row.recipe); } catch { return []; } })(),
+  times: (() => { try { return JSON.parse(row.times); } catch { return {}; } })(),
+});
+
+// The n highest-quality prior runs for a task (the "look at the top 10" the optimizer screens).
+export function topRuns(task: string, n = 10): RunRecord[] {
+  ensureRuns();
+  return (db().query("SELECT task, ts, recipe, times, quality FROM runs WHERE task = ? ORDER BY quality DESC, ts DESC LIMIT ?").all(task, n) as Parameters<typeof parseRun>[0][]).map(parseRun);
+}
+
+// The n most recent prior runs for a task.
+export function recentRuns(task: string, n = 10): RunRecord[] {
+  ensureRuns();
+  return (db().query("SELECT task, ts, recipe, times, quality FROM runs WHERE task = ? ORDER BY ts DESC LIMIT ?").all(task, n) as Parameters<typeof parseRun>[0][]).map(parseRun);
+}

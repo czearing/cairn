@@ -1,35 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { embed, cosine } from "../core/embed";
-import { skillVectors, putSkill, getSkill } from "./store";
+import { skillVectors, getSkill, skillByLabel, insertSkillIfAbsent, normalizeLabel } from "./store";
 import type { Skill } from "./types";
+
+export { normalizeLabel };
 
 // Assigning a task to the right skill must be ACCURATE, because the skill id is the key that restores the
 // right reviewer conversation. Pure semantic matching is not enough: measured MiniLM cosines overlap for
 // close forms (a haiku vs a poem reach 0.696, inside the same-skill range), so a single threshold would
-// merge distinct skills or split a repeat. So the PRIMARY key is a normalized label: same label, same
-// skill, deterministically. Embedding is only a fallback for close rephrasings, gated ABOVE the measured
-// cross-form overlap so distinct forms can never merge. Calibrated in scripts/skill-threshold.ts.
+// merge distinct skills or split a repeat. So the PRIMARY key is the normalized label (an indexed, unique
+// exact match). Embedding is only a fallback for close rephrasings, gated ABOVE the measured cross-form
+// overlap so distinct forms can never merge. Calibrated in scripts/skill-threshold.ts.
 export const SKILL_THRESHOLD = Number(process.env.CAIRN_SKILL_THRESHOLD || "0.80"); // > measured 0.696 form overlap
 
-const LEAD_VERB = /^(?:write|compose|draft|make|create|generate|build)\s+(?:a|an|the)\s+/;
-
-/** Canonicalize a task label so phrasings of one task collapse: lowercase, drop a leading "write a"/
- *  "compose an", strip punctuation, collapse whitespace. "Write a Haiku!" and "haiku" both become "haiku". */
-export function normalizeLabel(task: string): string {
-  return task.toLowerCase().trim().replace(LEAD_VERB, "").replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-/** Match a task to an existing skill: exact normalized label first (deterministic restore key), then a
+/** Match a task to an existing skill: exact normalized-label first (deterministic restore key), then a
  *  high-threshold semantic fallback. Returns null to start a new skill. */
 export async function matchSkill(task: string): Promise<{ id: string; score: number; exact: boolean } | null> {
-  const norm = normalizeLabel(task);
-  const skills = skillVectors();
-  const exact = skills.find((s) => normalizeLabel(s.task) === norm);
+  const exact = skillByLabel(normalizeLabel(task));
   if (exact) return { id: exact.id, score: 1, exact: true };
   let q: number[];
   try { q = await embed(task); } catch { return null; } // embedder unavailable: exact-match only, never crash
   let best: { id: string; score: number; exact: boolean } | null = null;
-  for (const s of skills) {
+  for (const s of skillVectors()) {
     if (s.vec.length !== q.length) continue;
     const score = cosine(q, s.vec);
     if (!best || score > best.score) best = { id: s.id, score, exact: false };
@@ -37,14 +29,16 @@ export async function matchSkill(task: string): Promise<{ id: string; score: num
   return best && best.score >= SKILL_THRESHOLD ? best : null;
 }
 
-/** Categorize a task: return the matched skill, or create a new one. `now`/`newId` are injected so callers
- *  and tests stay deterministic. */
+/** Categorize a task: return the matched skill, or atomically create one. On a concurrent/retried create
+ *  for the same label, both callers re-read the single winner by label. `now`/`newId` are injected so
+ *  callers and tests stay deterministic. */
 export async function categorize(task: string, now: number, newId: () => string = randomUUID): Promise<{ skill: Skill; created: boolean }> {
   const m = await matchSkill(task);
   if (m) return { skill: getSkill(m.id)!, created: false };
   let q: number[] = [];
   try { q = await embed(task); } catch { /* store without a vector; the exact-label key still works */ }
-  const skill: Skill = { id: newId(), task, masterPrompt: "", ts: now };
-  putSkill(skill, q);
-  return { skill, created: true };
+  const candidate: Skill = { id: newId(), task, masterPrompt: "", ts: now };
+  insertSkillIfAbsent(candidate, q);
+  const stored = skillByLabel(normalizeLabel(task)) ?? candidate; // the unique winner of any race
+  return { skill: stored, created: stored.id === candidate.id };
 }

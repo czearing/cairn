@@ -9,7 +9,7 @@ import type { ClaudeOpts, ClaudeResult } from "./types";
 // command-line length limit. Every run is best-effort and NEVER throws.
 
 // CAIRN_CLAUDE_BIN overrides for non-standard installs; default resolves the platform launcher on PATH.
-const BIN = process.env.CAIRN_CLAUDE_BIN || (process.platform === "win32" ? "claude.exe" : "claude");
+export const BIN = process.env.CAIRN_CLAUDE_BIN || (process.platform === "win32" ? "claude.exe" : "claude");
 
 // Pure: assemble the argv (no prompt; the prompt goes on stdin). Exported for deterministic tests.
 export function buildArgs(opts: ClaudeOpts = {}): string[] {

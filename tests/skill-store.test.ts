@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns } from "../src/skill/store";
+import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel } from "../src/skill/store";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -44,4 +44,17 @@ test("addRun stores the reviewer's review with the run", () => {
   putSkill({ id: "s1", task: "t", masterPrompt: "", ts: 1 }, [1, 0]);
   addRun({ skillId: "s1", recipe: "r", quality: 0.7, review: "imagery flat on line 2", ts: 1 });
   expect(topRuns("s1")[0]!.review).toBe("imagery flat on line 2");
+});
+
+test("insertSkillIfAbsent is idempotent on the normalized label (no duplicate skills under a race)", () => {
+  insertSkillIfAbsent({ id: "A", task: "haiku", masterPrompt: "", ts: 1 }, [1, 0]);
+  insertSkillIfAbsent({ id: "B", task: "Write a Haiku", masterPrompt: "", ts: 2 }, [0, 1]); // same normalized label
+  expect(skillByLabel("haiku")!.id).toBe("A"); // first writer wins
+  expect(skillVectors().length).toBe(1);       // exactly one skill, no duplicate
+});
+
+test("skillByLabel resolves the exact restore key, null when absent", () => {
+  putSkill({ id: "s1", task: "write a sonnet", masterPrompt: "", ts: 1 }, [1, 0]);
+  expect(skillByLabel("sonnet")!.id).toBe("s1");
+  expect(skillByLabel("haiku")).toBeNull();
 });

@@ -41,6 +41,27 @@ export function all(): Neuron[] {
   return (db().query(SELECT).all() as Row[]).map(toNeuron);
 }
 
+/** A neuron's id, question text, and creation order (rowid). Enough to resolve a hit's edge neighbors
+ * to their question and recover parent/child direction, without loading answers or embeddings. */
+export interface NodeRef {
+  id: string;
+  text: string;
+  rowid: number;
+}
+
+// Fetch id/text/rowid for a set of ids in ONE query (id-keyed). Used to turn a search hit's edge ids
+// into the adjacent question text for result context; reads only the three light columns, never the
+// ~1.5KB embedding. rowid is creation order, which is how a parent (always created first) is told from
+// a child.
+export function refsByIds(ids: string[]): Map<string, NodeRef> {
+  const uniq = [...new Set(ids)].filter(Boolean);
+  if (!uniq.length) return new Map();
+  const rows = db()
+    .query(`SELECT id, text, rowid FROM neurons WHERE id IN (${uniq.map(() => "?").join(",")})`)
+    .all(...uniq) as NodeRef[];
+  return new Map(rows.map((r) => [r.id, r]));
+}
+
 // Edge edits read and write ONLY the `edges` column — never SELECT the row's embedding (a ~1.5KB
 // BLOB) just to append or drop one id. addEdge runs once per edge on every create, so pulling the
 // vector here put the embedding on the node-creation hot path for nothing.

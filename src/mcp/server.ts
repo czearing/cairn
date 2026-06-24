@@ -1,12 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { create, mutate, remove } from "../core/neurons";
+import { create, mutate, remove, refsByIds } from "../core/neurons";
 import { isClosedQuestion } from "../core/audit";
 import { search } from "../core/search";
-import { rerank } from "../core/cases";
 import { config } from "../core/config";
 import { fitToBudget } from "./budget";
+import { neighborContext } from "./context";
 import type { Neuron } from "../core/neurons.types";
 import type { ScoredResult } from "../core/search.types";
 
@@ -35,23 +35,28 @@ const leanHit = ({ id, text, answer, citation, score }: ScoredResult) => ({ id, 
 const SEARCH_LIMIT = Number(process.env.CAIRN_SEARCH_LIMIT || "0");
 
 // Character budget for the serialized result. NOT a result-count cap: results are filled most-relevant
-// -first until this budget is spent (see fitToBudget), so a query that hits a big cluster of similar
-// nodes returns the strongest matches whole instead of erroring the whole call by overflowing the
-// transport token ceiling. Default leaves headroom under the typical ~25k-token tool-output limit; set
-// CAIRN_SEARCH_BUDGET to retune, or 0 to disable.
-const SEARCH_BUDGET = Number(process.env.CAIRN_SEARCH_BUDGET ?? "90000");
+// -first until this budget is spent (see fitToBudget). Calibrated from real overflows: agent-facing
+// brain_search results of 66k and 140k chars both exceeded the host's tool-output token ceiling (~25k
+// tokens; dense JSON tokenizes near ~2.5 chars/token, so ~62k chars is the failing edge). 50k leaves
+// real headroom under that. Set CAIRN_SEARCH_BUDGET to retune, or 0 to disable.
+const SEARCH_BUDGET = Number(process.env.CAIRN_SEARCH_BUDGET ?? "50000");
 
 server.tool(
   "brain_search",
-  "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a `score` (0-1 cosine relevance): weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. Use this as much as possible to learn from previous thoughts",
+  "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a `score` (0-1 cosine relevance): weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. A result may also carry `prior`/`next`: the adjacent question above/below it in the brain's reasoning graph, for context. Use this as much as possible to learn from previous thoughts",
   { query: z.string().describe("What you are looking for, in natural language.") },
   async ({ query }) => {
-    // Stage 1 relevance (search), stage 2 effectiveness (rerank by outcome). Reorder only, never drop.
-    const hits = rerank(await search(query), Date.now());
+    // Relevance-ranked search (cosine, most-relevant-first).
+    const hits = await search(query);
     const capped = SEARCH_LIMIT > 0 ? hits.slice(0, SEARCH_LIMIT) : hits;
-    // Project to the lean shape (drop edges/url), then fit the ranked hits into the output budget
-    // (most-relevant-first) so a large result never overflows the transport and fails the whole call.
-    return json(fitToBudget(capped.map(leanHit), SEARCH_BUDGET));
+    // Resolve each hit's adjacent decomposition questions (prior = parent, next = child) to short text:
+    // a compact, useful use of edges (where a recalled thought sits in the reasoning flow) instead of
+    // raw neighbor UUIDs the agent can't act on. One batched lookup for every referenced neighbor.
+    const refs = refsByIds(capped.flatMap((h) => [h.id, ...h.edges]));
+    const withCtx = capped.map((h) => ({ ...leanHit(h), ...neighborContext(h, refs) }));
+    // Then fit the ranked hits into the output budget (most-relevant-first) so a large result never
+    // overflows the transport and fails the whole call.
+    return json(fitToBudget(withCtx, SEARCH_BUDGET));
   }
 );
 

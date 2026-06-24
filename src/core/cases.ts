@@ -51,17 +51,28 @@ export function effScore(s: CaseStat, now: number, minSteps: number): number {
 
 const neutral = (id: string, now: number): CaseStat => ({ id, uses: 0, wins: 0, losses: 0, steps: 0, lastUsed: now });
 
-// Re-rank relevant results by effectiveness. NEVER drops a result (no recall loss) — it only reorders,
-// so a node with no outcome history keeps a neutral baseline and is not unfairly buried. Ties break on
-// the original relevance score.
+// Success rates within this band are treated as "equally reliable", so the leaner path wins. Wide
+// enough that two genuinely-working paths tie and step-count decides; far narrower than the gap to a
+// failing path, so a low-quality shortcut can NEVER beat a working path on step-count alone.
+export const SUCCESS_BAND = 0.15;
+
+// Re-rank relevant results by effectiveness, LEXICOGRAPHICALLY so quality strictly dominates speed:
+//   1. clearly higher success rate wins (a path that skips an essential step and fails the gate can
+//      never be rescued by being shorter — the guardrail);
+//   2. among equally-reliable paths, FEWER known steps wins (gets leaner with practice — the growth);
+//   3. then most-recently-validated, then original relevance.
+// Never drops a result; a node with no history keeps a neutral baseline (unknown step count).
 export function rerank<T extends { id: string; score: number }>(results: T[], now: number): T[] {
   if (results.length < 2) return results;
   ensure();
-  const stats = new Map(results.map((r) => [r.id, getStat(r.id) ?? neutral(r.id, now)]));
-  const withSteps = [...stats.values()].filter((s) => s.steps > 0).map((s) => s.steps);
-  const minSteps = withSteps.length ? Math.min(...withSteps) : 1;
-  return [...results].sort((a, b) => {
-    const e = effScore(stats.get(b.id)!, now, minSteps) - effScore(stats.get(a.id)!, now, minSteps);
-    return e !== 0 ? e : b.score - a.score;
+  const st = new Map(results.map((r) => [r.id, getStat(r.id) ?? neutral(r.id, now)]));
+  return [...results].sort((ra, rb) => {
+    const a = st.get(ra.id)!, b = st.get(rb.id)!;
+    const sd = successRate(b) - successRate(a);
+    if (Math.abs(sd) > SUCCESS_BAND) return sd;
+    const as = a.steps > 0 ? a.steps : Infinity, bs = b.steps > 0 ? b.steps : Infinity;
+    if (as !== bs) return as - bs;
+    const rd = recency(b, now) - recency(a, now);
+    return Math.abs(rd) > 1e-9 ? rd : rb.score - ra.score;
   });
 }

@@ -18,3 +18,9 @@ export interface ClaudeOpts {
 
 /** Result of a CLI run. `ok` is false on any spawn error, timeout, or non-zero exit. */
 export interface ClaudeResult { ok: boolean; text: string }
+
+/** A reusable skill: a master prompt for a task family, matched semantically by its `task` text. */
+export interface Skill { id: string; task: string; masterPrompt: string; ts: number }
+
+/** One graded run under a skill: the compacted recipe, its quality, and the reviewer's notes. */
+export interface SkillRun { id?: number; skillId: string; recipe: string; quality: number; review: string; ts: number }

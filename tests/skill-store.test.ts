@@ -1,0 +1,47 @@
+import { test, expect, beforeEach } from "bun:test";
+import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns } from "../src/skill/store";
+import { db } from "../src/core/db";
+
+beforeEach(() => {
+  try { db().run("DELETE FROM skills"); } catch { /* not created yet */ }
+  try { db().run("DELETE FROM skill_runs"); } catch { /* not created yet */ }
+});
+
+test("putSkill/getSkill round-trips, vector decodes back", () => {
+  putSkill({ id: "s1", task: "write a haiku", masterPrompt: "draft then check 5-7-5", ts: 1 }, [0.1, 0.2, 0.3]);
+  expect(getSkill("s1")).toEqual({ id: "s1", task: "write a haiku", masterPrompt: "draft then check 5-7-5", ts: 1 });
+  const v = skillVectors().find((s) => s.id === "s1")!;
+  expect(v.vec[0]).toBeCloseTo(0.1, 5);
+  expect(v.vec.length).toBe(3);
+});
+
+test("setMasterPrompt replaces the prompt only", () => {
+  putSkill({ id: "s1", task: "t", masterPrompt: "old", ts: 1 }, [1, 0]);
+  setMasterPrompt("s1", "new master prompt");
+  expect(getSkill("s1")!.masterPrompt).toBe("new master prompt");
+  expect(getSkill("s1")!.task).toBe("t");
+});
+
+test("addRun keeps only the top N runs by quality", () => {
+  putSkill({ id: "s1", task: "t", masterPrompt: "", ts: 1 }, [1, 0]);
+  for (let i = 0; i < 14; i++) addRun({ skillId: "s1", recipe: `r${i}`, quality: i / 14, review: "", ts: 100 + i }, 10);
+  const top = topRuns("s1", 20);
+  expect(top.length).toBe(10);                                  // pruned to 10
+  expect(top[0]!.quality).toBeCloseTo(13 / 14, 5);              // best first
+  expect(top.every((r) => r.quality >= 4 / 14)).toBe(true);    // the four worst were dropped
+});
+
+test("topRuns is scoped per skill", () => {
+  putSkill({ id: "s1", task: "a", masterPrompt: "", ts: 1 }, [1, 0]);
+  putSkill({ id: "s2", task: "b", masterPrompt: "", ts: 1 }, [0, 1]);
+  addRun({ skillId: "s1", recipe: "ra", quality: 0.9, review: "", ts: 1 });
+  addRun({ skillId: "s2", recipe: "rb", quality: 0.8, review: "", ts: 1 });
+  expect(topRuns("s1").map((r) => r.recipe)).toEqual(["ra"]);
+  expect(topRuns("s2").map((r) => r.recipe)).toEqual(["rb"]);
+});
+
+test("addRun stores the reviewer's review with the run", () => {
+  putSkill({ id: "s1", task: "t", masterPrompt: "", ts: 1 }, [1, 0]);
+  addRun({ skillId: "s1", recipe: "r", quality: 0.7, review: "imagery flat on line 2", ts: 1 });
+  expect(topRuns("s1")[0]!.review).toBe("imagery flat on line 2");
+});

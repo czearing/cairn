@@ -12,7 +12,8 @@ let cached: string | null = null;
 
 export function cairnMcpConfigPath(): string {
   if (cached) return cached;
-  const server = fileURLToPath(new URL("../mcp/server.ts", import.meta.url));
+  // CAIRN_MCP_SERVER overrides for a packaged build where the server is not at the source-relative path.
+  const server = process.env.CAIRN_MCP_SERVER || fileURLToPath(new URL("../mcp/server.ts", import.meta.url));
   const cfg = { mcpServers: { cairn: { command: "bun", args: [server] } } };
   const path = join(tmpdir(), "cairn-skill-mcp.json");
   writeFileSync(path, JSON.stringify(cfg));

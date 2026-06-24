@@ -26,15 +26,15 @@ export function parseReview(raw: string | null | undefined): Review | null {
 /** Review `output` for the skill, with its top prior runs as context. Persists/restores the skill's
  *  reviewer session. Returns the verdict, or null if the run failed or did not produce valid JSON. */
 export async function reviewOutput(skillId: string, task: string, output: string, timeoutMs?: number): Promise<Review | null> {
-  const resuming = hasSession(skillId);
-  const res = await runClaude(reviewUserPrompt(task, output, topRuns(skillId, 10)), {
-    system: REVIEW_SYSTEM,
-    mcpConfigPath: cairnMcpConfigPath(),
-    allowedTools: ["mcp__cairn__brain_search"],
-    resume: resuming ? skillId : undefined,
-    sessionId: resuming ? undefined : skillId,
-    timeoutMs,
-  });
-  if (res.ok && !resuming) markSession(skillId); // session now exists; later reviews resume it
-  return parseReview(res.text);
+  const user = reviewUserPrompt(task, output, topRuns(skillId, 10));
+  const base = { system: REVIEW_SYSTEM, mcpConfigPath: cairnMcpConfigPath(), allowedTools: ["mcp__cairn__brain_search"], timeoutMs };
+  // Resume the skill's session if we started one. If resume fails (the user cleared their sessions, so the
+  // id is gone), fall through and restart it under the same id rather than breaking this skill forever.
+  if (hasSession(skillId)) {
+    const r = await runClaude(user, { ...base, resume: skillId });
+    if (r.ok) return parseReview(r.text);
+  }
+  const fresh = await runClaude(user, { ...base, sessionId: skillId });
+  if (fresh.ok) markSession(skillId);
+  return parseReview(fresh.text);
 }

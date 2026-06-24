@@ -8,7 +8,8 @@ import type { ClaudeOpts, ClaudeResult } from "./types";
 // still hands it the cairn brain server. The prompt is fed on stdin so a long conversation never hits the
 // command-line length limit. Every run is best-effort and NEVER throws.
 
-const BIN = process.platform === "win32" ? "claude.exe" : "claude";
+// CAIRN_CLAUDE_BIN overrides for non-standard installs; default resolves the platform launcher on PATH.
+const BIN = process.env.CAIRN_CLAUDE_BIN || (process.platform === "win32" ? "claude.exe" : "claude");
 
 // Pure: assemble the argv (no prompt; the prompt goes on stdin). Exported for deterministic tests.
 export function buildArgs(opts: ClaudeOpts = {}): string[] {

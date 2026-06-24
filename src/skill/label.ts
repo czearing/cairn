@@ -11,8 +11,9 @@ import { LABEL_SYSTEM, labelUserPrompt } from "./prompts";
 export function parseLabels(raw: string): string[] {
   const seen = new Set<string>(), out: string[] = [];
   for (const line of raw.split("\n")) {
-    const l = line.trim().replace(/^[-*\d.)\s]+/, "").replace(/^["'`]|["'`]$/g, "").trim().toLowerCase();
-    if (l && l.length <= 40 && !seen.has(l)) { seen.add(l); out.push(l); }
+    const l = line.trim().replace(/^[-*\d.)\s]+/, "").replace(/^["'`]+|["'`]+$/g, "").trim().toLowerCase();
+    // require a letter/digit so bullets, code fences (```), and pure punctuation never become labels.
+    if (l && l.length <= 40 && /[a-z0-9]/.test(l) && !seen.has(l)) { seen.add(l); out.push(l); }
   }
   return out;
 }

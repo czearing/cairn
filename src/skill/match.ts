@@ -26,7 +26,8 @@ export async function matchSkill(task: string): Promise<{ id: string; score: num
   const skills = skillVectors();
   const exact = skills.find((s) => normalizeLabel(s.task) === norm);
   if (exact) return { id: exact.id, score: 1, exact: true };
-  const q = await embed(task);
+  let q: number[];
+  try { q = await embed(task); } catch { return null; } // embedder unavailable: exact-match only, never crash
   let best: { id: string; score: number; exact: boolean } | null = null;
   for (const s of skills) {
     if (s.vec.length !== q.length) continue;
@@ -41,7 +42,8 @@ export async function matchSkill(task: string): Promise<{ id: string; score: num
 export async function categorize(task: string, now: number, newId: () => string = randomUUID): Promise<{ skill: Skill; created: boolean }> {
   const m = await matchSkill(task);
   if (m) return { skill: getSkill(m.id)!, created: false };
-  const q = await embed(task);
+  let q: number[] = [];
+  try { q = await embed(task); } catch { /* store without a vector; the exact-label key still works */ }
   const skill: Skill = { id: newId(), task, masterPrompt: "", ts: now };
   putSkill(skill, q);
   return { skill, created: true };

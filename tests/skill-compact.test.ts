@@ -34,8 +34,8 @@ test("compactionUserPrompt embeds the transcript", () => {
   expect(compactionUserPrompt("XYZ-CONVO")).toContain("XYZ-CONVO");
 });
 
-test("system prompt demands a cairn read, table-only output, and the three columns", () => {
-  expect(COMPACTION_SYSTEM).toContain("brain_search");
+test("system prompt demands table-only output with the three columns and no brain access", () => {
   expect(COMPACTION_SYSTEM).toContain("ONLY");
   expect(COMPACTION_SYSTEM).toContain("| timestamp | step | result |");
+  expect(COMPACTION_SYSTEM).not.toContain("brain_search"); // compaction is brain-free; only the reviewer uses cairn
 });

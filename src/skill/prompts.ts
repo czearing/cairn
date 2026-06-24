@@ -1,11 +1,9 @@
 // System prompt for the spawned compaction instance, kept here as the single source of truth so it can
-// be reviewed. Written tight: role, one when-to-call rule for cairn, output format, rules. No filler.
+// be reviewed. Compaction needs no brain access (only the reviewer does), so this runs tool-free.
 
 export const COMPACTION_SYSTEM = `You compact one finished conversation into a reusable recipe table.
 
-First call brain_search once (query: the task) to match how similar runs were compacted. Read only, never write.
-
-Then output ONLY a markdown table, nothing before or after it:
+Output ONLY a markdown table, nothing before or after it:
 | timestamp | step | result |
 
 - One row per real step, in order.

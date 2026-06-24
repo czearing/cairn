@@ -1,5 +1,4 @@
 import { runClaude } from "./claude";
-import { cairnMcpConfigPath } from "./cairn-mcp";
 import { COMPACTION_SYSTEM, compactionUserPrompt } from "./prompts";
 import type { CompactRow } from "./types";
 
@@ -20,15 +19,10 @@ export function parseTable(raw: string): CompactRow[] {
   return rows;
 }
 
-// Spawn a cairn-connected Claude (local CLI, no API key) to compact one conversation into a recipe table.
-// Read-only on the brain. Returns the structured rows plus the raw table text. Empty rows means the run
-// failed or produced no table.
+// Spawn a Claude (local CLI, no API key) to compact one conversation into a recipe table. Compaction
+// needs no brain access (only the reviewer does), so this runs tool-free and isolated. Returns the
+// structured rows plus the raw table text. Empty rows means the run failed or produced no table.
 export async function compactConversation(transcript: string, timeoutMs?: number): Promise<{ rows: CompactRow[]; raw: string }> {
-  const res = await runClaude(compactionUserPrompt(transcript), {
-    system: COMPACTION_SYSTEM,
-    mcpConfigPath: cairnMcpConfigPath(),
-    allowedTools: ["mcp__cairn__brain_search"],
-    timeoutMs,
-  });
+  const res = await runClaude(compactionUserPrompt(transcript), { system: COMPACTION_SYSTEM, timeoutMs });
   return { rows: parseTable(res.text), raw: res.text };
 }

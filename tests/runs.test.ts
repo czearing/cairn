@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { logRun, topRuns, recentRuns } from "../src/core/cases";
+import { logRun, topRuns, recentRuns, appendToRun, routeTask } from "../src/core/cases";
 import { db } from "../src/core/db";
 
 beforeEach(() => { try { db().run("DELETE FROM runs"); } catch { /* table not created yet */ } });
@@ -26,4 +26,30 @@ test("run log: recentRuns orders by timestamp", () => {
   logRun({ task: "t", ts: 9, recipe: [], times: {}, quality: 0.1 });
   logRun({ task: "t", ts: 7, recipe: [], times: {}, quality: 0.1 });
   expect(recentRuns("t", 2).map((r) => r.ts)).toEqual([9, 7]);
+});
+
+test("feedback appends to the EXISTING run, not a new one", () => {
+  const id = logRun({ task: "poem", ts: 1, recipe: ["creative", "draft"], times: { creative: 8, draft: 3 }, quality: 0.7 });
+  appendToRun(id, { step: "revise: sharper imagery (from critique)", time: 4, quality: 0.85 });
+  const runs = recentRuns("poem", 10);
+  expect(runs.length).toBe(1);                                         // still ONE run, extended in place
+  expect(runs[0]!.recipe).toEqual(["creative", "draft", "revise: sharper imagery (from critique)"]);
+  expect(runs[0]!.times["revise: sharper imagery (from critique)"]).toBe(4);
+  expect(runs[0]!.quality).toBe(0.85);
+});
+
+test("poem then haiku stay distinct; feedback lands on the right one", () => {
+  const poem = logRun({ task: "poem", ts: 1, recipe: ["creative"], times: { creative: 8 }, quality: 0.7 });
+  const haiku = logRun({ task: "haiku", ts: 2, recipe: ["syllable_575"], times: { syllable_575: 2 }, quality: 0.6 });
+  // a critique on the poem (route: not a new task type -> continue current "poem")
+  const r1 = routeTask(null, "poem");
+  expect(r1).toEqual({ task: "poem", isNew: false });
+  appendToRun(poem, { step: "revise per critique", time: 3 });
+  // a new haiku request mid-thread is a DISTINCT bucket, never merged into poem
+  const r2 = routeTask("haiku", "poem");
+  expect(r2).toEqual({ task: "haiku", isNew: true });
+  expect(topRuns("poem", 5).length).toBe(1);
+  expect(topRuns("haiku", 5).length).toBe(1);
+  expect(topRuns("poem", 5)[0]!.recipe).toContain("revise per critique");        // feedback on poem
+  expect(topRuns("haiku", 5)[0]!.recipe).not.toContain("revise per critique");    // not on haiku
 });

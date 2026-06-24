@@ -98,10 +98,32 @@ function ensureRuns(): void {
   runsReady = true;
 }
 
-// Append one completed run.
-export function logRun(r: RunRecord): void {
+// Append one completed run; returns its id so later feedback can append to THIS run, not a new one.
+export function logRun(r: RunRecord): number {
   ensureRuns();
-  db().run("INSERT INTO runs (task, ts, recipe, times, quality) VALUES (?, ?, ?, ?, ?)", r.task, r.ts, JSON.stringify(r.recipe), JSON.stringify(r.times), r.quality);
+  const info = db().query("INSERT INTO runs (task, ts, recipe, times, quality) VALUES (?, ?, ?, ?, ?)").run(r.task, r.ts, JSON.stringify(r.recipe), JSON.stringify(r.times), r.quality);
+  return Number(info.lastInsertRowid ?? 0);
+}
+
+// Append feedback (a critique-driven step + its time, and/or an updated quality) to an EXISTING run,
+// so a follow-up like "make the imagery darker" extends the recipe we already built instead of forking
+// a new one. No-op on an unknown id.
+export function appendToRun(id: number, add: { step?: string; time?: number; quality?: number }): void {
+  ensureRuns();
+  const row = db().query("SELECT recipe, times, quality FROM runs WHERE id = ?").get(id) as { recipe: string; times: string; quality: number } | undefined;
+  if (!row) return;
+  let recipe: string[]; try { recipe = JSON.parse(row.recipe); } catch { recipe = []; }
+  let times: Record<string, number>; try { times = JSON.parse(row.times); } catch { times = {}; }
+  if (add.step) { recipe.push(add.step); if (add.time != null) times[add.step] = add.time; }
+  db().query("UPDATE runs SET recipe = ?, times = ?, quality = ? WHERE id = ?").run(JSON.stringify(recipe), JSON.stringify(times), add.quality ?? row.quality, id);
+}
+
+// Route an incoming message to a run bucket. A message that names a DISTINCT task type opens a new run;
+// otherwise it is feedback and continues the current run. Keying on the discrete task type (not fuzzy
+// text similarity) is what keeps "poem" and "haiku" from merging into one confused thread.
+export function routeTask(taskType: string | null, current: string | null): { task: string | null; isNew: boolean } {
+  if (taskType && taskType !== current) return { task: taskType, isNew: true };
+  return { task: current ?? taskType, isNew: false };
 }
 
 const parseRun = (row: { task: string; ts: number; recipe: string; times: string; quality: number }): RunRecord => ({

@@ -19,17 +19,20 @@ export function normalizeLabel(task: string): string {
 let ready = false;
 function ensure(): void {
   if (ready) return;
-  db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', embedding BLOB, embedding_model TEXT, session_started INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)");
-  db().run("CREATE TABLE IF NOT EXISTS skill_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, recipe TEXT NOT NULL, quality REAL NOT NULL, review TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL)");
-  db().run("CREATE INDEX IF NOT EXISTS skill_runs_skill_q ON skill_runs (skill_id, quality)");
-  const cols = db().query("PRAGMA table_info(skills)").all() as { name: string }[]; // backfill older skills tables
-  if (!cols.some((c) => c.name === "session_started")) { try { db().run("ALTER TABLE skills ADD COLUMN session_started INTEGER NOT NULL DEFAULT 0"); } catch { /* concurrent */ } }
-  if (!cols.some((c) => c.name === "label_norm")) {
-    try { db().run("ALTER TABLE skills ADD COLUMN label_norm TEXT NOT NULL DEFAULT ''"); } catch { /* concurrent */ }
-    for (const r of db().query("SELECT id, task FROM skills WHERE label_norm = ''").all() as { id: string; task: string }[]) db().run("UPDATE skills SET label_norm = ? WHERE id = ?", normalizeLabel(r.task), r.id);
-  }
-  try { db().run("CREATE UNIQUE INDEX IF NOT EXISTS skills_label ON skills (label_norm)"); } catch { /* legacy duplicate labels: skip the unique guard */ }
-  ready = true;
+  ready = true; // set first: on a READ-ONLY connection (the hook) the DDL below throws, but reads against
+  //              already-created tables must still proceed, so we never retry the failed DDL.
+  try {
+    db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', embedding BLOB, embedding_model TEXT, session_started INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)");
+    db().run("CREATE TABLE IF NOT EXISTS skill_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, recipe TEXT NOT NULL, quality REAL NOT NULL, review TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL)");
+    db().run("CREATE INDEX IF NOT EXISTS skill_runs_skill_q ON skill_runs (skill_id, quality)");
+    const cols = db().query("PRAGMA table_info(skills)").all() as { name: string }[]; // backfill older skills tables
+    if (!cols.some((c) => c.name === "session_started")) db().run("ALTER TABLE skills ADD COLUMN session_started INTEGER NOT NULL DEFAULT 0");
+    if (!cols.some((c) => c.name === "label_norm")) {
+      db().run("ALTER TABLE skills ADD COLUMN label_norm TEXT NOT NULL DEFAULT ''");
+      for (const r of db().query("SELECT id, task FROM skills WHERE label_norm = ''").all() as { id: string; task: string }[]) db().run("UPDATE skills SET label_norm = ? WHERE id = ?", normalizeLabel(r.task), r.id);
+    }
+    db().run("CREATE UNIQUE INDEX IF NOT EXISTS skills_label ON skills (label_norm)");
+  } catch { /* read-only connection or legacy duplicate labels: reads still work against existing tables */ }
 }
 
 const SKILL_COLS = "id, task, label_norm, master_prompt, embedding, embedding_model, session_started, ts";
@@ -54,7 +57,7 @@ export function insertSkillIfAbsent(s: Skill, vec: number[]): void {
 const SELECT_SKILL = "SELECT id, task, master_prompt AS masterPrompt, ts FROM skills";
 export function getSkill(id: string): Skill | null {
   ensure();
-  return (db().query(`${SELECT_SKILL} WHERE id = ?`).get(id) as Skill | undefined) ?? null;
+  try { return (db().query(`${SELECT_SKILL} WHERE id = ?`).get(id) as Skill | undefined) ?? null; } catch { return null; }
 }
 
 /** The skill owning a normalized label, or null. The exact-match restore key, indexed and unique. */
@@ -75,11 +78,13 @@ export function skillLabels(): string[] {
   return (db().query("SELECT task FROM skills").all() as { task: string }[]).map((r) => r.task);
 }
 
-/** Every skill's id, task, and decoded vector, for semantic matching. */
+/** Every skill's id, task, and decoded vector, for semantic matching. Empty on a read-only/missing table. */
 export function skillVectors(): { id: string; task: string; vec: number[] }[] {
   ensure();
-  return (db().query("SELECT id, task, embedding FROM skills").all() as { id: string; task: string; embedding: unknown }[])
-    .map((r) => ({ id: r.id, task: r.task, vec: decodeVector(r.embedding) ?? [] }));
+  try {
+    return (db().query("SELECT id, task, embedding FROM skills").all() as { id: string; task: string; embedding: unknown }[])
+      .map((r) => ({ id: r.id, task: r.task, vec: decodeVector(r.embedding) ?? [] }));
+  } catch { return []; }
 }
 
 /** Has the reviewer started a persistent session for this skill? Decides --session-id vs --resume. */

@@ -1,5 +1,5 @@
 import { labelTasks } from "./label";
-import { categorize } from "./match";
+import { categorize, reindexSkill } from "./match";
 import { compactConversation } from "./compact";
 import { reviewOutput, assembleMaster } from "./reviewer";
 import { addRun, setMasterPrompt, skillLabels } from "./store";
@@ -36,7 +36,7 @@ export async function processRun(input: RunInput, now: number, deps: PipelineDep
     const score = verdict?.score ?? 0;
     addRun({ skillId: skill.id, recipe: raw, quality: score, review: verdict ? JSON.stringify(verdict) : "", ts: now });
     const master = await assemble(skill.id, task);
-    if (master) setMasterPrompt(skill.id, master);
+    if (master) { setMasterPrompt(skill.id, master); await reindexSkill(skill.id, task, master); }
     results.push({ skillId: skill.id, task, score, created });
   }
   return results;

@@ -22,11 +22,12 @@ function ensure(): void {
   ready = true; // set first: on a READ-ONLY connection (the hook) the DDL below throws, but reads against
   //              already-created tables must still proceed, so we never retry the failed DDL.
   try {
-    db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', embedding BLOB, embedding_model TEXT, session_started INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)");
+    db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', embedding BLOB, rich BLOB, embedding_model TEXT, session_started INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)");
     db().run("CREATE TABLE IF NOT EXISTS skill_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, recipe TEXT NOT NULL, quality REAL NOT NULL, review TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL)");
     db().run("CREATE INDEX IF NOT EXISTS skill_runs_skill_q ON skill_runs (skill_id, quality)");
     const cols = db().query("PRAGMA table_info(skills)").all() as { name: string }[]; // backfill older skills tables
     if (!cols.some((c) => c.name === "session_started")) db().run("ALTER TABLE skills ADD COLUMN session_started INTEGER NOT NULL DEFAULT 0");
+    if (!cols.some((c) => c.name === "rich")) db().run("ALTER TABLE skills ADD COLUMN rich BLOB"); // domain-vocab vector
     if (!cols.some((c) => c.name === "label_norm")) {
       db().run("ALTER TABLE skills ADD COLUMN label_norm TEXT NOT NULL DEFAULT ''");
       for (const r of db().query("SELECT id, task FROM skills WHERE label_norm = ''").all() as { id: string; task: string }[]) db().run("UPDATE skills SET label_norm = ? WHERE id = ?", normalizeLabel(r.task), r.id);
@@ -78,13 +79,21 @@ export function skillLabels(): string[] {
   return (db().query("SELECT task FROM skills").all() as { task: string }[]).map((r) => r.task);
 }
 
-/** Every skill's id, task, and decoded vector, for semantic matching. Empty on a read-only/missing table. */
-export function skillVectors(): { id: string; task: string; vec: number[] }[] {
+/** Every skill's id, task, label vector, and rich (label+master) vector. Assignment uses the clean label
+ *  vector; retrieval takes the max over both so domain vocabulary (e.g. "pull request") still matches.
+ *  Empty on a read-only/missing table. */
+export function skillVectors(): { id: string; task: string; vec: number[]; rich: number[] }[] {
   ensure();
   try {
-    return (db().query("SELECT id, task, embedding FROM skills").all() as { id: string; task: string; embedding: unknown }[])
-      .map((r) => ({ id: r.id, task: r.task, vec: decodeVector(r.embedding) ?? [] }));
+    return (db().query("SELECT id, task, embedding, rich FROM skills").all() as { id: string; task: string; embedding: unknown; rich: unknown }[])
+      .map((r) => ({ id: r.id, task: r.task, vec: decodeVector(r.embedding) ?? [], rich: decodeVector(r.rich) ?? [] }));
   } catch { return []; }
+}
+
+/** Store the rich (label + master prompt) retrieval vector, set when the master prompt is assembled. */
+export function setRichVector(id: string, vec: number[]): void {
+  ensure();
+  try { db().run("UPDATE skills SET rich = ? WHERE id = ?", encodeVector(vec), id); } catch { /* read-only */ }
 }
 
 /** Has the reviewer started a persistent session for this skill? Decides --session-id vs --resume. */

@@ -29,8 +29,11 @@ export async function retrieveSkills(query: string, k = RETRIEVE_K): Promise<{ s
   try { q = await embed(query); } catch { return []; }
   const scored: { id: string; score: number }[] = [];
   for (const s of skillVectors()) {
-    if (s.vec.length !== q.length) continue;
-    const score = cosine(q, s.vec);
+    // max over the clean label vector and the rich (label+master) vector, so a query phrased with domain
+    // vocabulary ("pull request description") still matches a skill labeled "pr description".
+    let score = -1;
+    if (s.vec.length === q.length) score = cosine(q, s.vec);
+    if (s.rich.length === q.length) score = Math.max(score, cosine(q, s.rich));
     if (score >= RETRIEVE_THRESHOLD) scored.push({ id: s.id, score });
   }
   scored.sort((a, b) => b.score - a.score);

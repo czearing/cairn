@@ -56,7 +56,13 @@ server.tool(
     const withCtx = capped.map((h) => ({ ...leanHit(h), ...neighborContext(h, refs) }));
     // Then fit the ranked hits into the output budget (most-relevant-first) so a large result never
     // overflows the transport and fails the whole call.
-    return json(fitToBudget(withCtx, SEARCH_BUDGET));
+    const thoughts = fitToBudget(withCtx, SEARCH_BUDGET);
+    // Piggyback: when CAIRN_SKILLS=1, surface the matching skill's curated steps as a SEPARATE blob (top-2,
+    // ~0.6% of the budget). Threshold-gated so an unrelated search returns none. Shape is unchanged (the
+    // bare array) unless a skill actually matches, so default consumers are untouched.
+    const { skillBlob } = await import("../skill/hook");
+    const skills = await skillBlob(query);
+    return json(skills.length ? { thoughts, skills } : thoughts);
   }
 );
 

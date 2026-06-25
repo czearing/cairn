@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { embed, cosine } from "../core/embed";
-import { skillVectors, getSkill, skillByLabel, insertSkillIfAbsent, normalizeLabel } from "./store";
+import { skillVectors, getSkill, skillByLabel, insertSkillIfAbsent, normalizeLabel, setRichVector } from "./store";
 import type { Skill } from "./types";
 
 export { normalizeLabel };
+
+// Rebuild the skill's rich retrieval vector from its label + master prompt, so retrieval matches the
+// domain vocabulary the master introduces. Called when the reviewer assembles a master. Best-effort.
+export async function reindexSkill(id: string, task: string, master: string): Promise<void> {
+  try { setRichVector(id, await embed(`${task}. ${master}`)); } catch { /* embedder down: keep the label vector */ }
+}
 
 // Assigning a task to the right skill must be ACCURATE, because the skill id is the key that restores the
 // right reviewer conversation. Pure semantic matching is not enough: measured MiniLM cosines overlap for

@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { parseReview } from "../src/skill/reviewer";
+import { parseReview, assembleMaster } from "../src/skill/reviewer";
 import { buildArgs } from "../src/skill/claude";
 import { putSkill, hasSession, markSession } from "../src/skill/store";
 import { db } from "../src/core/db";
@@ -41,4 +41,9 @@ test("session flag flips from start to resume", () => {
   expect(hasSession("sk")).toBe(false);   // first review starts the session
   markSession("sk");
   expect(hasSession("sk")).toBe(true);    // later reviews resume it
+});
+
+test("assembleMaster returns null with no prior runs and never spawns", async () => {
+  putSkill({ id: "empty", task: "haiku", masterPrompt: "", ts: 1 }, [1, 0]);
+  expect(await assembleMaster("empty", "haiku")).toBeNull(); // returns before any CLI call
 });

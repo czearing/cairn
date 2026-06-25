@@ -1,6 +1,6 @@
 import { runClaude } from "./claude";
 import { cairnMcpConfigPath } from "./cairn-mcp";
-import { REVIEW_SYSTEM, reviewUserPrompt } from "./prompts";
+import { REVIEW_SYSTEM, reviewUserPrompt, ASSEMBLE_SYSTEM, assembleUserPrompt } from "./prompts";
 import { topRuns, hasSession, markSession } from "./store";
 import type { Review } from "./types";
 
@@ -37,4 +37,25 @@ export async function reviewOutput(skillId: string, task: string, output: string
   const fresh = await runClaude(user, { ...base, sessionId: skillId });
   if (fresh.ok) markSession(skillId);
   return parseReview(fresh.text);
+}
+
+// Assemble the skill's master prompt from its top reviewed runs, in the reviewer's own session so it
+// carries that memory. Returns the prompt text, or null if there is nothing to assemble from or the run
+// failed. Never throws.
+export async function assembleMaster(skillId: string, task: string, timeoutMs?: number): Promise<string | null> {
+  const priors = topRuns(skillId, 10);
+  if (!priors.length) return null;
+  const resuming = hasSession(skillId);
+  const r = await runClaude(assembleUserPrompt(task, priors), {
+    system: ASSEMBLE_SYSTEM,
+    mcpConfigPath: cairnMcpConfigPath(),
+    allowedTools: ["mcp__cairn__brain_search"],
+    resume: resuming ? skillId : undefined,
+    sessionId: resuming ? undefined : skillId,
+    timeoutMs,
+  });
+  if (!r.ok) return null;
+  if (!resuming) markSession(skillId);
+  const text = r.text.trim();
+  return text || null;
 }

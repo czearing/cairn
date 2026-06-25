@@ -36,6 +36,22 @@ You may call brain_search to recall how this skill was reviewed before, and stay
 Output ONLY compact JSON, nothing else:
 {"score":<0..1>,"right":"what worked","wrong":"what failed","improve":"one concrete change"}`;
 
+// System prompt for assembling a skill's master prompt from its best reviewed runs (same session as the
+// reviewer, so it carries that memory). Quality over brevity: the master prompt is the reusable recipe.
+export const ASSEMBLE_SYSTEM = `You write the master prompt for a skill: the reusable instructions that reliably produce its best output, distilled from the runs you have reviewed.
+
+Output ONLY the master prompt itself, no preamble and no commentary.`;
+
+export function assembleUserPrompt(task: string, priors: { quality: number; review: string }[]): string {
+  const hist = priors.length ? priors.map((r) => `- q=${r.quality.toFixed(2)} ${r.review}`).join("\n") : "(none)";
+  return `Write the master prompt for: ${task}
+
+Base it on what consistently scored well across these reviewed runs:
+${hist}
+
+Output only the master prompt.`;
+}
+
 export function reviewUserPrompt(task: string, output: string, priors: { quality: number; recipe: string; review: string }[]): string {
   const history = priors.length
     ? priors.map((r) => `- q=${r.quality.toFixed(2)} recipe=${r.recipe} review=${r.review}`).join("\n")

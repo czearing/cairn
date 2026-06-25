@@ -19,10 +19,17 @@ export function parseTable(raw: string): CompactRow[] {
   return rows;
 }
 
+// Rebuild a clean markdown table from parsed rows, so a stored recipe never carries the model's stray
+// preamble even when it ignores "output only the table".
+export function renderTable(rows: CompactRow[]): string {
+  return ["| timestamp | step | result |", "| --- | --- | --- |", ...rows.map((r) => `| ${r.timestamp} | ${r.step} | ${r.result} |`)].join("\n");
+}
+
 // Spawn a Claude (local CLI, no API key) to compact one conversation into a recipe table. Compaction
 // needs no brain access (only the reviewer does), so this runs tool-free and isolated. Returns the
-// structured rows plus the raw table text. Empty rows means the run failed or produced no table.
+// structured rows plus a CLEAN reconstructed table (no model preamble). Empty rows means it produced none.
 export async function compactConversation(transcript: string, timeoutMs?: number): Promise<{ rows: CompactRow[]; raw: string }> {
   const res = await runClaude(compactionUserPrompt(transcript), { system: COMPACTION_SYSTEM, timeoutMs });
-  return { rows: parseTable(res.text), raw: res.text };
+  const rows = parseTable(res.text);
+  return { rows, raw: rows.length ? renderTable(rows) : res.text.trim() };
 }

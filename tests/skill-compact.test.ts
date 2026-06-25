@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { parseTable } from "../src/skill/compact";
+import { parseTable, renderTable } from "../src/skill/compact";
 import { compactionUserPrompt, COMPACTION_SYSTEM } from "../src/skill/prompts";
 
 const TABLE = `Here is the compaction:
@@ -32,6 +32,14 @@ test("parseTable keeps a header-looking data row that is not the real header", (
 
 test("compactionUserPrompt embeds the transcript", () => {
   expect(compactionUserPrompt("XYZ-CONVO")).toContain("XYZ-CONVO");
+});
+
+test("renderTable rebuilds a clean table that round-trips through parseTable", () => {
+  const rows = [{ timestamp: "00:00", step: "draft", result: "ok" }, { timestamp: "00:05", step: "revise", result: "sharper" }];
+  const t = renderTable(rows);
+  expect(t.startsWith("| timestamp | step | result |")).toBe(true);
+  expect(t).not.toContain("Here's"); // no model preamble can survive
+  expect(parseTable(t)).toEqual(rows);
 });
 
 test("system prompt demands table-only output with the three columns and no brain access", () => {

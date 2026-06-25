@@ -26,6 +26,10 @@ test("parseLabels: bullets, numbering, code fences, and pure punctuation never b
   expect(parseLabels("haiku\nhaiku\nHAIKU")).toEqual(["haiku"]);                  // dedupe + case
 });
 
+test("parseLabels drops echoed prompt scaffolding (<request> tags)", () => {
+  expect(parseLabels("<request>\npoem\nhaiku\n</request>")).toEqual(["poem", "haiku"]);
+});
+
 test("parseReview: out-of-range, missing, junk, and nested braces", () => {
   expect(parseReview('{"score":2,"right":"x"}')).toBeNull();
   expect(parseReview('{"right":"no score"}')).toBeNull();

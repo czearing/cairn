@@ -25,10 +25,12 @@ export function condenseMessages(messages: string[]): string {
 // score). Empty on no match or an embedder failure (never crashes).
 export async function retrieveSkills(query: string, k = RETRIEVE_K): Promise<{ skill: Skill; score: number }[]> {
   if (!query.trim()) return [];
+  const vecs = skillVectors();
+  if (!vecs.length) return []; // empty store: skip the embed entirely (the common default-on case early on)
   let q: number[];
   try { q = await embed(query); } catch { return []; }
   const scored: { id: string; score: number }[] = [];
-  for (const s of skillVectors()) {
+  for (const s of vecs) {
     // max over the clean label vector and the rich (label+master) vector, so a query phrased with domain
     // vocabulary ("pull request description") still matches a skill labeled "pr description".
     let score = -1;

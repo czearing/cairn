@@ -32,13 +32,14 @@ test("extractRun returns null on an unreadable path", () => {
   expect(extractRun(join(tmpdir(), "does-not-exist-cairn.jsonl"))).toBeNull();
 });
 
-test("the skill layer is OFF unless CAIRN_SKILLS=1", async () => {
+test("the skill layer is ON by default and OFF when CAIRN_SKILLS=0", () => {
   const prev = process.env.CAIRN_SKILLS;
   delete process.env.CAIRN_SKILLS;
-  expect(skillsEnabled()).toBe(false);
-  expect(await skillInject("write me a haiku")).toBe("");   // disabled -> no injection
+  expect(skillsEnabled()).toBe(true);                       // default on
+  process.env.CAIRN_SKILLS = "0";
+  expect(skillsEnabled()).toBe(false);                      // explicit opt-out
   expect(() => skillLearn("/some/path.jsonl")).not.toThrow(); // disabled -> no-op, never throws
-  if (prev !== undefined) process.env.CAIRN_SKILLS = prev;
+  if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
 });
 
 test("skillBlob piggyback: gated off, returns curated steps for a synonym query when on", async () => {
@@ -47,9 +48,9 @@ test("skillBlob piggyback: gated off, returns curated steps for a synonym query 
   setMasterPrompt(skill.id, master);
   await reindexSkill(skill.id, "commit message", master); // build the rich vector
   const prev = process.env.CAIRN_SKILLS;
-  delete process.env.CAIRN_SKILLS;
-  expect(await skillBlob("how to write a good commit message")).toEqual([]); // off
-  process.env.CAIRN_SKILLS = "1";
+  process.env.CAIRN_SKILLS = "0";
+  expect(await skillBlob("how to write a good commit message")).toEqual([]); // explicit off
+  delete process.env.CAIRN_SKILLS; // default on
   const blob = await skillBlob("how to write a good commit message");
   if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
   expect(blob[0]!.task).toBe("commit message");

@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel } from "../src/skill/store";
+import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills } from "../src/skill/store";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -57,4 +57,14 @@ test("skillByLabel resolves the exact restore key, null when absent", () => {
   putSkill({ id: "s1", task: "write a sonnet", masterPrompt: "", ts: 1 }, [1, 0]);
   expect(skillByLabel("sonnet")!.id).toBe("s1");
   expect(skillByLabel("haiku")).toBeNull();
+});
+
+test("listSkills returns each skill with its runs in chronological order (for the viewer)", () => {
+  putSkill({ id: "s1", task: "haiku", masterPrompt: "m", ts: 5 }, [1, 0]);
+  addRun({ skillId: "s1", recipe: "r1", quality: 0.8, review: "", ts: 1 });
+  addRun({ skillId: "s1", recipe: "r2", quality: 0.9, review: "", ts: 2 });
+  const list = listSkills();
+  expect(list.length).toBe(1);
+  expect(list[0]!.task).toBe("haiku");
+  expect(list[0]!.runs.map((r) => r.quality)).toEqual([0.8, 0.9]); // time order, not quality order
 });

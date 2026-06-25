@@ -17,6 +17,9 @@ async function handler(req: Request): Promise<Response> {
 
   if (pathname === "/api/neurons" && m === "GET") return Response.json({ neurons: all() });
   if (pathname === "/api/search") return Response.json({ results: await search(searchParams.get("q") || "") });
+  // Skill store viewer: what skills exist, their master prompts, and the score of each run over time.
+  if (pathname === "/api/skills" && m === "GET") { const { listSkills } = await import("../skill/store"); return Response.json({ skills: listSkills() }); }
+  if (pathname === "/skills") return asset("skills.html", "text/html; charset=utf-8");
 
   if (pathname === "/api/neurons" && m === "POST") {
     const b = (await req.json()) as Body;

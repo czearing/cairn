@@ -89,10 +89,10 @@ async function main(): Promise<void> {
     }
   }
 
-  // Skill layer, OFF unless CAIRN_SKILLS=1 so the default brain flow is untouched. On a user message,
-  // append the curated-steps injection for the matching skill(s); on turn end, fire background learning.
-  // Best-effort and isolated so it can never disrupt the turn.
-  if (process.env.CAIRN_SKILLS === "1") {
+  // Skill layer, ON by default (set CAIRN_SKILLS=0 to disable). On a user message, append the curated-steps
+  // injection for the matching skill(s); on turn end, fire background learning. Best-effort and isolated so
+  // it can never disrupt the turn, and it does no work until skills exist.
+  if (process.env.CAIRN_SKILLS !== "0") {
     try {
       const { skillInject, skillLearn } = await import("../../skill/hook");
       if (event.kind === "user_message") { const add = await skillInject(event.text); if (add) out = `${out}\n\n${add}`; }

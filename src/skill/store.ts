@@ -120,3 +120,13 @@ export function topRuns(skillId: string, n = 10): SkillRun[] {
   ensure();
   return db().query("SELECT id, skill_id AS skillId, recipe, quality, review, ts FROM skill_runs WHERE skill_id = ? ORDER BY quality DESC, ts DESC LIMIT ?").all(skillId, n) as SkillRun[];
 }
+
+/** Every skill with its runs in chronological order, for the viewer (what is in the store + how it has
+ *  changed over time). Read-only-tolerant. */
+export function listSkills(): (Skill & { runs: SkillRun[] })[] {
+  ensure();
+  try {
+    const skills = db().query("SELECT id, task, master_prompt AS masterPrompt, ts FROM skills ORDER BY ts DESC").all() as Skill[];
+    return skills.map((s) => ({ ...s, runs: db().query("SELECT id, skill_id AS skillId, recipe, quality, review, ts FROM skill_runs WHERE skill_id = ? ORDER BY ts ASC").all(s.id) as SkillRun[] }));
+  } catch { return []; }
+}

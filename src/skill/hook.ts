@@ -1,10 +1,10 @@
 import { retrieveInjection, retrieveSkills } from "./retrieve";
 import { learnFromTranscript } from "./learn";
 
-// Flag-gated entry points the Claude Code dispatch calls. The whole skill feature is OFF unless
-// CAIRN_SKILLS=1, so the default brain flow is never touched. Both are best-effort and never throw.
+// Entry points the Claude Code dispatch calls. The skill feature is ON by default; set CAIRN_SKILLS=0 to
+// turn it off. All are best-effort and never throw, and do no work when the skill store is empty.
 
-export const skillsEnabled = (): boolean => process.env.CAIRN_SKILLS === "1";
+export const skillsEnabled = (): boolean => process.env.CAIRN_SKILLS !== "0";
 
 // On a user message: return the curated-steps injection for the matching skill(s), or "" (disabled, no
 // match, or any error). The dispatch appends this to the brain's injected context.

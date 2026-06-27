@@ -47,6 +47,9 @@ export interface CairnConfig {
    * answer past this is rejected so one bloated node can't dominate search payloads or smother the
    * atomic-node discipline. Callers are told to write concisely or split into child nodes. */
   maxAnswerChars: number;
+  /** Whether the experimental skill-learning layer is active. OFF by default (a fresh install never runs it);
+   * opt in per machine with `"skills": true` in ~/.cairn/config.json or `CAIRN_SKILLS=1`. */
+  skills: boolean;
   /** Port the optional viewer serves on. */
   uiPort: number;
   /** Base URL of the viewer, used to build deep links (`/node/<id>`) to neurons. */

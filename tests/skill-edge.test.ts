@@ -1,7 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { parseTable } from "../src/skill/compact";
-import { parseLabels } from "../src/skill/label";
-import { parseReview } from "../src/skill/reviewer";
+import { parseReview, parseLearn } from "../src/skill/reviewer";
 import { normalizeLabel, categorize } from "../src/skill/match";
 import { putSkill } from "../src/skill/store";
 import { db } from "../src/core/db";
@@ -13,21 +11,17 @@ beforeEach(() => {
 
 // ---- parser hostility: a consumer LLM returns messy output; nothing should crash or yield garbage ----
 
-test("parseTable: header-only, ragged, empty, and CRLF inputs", () => {
-  expect(parseTable("| timestamp | step | result |\n|---|---|---|")).toEqual([]); // header + separator only
-  expect(parseTable("| a | b |\n| a | b | c | d |")).toEqual([]);                  // wrong column counts
-  expect(parseTable("")).toEqual([]);
-  expect(parseTable("| 00:01 | draft | ok |\r\n")).toEqual([{ timestamp: "00:01", step: "draft", result: "ok" }]); // \r stripped
+test("parseLearn: missing master section, missing label, and a normal split", () => {
+  expect(parseLearn(null)).toEqual({ label: null, review: null, master: null, explanation: null });
+  expect(parseLearn('{"label":"haiku","score":0.5,"right":"","wrong":"","improve":""}')).toMatchObject({ label: "haiku", master: null });
+  const both = parseLearn('{"label":"haiku","score":0.9,"right":"a","wrong":"b","improve":"c"}\n===MASTER===\nWhy.\n\n1. step');
+  expect(both.label).toBe("haiku");
+  expect(both.review?.score).toBe(0.9);
+  expect(both.master).toContain("1. step");
 });
 
-test("parseLabels: bullets, numbering, code fences, and pure punctuation never become labels", () => {
-  expect(parseLabels("```\n- Haiku\n2) Poem\n```")).toEqual(["haiku", "poem"]); // fences and bullets dropped
-  expect(parseLabels("***\n---\n`")).toEqual([]);                                 // pure punctuation -> nothing
-  expect(parseLabels("haiku\nhaiku\nHAIKU")).toEqual(["haiku"]);                  // dedupe + case
-});
-
-test("parseLabels drops echoed prompt scaffolding (<request> tags)", () => {
-  expect(parseLabels("<request>\npoem\nhaiku\n</request>")).toEqual(["poem", "haiku"]);
+test("parseLearn: empty label string is treated as no label (non-task)", () => {
+  expect(parseLearn('{"label":"","score":0.4,"right":"","wrong":"","improve":""}').label).toBeNull();
 });
 
 test("parseReview: out-of-range, missing, junk, and nested braces", () => {

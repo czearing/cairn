@@ -9,17 +9,21 @@ beforeEach(() => {
 
 test("putSkill/getSkill round-trips, vector decodes back", () => {
   putSkill({ id: "s1", task: "write a haiku", masterPrompt: "draft then check 5-7-5", ts: 1 }, [0.1, 0.2, 0.3]);
-  expect(getSkill("s1")).toEqual({ id: "s1", task: "write a haiku", masterPrompt: "draft then check 5-7-5", ts: 1 });
+  expect(getSkill("s1")).toEqual({ id: "s1", task: "write a haiku", masterPrompt: "draft then check 5-7-5", explanation: "", ts: 1 });
   const v = skillVectors().find((s) => s.id === "s1")!;
   expect(v.vec[0]).toBeCloseTo(0.1, 5);
   expect(v.vec.length).toBe(3);
 });
 
-test("setMasterPrompt replaces the prompt only", () => {
-  putSkill({ id: "s1", task: "t", masterPrompt: "old", ts: 1 }, [1, 0]);
-  setMasterPrompt("s1", "new master prompt");
+test("setMasterPrompt replaces the instructions; explanation is set only when passed", () => {
+  putSkill({ id: "s1", task: "t", masterPrompt: "old", explanation: "old why", ts: 1 }, [1, 0]);
+  setMasterPrompt("s1", "new master prompt");                  // no explanation arg: leave it untouched
   expect(getSkill("s1")!.masterPrompt).toBe("new master prompt");
+  expect(getSkill("s1")!.explanation).toBe("old why");
   expect(getSkill("s1")!.task).toBe("t");
+  setMasterPrompt("s1", "newer steps", "new why");             // explanation passed: replace both
+  expect(getSkill("s1")!.masterPrompt).toBe("newer steps");
+  expect(getSkill("s1")!.explanation).toBe("new why");
 });
 
 test("addRun keeps only the top N runs by quality", () => {

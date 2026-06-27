@@ -89,14 +89,17 @@ async function main(): Promise<void> {
     }
   }
 
-  // Skill layer, ON by default (set CAIRN_SKILLS=0 to disable). On a user message, append the curated-steps
-  // injection for the matching skill(s); on turn end, fire background learning. Best-effort and isolated so
-  // it can never disrupt the turn, and it does no work until skills exist.
-  if (process.env.CAIRN_SKILLS !== "0") {
+  // Skill layer, OFF by default (opt in with "skills": true in ~/.cairn/config.json or CAIRN_SKILLS=1). On a
+  // user message, append the curated-steps injection for the matching skill(s); on turn end, fire background
+  // learning. Best-effort and isolated so it can never disrupt the turn; the config read is cheap and gates
+  // the heavier skill/hook import so a default (skills-off) install pays almost nothing.
+  if ((await import("../../core/config")).skillsEnabled()) {
     try {
       const { skillInject, skillLearn } = await import("../../skill/hook");
-      if (event.kind === "user_message") { const add = await skillInject(event.text); if (add) out = `${out}\n\n${add}`; }
-      else if (event.kind === "turn_finished") skillLearn((payload as { transcript_path?: string }).transcript_path);
+      if (event.kind === "user_message") { const add = await skillInject(event.text, (payload as { session_id?: string }).session_id); if (add) out = `${out}\n\n${add}`; }
+      // A SubagentStop was remapped to "Stop" above for the brain-protocol enforcement, but the skill learner
+      // must NOT fire for it: a subagent is part of the parent task, so only the parent's Stop learns.
+      else if (event.kind === "turn_finished") skillLearn((payload as { transcript_path?: string }).transcript_path, hookName === "SubagentStop");
     } catch { /* skills are best-effort */ }
   }
 

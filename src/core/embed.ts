@@ -1,5 +1,8 @@
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { config } from "./config";
 import type { Embedder } from "./embed.types";
 
@@ -91,6 +94,63 @@ function embedder(): Promise<Embedder> {
   return _embedder;
 }
 
-export async function embed(text: string): Promise<number[]> {
+// In-process embedding (loads the model in THIS process). Used directly by the sidecar and as the fallback.
+export async function embedInProcess(text: string): Promise<number[]> {
   return (await embedder())(text);
+}
+
+export const LOCKFILE = join(homedir(), ".cairn", "embed-server.json");
+
+// Pure: is the sidecar described by this lockfile usable for the CURRENT model? It must have a port AND have
+// been started with the same model id, otherwise its vectors live in a different space than our queries (a
+// silent-wrong-match risk that search.ts can't catch when two models share a dimension). Returns the port or
+// null. Exported for tests.
+export function sidecarPort(lockJson: string, currentModel: string): number | null {
+  try {
+    const l = JSON.parse(lockJson) as { port?: number; model?: string };
+    return l.port && l.model === currentModel ? l.port : null;
+  } catch { return null; }
+}
+
+// Ask the warm sidecar to embed; null on any miss (no server, model mismatch, refused, slow, bad response).
+async function tryServer(text: string): Promise<number[] | null> {
+  let port: number | null;
+  try { port = sidecarPort(readFileSync(LOCKFILE, "utf8"), embedModel()); } catch { return null; }
+  if (!port) return null;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { vec?: number[] };
+    return Array.isArray(j.vec) && j.vec.length ? j.vec : null;
+  } catch { return null; }
+}
+
+let _spawned = false;
+function ensureServer(): void {
+  if (_spawned) return;
+  _spawned = true; // once per process: only the first cold call (server down) starts it
+  try {
+    const bin = process.platform === "win32" ? "bun.exe" : "bun";
+    const path = fileURLToPath(new URL("./embed-server.ts", import.meta.url));
+    spawn(bin, [path], { detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env } }).unref();
+  } catch { /* best-effort: the in-process fallback still serves this call */ }
+}
+
+// Public embed: prefer the warm sidecar (one shared model load across one-shot hook processes), else embed
+// in-process and start the sidecar for next time. Skipped for the API provider (no local model to warm) and
+// whenever CAIRN_EMBED_NO_SERVER=1 (the sidecar itself, and the test run).
+export async function embed(text: string): Promise<number[]> {
+  // Skip the sidecar for the API provider (no local model), when explicitly disabled (the sidecar itself),
+  // and for any throwaway/temp db (every test run uses one) so a test can never spawn or reach a sidecar,
+  // regardless of how a subprocess inherited its env.
+  if (config.embed.provider !== "local" || process.env.CAIRN_EMBED_NO_SERVER === "1" || config.dbPath.startsWith(tmpdir())) return embedInProcess(text);
+  const v = await tryServer(text);
+  if (v) return v;
+  ensureServer();
+  return embedInProcess(text);
 }

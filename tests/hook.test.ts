@@ -63,6 +63,14 @@ test("mutatedIdsThisTurn fails open (empty set) on a missing transcript", async 
   expect((await mutatedIdsThisTurn("C:/nope/does-not-exist.jsonl")).size).toBe(0);
 });
 
+test("tail-read still scopes to the current turn on a multi-megabyte transcript", async () => {
+  // >1 MiB of earlier history so the whole file cannot fit the tail window; the current turn is at the end.
+  const filler = Array.from({ length: 4000 }, (_, i) => asstText(`old line ${i} ` + "x".repeat(300)));
+  const p = transcript([userMsg("first"), toolUse("brain_search"), ...filler, userMsg("second"), toolUse("brain_mutate")]);
+  expect(await brainUsedThisTurn(p)).toBe(true);                 // finds this turn's brain_mutate via the tail
+  expect([...(await mutatedIdsThisTurn(transcript([userMsg("first"), ...filler, userMsg("second"), toolUseInput("brain_mutate", { id: "z9", answer: "a" })]))).values()]).toEqual(["z9"]);
+});
+
 test("turn_finished routing: unused brain, unsplit leaves, or done", () => {
   expect(matchEvent({ kind: "turn_finished", usedBrain: false, unsplit: 0 })).toEqual({ promptFile: "turn-reminder.md" });
   expect(matchEvent({ kind: "turn_finished", usedBrain: true, unsplit: 3 })).toEqual({ promptFile: "split-leaves.md" });

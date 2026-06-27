@@ -27,7 +27,7 @@
 </head>
 <body>
 <h1>Cairn Skills</h1>
-<p class="sub">What the agent has learned, and how each skill's quality moves over time. Auto-refreshes. <a href="/">brain &rarr;</a></p>
+<p class="sub">What the agent has learned, and how each skill's quality moves over time. Auto-refreshes. <a href="/activity">activity &rarr;</a> &middot; <a href="/">brain &rarr;</a></p>
 <div id="list"></div>
 <script>
 const fmtTs = (t) => t > 1e10 ? new Date(t).toLocaleString() : "#" + t;
@@ -47,10 +47,17 @@ function review(r) {
   try { const v = JSON.parse(r); return v.improve || v.wrong || ""; } catch { return ""; }
 }
 
+let lastJson = "";
 async function load() {
   const { skills } = await (await fetch("/api/skills")).json();
   const list = document.getElementById("list");
+  // Skip the rebuild when nothing changed, so the 5s auto-refresh never collapses an open master prompt.
+  const json = JSON.stringify(skills);
+  if (json === lastJson) return;
+  lastJson = json;
   if (!skills.length) { list.innerHTML = '<p class="empty">No skills yet. They appear after the agent finishes tasks.</p>'; return; }
+  // Remember which master prompts are expanded so a real data change does not snap them shut.
+  const open = new Set([...list.querySelectorAll("details[open]")].map((d) => d.dataset.skill));
   list.innerHTML = skills.map((s) => {
     const scores = s.runs.map((r) => r.quality);
     const last = scores.length ? scores[scores.length - 1].toFixed(2) : "n/a";
@@ -59,7 +66,7 @@ async function load() {
       <div class="row"><span class="task">${esc(s.task)}</span><span class="meta">${s.runs.length} run${s.runs.length === 1 ? "" : "s"} &middot; latest ${last}</span></div>
       ${sparkline(scores)}
       <div class="runs">${runs}</div>
-      ${s.masterPrompt ? `<details><summary>master prompt</summary><pre>${esc(s.masterPrompt)}</pre></details>` : '<div class="meta">no master prompt yet</div>'}
+      ${s.masterPrompt ? `<details data-skill="${esc(s.id)}"${open.has(s.id) ? " open" : ""}><summary>master prompt</summary><pre>${esc(s.masterPrompt)}</pre></details>` : '<div class="meta">no master prompt yet</div>'}
     </div>`;
   }).join("");
 }

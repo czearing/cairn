@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { condenseMessages, injectionText } from "../src/skill/retrieve";
+import { condenseMessages, injectionText, skillInstructions, explainInjection } from "../src/skill/retrieve";
 import { isSkillWorker, learnFromTranscript } from "../src/skill/learn";
 import type { Skill } from "../src/skill/types";
 
@@ -11,22 +11,38 @@ test("condenseMessages turns many messages into ONE bounded query (no per-messag
   expect(condenseMessages(["x".repeat(5000)]).length).toBe(2000);     // bounded
 });
 
-test("injectionText frames one skill's master prompt as curated steps; empty yields nothing", () => {
+test("instructions and explanation are separate inputs; injecting instructions alone omits the framing", () => {
   const skill: Skill = { id: "s", task: "haiku", masterPrompt: "draft 5-7-5, then sharpen the turn", ts: 1 };
-  const t = injectionText([skill]);
-  expect(t).toContain("haiku");
-  expect(t).toContain("draft 5-7-5, then sharpen the turn");
-  expect(t.toLowerCase()).toContain("curated");
-  expect(injectionText([{ ...skill, masterPrompt: "" }])).toBe("");
-  expect(injectionText([])).toBe("");
+  expect(skillInstructions([skill])).toBe("draft 5-7-5, then sharpen the turn"); // the given skill, no framing
+  const expl = explainInjection([skill]);
+  expect(expl.toLowerCase()).toContain("curated");
+  expect(expl).toContain("haiku");
+  expect(expl).not.toContain("draft 5-7-5");                       // explanation carries no instructions
+
+  const t = injectionText(skillInstructions([skill]), expl);       // composed: explanation above instructions
+  expect(t).toBe(`${expl}\n\ndraft 5-7-5, then sharpen the turn`);
+
+  expect(injectionText(skillInstructions([skill]))).toBe("draft 5-7-5, then sharpen the turn"); // only the skill
+  expect(injectionText(skillInstructions([{ ...skill, masterPrompt: "" }]))).toBe("");
+  expect(injectionText(skillInstructions([]))).toBe("");
 });
 
-test("injectionText draws from a related cluster when several skills match", () => {
-  const t = injectionText([
+test("a related cluster stacks instructions under task headers while the explanation names them", () => {
+  const skills: Skill[] = [
     { id: "1", task: "poem", masterPrompt: "vivid imagery, a turn", ts: 1 },
     { id: "2", task: "haiku", masterPrompt: "5-7-5, a kigo", ts: 1 },
-  ]);
-  expect(t).toContain("poem, haiku");      // names the related cluster
+  ];
+  const instr = skillInstructions(skills);
+  expect(instr).toContain("## poem");
+  expect(instr).toContain("vivid imagery");
+  expect(instr).toContain("5-7-5, a kigo");
+
+  const expl = explainInjection(skills);
+  expect(expl).toContain("poem, haiku");   // names the related cluster
+  expect(expl).not.toContain("vivid imagery");
+
+  const t = injectionText(instr, expl);
+  expect(t).toContain("poem, haiku");
   expect(t).toContain("vivid imagery");
   expect(t).toContain("5-7-5, a kigo");
 });

@@ -10,16 +10,17 @@ const uiPort = Number(process.env.CAIRN_UI_PORT || "3737");
 // the MCP server's env. Environment variables still win when set (tests, migration/CLI scripts). The
 // file path is overridable (CAIRN_CONFIG_PATH) so tests never read the real file.
 const configFilePath = process.env.CAIRN_CONFIG_PATH || join(homedir(), ".cairn", "config.json");
-function fileLibsql(): { url?: string; token?: string; localPath?: string; syncPeriod?: number } {
+function fileConfig(): { libsql?: { url?: string; token?: string; localPath?: string; syncPeriod?: number }; skills?: boolean } {
   try {
     if (!existsSync(configFilePath)) return {};
     const parsed = JSON.parse(readFileSync(configFilePath, "utf8"));
-    return parsed && typeof parsed === "object" && parsed.libsql ? parsed.libsql : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {}; // a malformed config file must never crash a process — fall back to env / local mode
   }
 }
-const fileCfg = fileLibsql();
+const parsedFile = fileConfig();
+const fileCfg = parsedFile.libsql && typeof parsedFile.libsql === "object" ? parsedFile.libsql : {};
 
 export const config: CairnConfig = {
   dbPath: process.env.CAIRN_DB_PATH || join(homedir(), ".cairn", "cairn.db"),
@@ -40,6 +41,16 @@ export const config: CairnConfig = {
   expandSubtree: process.env.CAIRN_SEARCH_EXPAND === "1", // off by default: return only direct matches
   maxAnswerChars: Number(process.env.CAIRN_MAX_ANSWER_CHARS || "2000"), // reject insanely verbose answers
 
+  // The skill layer is OFF by default so a fresh install never runs it. The file flag is the per-machine
+  // opt-in (env wins, applied live in skillsEnabled). Short-lived hooks read this from the config file,
+  // since they don't inherit the MCP server's env.
+  skills: parsedFile.skills === true,
+
   uiPort,
   uiUrl: process.env.CAIRN_UI_URL || `http://localhost:${uiPort}`,
 };
+
+/** Is the skill-learning layer active? OFF by default; CAIRN_SKILLS env wins (1 on / 0 off), else the
+ *  per-machine `skills` flag in ~/.cairn/config.json. Evaluated live so an env toggle takes effect at once. */
+export const skillsEnabled = (): boolean =>
+  process.env.CAIRN_SKILLS === "1" ? true : process.env.CAIRN_SKILLS === "0" ? false : config.skills;

@@ -14,28 +14,31 @@ export const BIN = process.env.CAIRN_CLAUDE_BIN || (process.platform === "win32"
 // Pure: assemble the argv (no prompt; the prompt goes on stdin). Exported for deterministic tests.
 export function buildArgs(opts: ClaudeOpts = {}): string[] {
   const args = ["-p", "--setting-sources", "project", "--output-format", "text"];
+  if (opts.model) args.push("--model", opts.model); // pin a faster model for the background learner
   if (opts.system) args.push("--append-system-prompt", opts.system);
   if (opts.mcpConfigPath) args.push("--mcp-config", opts.mcpConfigPath);
-  if (opts.resume) args.push("--resume", opts.resume);          // continue the skill's prior reviewer session
-  else if (opts.sessionId) args.push("--session-id", opts.sessionId); // or start it under a fixed id
   args.push("--allowedTools", (opts.allowedTools ?? []).join(",")); // empty string = no tools
   return args;
 }
 
-// Spawn the CLI, feed `prompt` on stdin, collect stdout, bounded by timeoutMs. Resolves { ok, text };
-// never rejects.
+// Spawn the CLI, feed `prompt` on stdin, collect stdout, bounded by timeoutMs. Resolves { ok, text, error };
+// never rejects. `error` carries the REAL reason a call failed (stderr, exit code, timeout, or spawn error)
+// so callers can report it instead of guessing.
 export function runClaude(prompt: string, opts: ClaudeOpts = {}): Promise<ClaudeResult> {
   const timeoutMs = opts.timeoutMs ?? 90_000;
   return new Promise((resolve) => {
-    let out = "", settled = false;
+    let out = "", err = "", settled = false;
     const done = (r: ClaudeResult) => { if (!settled) { settled = true; resolve(r); } };
+    const clip = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 300);
     let child: ReturnType<typeof spawn>;
-    try { child = spawn(BIN, buildArgs(opts), { stdio: ["pipe", "pipe", "ignore"] }); }
-    catch { return done({ ok: false, text: "" }); }
-    const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } done({ ok: false, text: out }); }, timeoutMs);
+    const bin = process.env.CAIRN_CLAUDE_BIN || BIN; // read at call time so tests can point it at a failing command
+    try { child = spawn(bin, buildArgs(opts), { stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: opts.env ? { ...process.env, ...opts.env } : undefined }); }
+    catch (e) { return done({ ok: false, text: "", error: `spawn failed: ${e instanceof Error ? e.message : String(e)}` }); }
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } done({ ok: false, text: out, error: `timed out after ${timeoutMs}ms` }); }, timeoutMs);
     child.stdout?.on("data", (d) => { out += String(d); });
-    child.on("error", () => { clearTimeout(timer); done({ ok: false, text: "" }); });
-    child.on("close", (code) => { clearTimeout(timer); done({ ok: code === 0, text: out }); });
+    child.stderr?.on("data", (d) => { err += String(d); });
+    child.on("error", (e) => { clearTimeout(timer); done({ ok: false, text: "", error: e.message }); });
+    child.on("close", (code) => { clearTimeout(timer); done(code === 0 ? { ok: true, text: out } : { ok: false, text: out, error: clip(err) || `exited with code ${code}` }); });
     try { child.stdin?.end(prompt); } catch { /* stdin closed early; close handler still fires */ }
   });
 }

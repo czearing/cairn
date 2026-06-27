@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { writeFileSync } from "node:fs";
 import { z } from "zod";
 import { create, mutate, remove, refsByIds } from "../core/neurons";
 import { isClosedQuestion } from "../core/audit";
@@ -57,9 +58,10 @@ server.tool(
     // Then fit the ranked hits into the output budget (most-relevant-first) so a large result never
     // overflows the transport and fails the whole call.
     const thoughts = fitToBudget(withCtx, SEARCH_BUDGET);
-    // Piggyback: when CAIRN_SKILLS=1, surface the matching skill's curated steps as a SEPARATE blob (top-2,
-    // ~0.6% of the budget). Threshold-gated so an unrelated search returns none. Shape is unchanged (the
-    // bare array) unless a skill actually matches, so default consumers are untouched.
+    // Piggyback: when the skill layer is enabled (skillsEnabled, off by default), surface the matching skill's
+    // curated steps as a SEPARATE blob (top-2, ~0.6% of the budget); skillBlob returns [] when it is off.
+    // Threshold-gated so an unrelated search returns none. Shape is unchanged (the bare array) unless a skill
+    // actually matches, so default consumers are untouched.
     const { skillBlob } = await import("../skill/hook");
     const skills = await skillBlob(query);
     return json(skills.length ? { thoughts, skills } : thoughts);
@@ -108,6 +110,41 @@ server.tool(
   "Delete a thought by id (removes it and detaches its edges from other thoughts). Use to clear duplicates or mistakes.",
   { id: z.string().describe("id of the thought to delete.") },
   async ({ id }) => json({ deleted: remove(id) })
+);
+
+// The LEARNER's submission tool. The learner reasons out loud to judge the run (reasoning makes it sharper
+// and is never suppressed), then hands its finished review here as structured fields. The skill loop reads
+// that JSON (via CAIRN_SKILL_OUTPUT_PATH) instead of parsing the master back out of free text. No-op
+// acknowledgement when no path is set.
+server.tool(
+  "skill_output",
+  "The learner submits its finished review here, ONCE, as the last action after reasoning out loud: the reusable task label (empty for a non-task), the 0..1 quality score, what worked / what failed / one concrete improvement, and the rewritten master prompt a future agent will load (empty when there is no label).",
+  {
+    label: z.string().describe("The reusable task label in 1-4 lowercase words, or empty string for a non-task."),
+    score: z.number().describe("Quality of the graded output, 0..1."),
+    right: z.string().describe("What the output did well."),
+    wrong: z.string().describe("What the output got wrong or missed."),
+    improve: z.string().describe("One concrete change for next time."),
+    master: z.string().describe("The rewritten master prompt: the numbered steps ONLY (no rationale paragraph), or empty when label is empty. This is the only text injected into the doer."),
+    explanation: z.string().describe("The 2-to-4-sentence rationale for the next reviewer (why the best runs win, what excellent looks like, the failure mode to avoid), or empty when label is empty. Never shown to the doer."),
+  },
+  async ({ label, score, right, wrong, improve, master, explanation }) => {
+    // Validate hard, then ERROR back so the learner resends correctly, never accept a half-formed review.
+    const lbl = label.trim();
+    const problems: string[] = [];
+    if (lbl) {
+      if (!Number.isFinite(score) || score < 0 || score > 1) problems.push("score must be a number in [0,1]");
+      if (!master.trim()) problems.push("master must be a non-empty rewritten prompt (numbered steps) for a labeled task");
+      if (!explanation.trim()) problems.push("explanation must be a non-empty rationale for a labeled task");
+      if (!right.trim() && !wrong.trim() && !improve.trim()) problems.push("provide at least one of right/wrong/improve");
+    } else if (master.trim() || explanation.trim()) {
+      problems.push("master and explanation must be empty when label is empty (a non-task forms no skill)");
+    }
+    if (problems.length) return fail(`skill_output rejected, call it again with every field correct: ${problems.join("; ")}`);
+    const p = process.env.CAIRN_SKILL_OUTPUT_PATH;
+    if (p) { try { writeFileSync(p, JSON.stringify({ label: lbl, score, right, wrong, improve, master, explanation })); } catch { /* capture is best-effort */ } }
+    return json({ ok: true });
+  }
 );
 
 await server.connect(new StdioServerTransport());

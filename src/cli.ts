@@ -104,6 +104,13 @@ switch (cmd) {
     console.log(`Cairn viewer → http://localhost:${server.port}`);
     break;
   }
+  case "skills": {
+    // A persistent window that narrates the background skill learner (which skill, the quality score,
+    // whether the master was rewritten), so it isn't a black box. Open it once and leave it running.
+    const { runMonitor } = await import("./skill/monitor");
+    await runMonitor({ once: process.argv.includes("--once") });
+    break;
+  }
   case "seed":
     await import("../examples/seed");
     break;
@@ -123,6 +130,7 @@ Usage:
   cairn compact     Reclaim freed space in the brain (safe; writes a backup first; stop the server first)
   cairn pref        Standing style/output preferences injected into every prompt (e.g. "no em dashes")
   cairn ui          Serve the read-only viewer (deep-linkable at /node/<id>)
+  cairn skills      Live monitor of the background skill learner (scores + master rewrites)
   cairn seed        Write a few demo neurons to the brain
 
 Config (env): CAIRN_DB_PATH, CAIRN_EMBED_PROVIDER, CAIRN_RELEVANCE_THRESHOLD …

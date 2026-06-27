@@ -22,12 +22,14 @@ function ensure(): void {
   ready = true; // set first: on a READ-ONLY connection (the hook) the DDL below throws, but reads against
   //              already-created tables must still proceed, so we never retry the failed DDL.
   try {
-    db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', embedding BLOB, rich BLOB, embedding_model TEXT, session_started INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)");
+    db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', explanation TEXT NOT NULL DEFAULT '', identity TEXT NOT NULL DEFAULT '', identity_vec BLOB, embedding BLOB, rich BLOB, embedding_model TEXT, ts INTEGER NOT NULL)");
     db().run("CREATE TABLE IF NOT EXISTS skill_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, recipe TEXT NOT NULL, quality REAL NOT NULL, review TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL)");
     db().run("CREATE INDEX IF NOT EXISTS skill_runs_skill_q ON skill_runs (skill_id, quality)");
     const cols = db().query("PRAGMA table_info(skills)").all() as { name: string }[]; // backfill older skills tables
-    if (!cols.some((c) => c.name === "session_started")) db().run("ALTER TABLE skills ADD COLUMN session_started INTEGER NOT NULL DEFAULT 0");
     if (!cols.some((c) => c.name === "rich")) db().run("ALTER TABLE skills ADD COLUMN rich BLOB"); // domain-vocab vector
+    if (!cols.some((c) => c.name === "explanation")) db().run("ALTER TABLE skills ADD COLUMN explanation TEXT NOT NULL DEFAULT ''"); // reviewer-only rationale, split out of master_prompt
+    if (!cols.some((c) => c.name === "identity")) db().run("ALTER TABLE skills ADD COLUMN identity TEXT NOT NULL DEFAULT ''"); // frozen purpose text, set once
+    if (!cols.some((c) => c.name === "identity_vec")) db().run("ALTER TABLE skills ADD COLUMN identity_vec BLOB"); // frozen purpose vector for the reuse guard
     if (!cols.some((c) => c.name === "label_norm")) {
       db().run("ALTER TABLE skills ADD COLUMN label_norm TEXT NOT NULL DEFAULT ''");
       for (const r of db().query("SELECT id, task FROM skills WHERE label_norm = ''").all() as { id: string; task: string }[]) db().run("UPDATE skills SET label_norm = ? WHERE id = ?", normalizeLabel(r.task), r.id);
@@ -36,9 +38,9 @@ function ensure(): void {
   } catch { /* read-only connection or legacy duplicate labels: reads still work against existing tables */ }
 }
 
-const SKILL_COLS = "id, task, label_norm, master_prompt, embedding, embedding_model, session_started, ts";
+const SKILL_COLS = "id, task, label_norm, master_prompt, explanation, embedding, embedding_model, ts";
 const SKILL_VALS = "?, ?, ?, ?, ?, ?, ?, ?";
-const skillRow = (s: Skill, vec: number[]) => [s.id, s.task, normalizeLabel(s.task), s.masterPrompt, encodeVector(vec), embedModel(), 0, s.ts] as const;
+const skillRow = (s: Skill, vec: number[]) => [s.id, s.task, normalizeLabel(s.task), s.masterPrompt, s.explanation ?? "", encodeVector(vec), embedModel(), s.ts] as const;
 
 /** Insert (or replace) a skill with its task embedding. Used for explicit puts; creation uses the atomic
  *  insertSkillIfAbsent below. */
@@ -55,7 +57,7 @@ export function insertSkillIfAbsent(s: Skill, vec: number[]): void {
   db().run(`INSERT OR IGNORE INTO skills (${SKILL_COLS}) VALUES (${SKILL_VALS})`, ...skillRow(s, vec));
 }
 
-const SELECT_SKILL = "SELECT id, task, master_prompt AS masterPrompt, ts FROM skills";
+const SELECT_SKILL = "SELECT id, task, master_prompt AS masterPrompt, explanation, ts FROM skills";
 export function getSkill(id: string): Skill | null {
   ensure();
   try { return (db().query(`${SELECT_SKILL} WHERE id = ?`).get(id) as Skill | undefined) ?? null; } catch { return null; }
@@ -67,10 +69,12 @@ export function skillByLabel(labelNorm: string): Skill | null {
   return (db().query(`${SELECT_SKILL} WHERE label_norm = ?`).get(labelNorm) as Skill | undefined) ?? null;
 }
 
-/** Replace a skill's master prompt (what the reviewer assembles and the doer reuses). */
-export function setMasterPrompt(id: string, masterPrompt: string): void {
+/** Replace a skill's master prompt (the instructions the doer reuses). Pass `explanation` to also replace
+ *  the reviewer-only rationale; omit it to leave the existing explanation untouched. */
+export function setMasterPrompt(id: string, masterPrompt: string, explanation?: string): void {
   ensure();
-  db().run("UPDATE skills SET master_prompt = ? WHERE id = ?", masterPrompt, id);
+  if (explanation === undefined) { db().run("UPDATE skills SET master_prompt = ? WHERE id = ?", masterPrompt, id); return; }
+  db().run("UPDATE skills SET master_prompt = ?, explanation = ? WHERE id = ?", masterPrompt, explanation, id);
 }
 
 /** Every skill's label (the `task` field), for biasing the labeler toward reuse. */
@@ -96,16 +100,29 @@ export function setRichVector(id: string, vec: number[]): void {
   try { db().run("UPDATE skills SET rich = ? WHERE id = ?", encodeVector(vec), id); } catch { /* read-only */ }
 }
 
-/** Has the reviewer started a persistent session for this skill? Decides --session-id vs --resume. */
-export function hasSession(id: string): boolean {
+/** The skill's frozen purpose vector (empty if never set). The reuse guard compares a run's content vector
+ *  to this to decide whether the run belongs to the skill or is a different task wearing the same label. */
+export function skillIdentityVector(id: string): number[] {
   ensure();
-  return ((db().query("SELECT session_started FROM skills WHERE id = ?").get(id) as { session_started?: number } | undefined)?.session_started ?? 0) === 1;
+  try {
+    const r = db().query("SELECT identity_vec FROM skills WHERE id = ?").get(id) as { identity_vec: unknown } | undefined;
+    return r ? (decodeVector(r.identity_vec) ?? []) : [];
+  } catch { return []; }
 }
 
-/** Mark the skill's reviewer session as started, so later reviews resume it. */
-export function markSession(id: string): void {
+/** Freeze the skill's purpose vector (and a short text label for it). Set once at a skill's first master
+ *  write or when a variant is minted; callers gate on skillIdentityVector being empty so it never drifts. */
+export function setIdentityVector(id: string, vec: number[], text = ""): void {
   ensure();
-  db().run("UPDATE skills SET session_started = 1 WHERE id = ?", id);
+  try { db().run("UPDATE skills SET identity_vec = ?, identity = CASE WHEN identity = '' THEN ? ELSE identity END WHERE id = ?", encodeVector(vec), text, id); } catch { /* read-only */ }
+}
+
+/** Skills sharing a base label: the exact base plus its numeric variants ("pr monitor" and "pr monitor (2)").
+ *  Used by the guard so repeated off-purpose runs of one family converge onto one variant, not many. */
+export function variantSkills(baseLabel: string): { id: string; task: string }[] {
+  ensure();
+  const base = normalizeLabel(baseLabel);
+  try { return db().query("SELECT id, task FROM skills WHERE label_norm = ? OR label_norm GLOB ?").all(base, `${base} [0-9]*`) as { id: string; task: string }[]; } catch { return []; }
 }
 
 /** Record a run under a skill, then prune to the top `keep` by quality (the reviewer's reference set). */
@@ -126,7 +143,7 @@ export function topRuns(skillId: string, n = 10): SkillRun[] {
 export function listSkills(): (Skill & { runs: SkillRun[] })[] {
   ensure();
   try {
-    const skills = db().query("SELECT id, task, master_prompt AS masterPrompt, ts FROM skills ORDER BY ts DESC").all() as Skill[];
+    const skills = db().query("SELECT id, task, master_prompt AS masterPrompt, explanation, ts FROM skills ORDER BY ts DESC").all() as Skill[];
     return skills.map((s) => ({ ...s, runs: db().query("SELECT id, skill_id AS skillId, recipe, quality, review, ts FROM skill_runs WHERE skill_id = ? ORDER BY ts ASC").all(s.id) as SkillRun[] }));
   } catch { return []; }
 }

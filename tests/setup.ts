@@ -17,3 +17,14 @@ process.env.CAIRN_RELATIVE_FLOOR = "0";
 // Point user preferences at a nonexistent temp path so tests never read or write the real
 // ~/.cairn/preferences.md. Prefs tests override this per-test with their own temp file.
 process.env.CAIRN_PREFS_PATH = join(tmpdir(), `cairn-test-noprefs-${randomUUID()}.md`);
+
+// Never spawn the embedding sidecar during tests: embed() stays purely in-process, so the suite leaves no
+// background server behind.
+process.env.CAIRN_EMBED_NO_SERVER = "1";
+
+// Point the concurrent-review coordination files at a throwaway dir so tests never touch ~/.cairn/inflight.
+process.env.CAIRN_INFLIGHT_DIR = join(tmpdir(), `cairn-test-inflight-${randomUUID()}`);
+
+// The skill layer is OFF by default in production now; turn it ON for the test run so the skill-feature
+// tests exercise the real path. The gating tests below toggle CAIRN_SKILLS locally to check both states.
+process.env.CAIRN_SKILLS = "1";

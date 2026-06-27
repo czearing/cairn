@@ -4,6 +4,7 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -30,7 +31,7 @@ const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.t
 
 test("exposes the brain tools", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_output"]);
 });
 
 test("brain_create returns a neuron with an id and a viewer url", async () => {
@@ -167,4 +168,52 @@ test("brain_delete removes a thought", async () => {
   const n = parse(await call("brain_create", { text: "to delete" }));
   expect(parse(await call("brain_delete", { id: n.id })).deleted).toBe(true);
   expect(parse(await call("brain_delete", { id: n.id })).deleted).toBe(false);
+});
+
+test("skill_output captures a valid review and HARD-rejects incomplete ones", async () => {
+  const outPath = join(tmpdir(), `cairn-out-${randomUUID()}.json`);
+  const transport = new StdioClientTransport({
+    command: "bun",
+    args: ["src/mcp/server.ts"],
+    env: { ...process.env, CAIRN_DB_PATH: join(tmpdir(), `cairn-so-${randomUUID()}.db`), CAIRN_SKILL_OUTPUT_PATH: outPath },
+  });
+  const c = new Client({ name: "cairn-so-test", version: "1.0.0" });
+  await c.connect(transport);
+  const call = (args: Record<string, unknown>) => c.callTool({ name: "skill_output", arguments: args }) as Promise<{ isError?: boolean; content: { text: string }[] }>;
+  try {
+    // A complete labeled review (master = steps, explanation = rationale) is accepted and written verbatim.
+    const review = { label: "haiku", score: 0.78, right: "clean cut", wrong: "stock imagery", improve: "fresher second image", master: "1. pick a kigo\n2. count 5-7-5", explanation: "The best runs cut two clean images and avoid stock phrasing." };
+    const ok = await call(review);
+    expect(JSON.parse(ok.content[0]!.text).ok).toBe(true);
+    expect(JSON.parse(readFileSync(outPath, "utf8"))).toEqual(review);
+
+    // A labeled review with NO master errors back, telling the learner to resend; it does not write.
+    try { rmSync(outPath); } catch { /* ignore */ }
+    const noMaster = await call({ ...review, master: "" });
+    expect(noMaster.isError).toBe(true);
+    expect(noMaster.content[0]!.text).toMatch(/master must be a non-empty/i);
+    expect(existsSync(outPath)).toBe(false); // nothing captured on rejection
+
+    // A labeled review with NO explanation errors back too (the reviewer-only rationale is required).
+    const noExplanation = await call({ ...review, explanation: "" });
+    expect(noExplanation.isError).toBe(true);
+    expect(noExplanation.content[0]!.text).toMatch(/explanation must be a non-empty/i);
+
+    // A score out of [0,1] is rejected.
+    const badScore = await call({ ...review, score: 1.7 });
+    expect(badScore.isError).toBe(true);
+    expect(badScore.content[0]!.text).toMatch(/score must be a number/i);
+
+    // An empty-label non-task that still carries a master is rejected.
+    const nonTaskWithMaster = await call({ label: "", score: 0, right: "", wrong: "", improve: "", master: "some steps", explanation: "" });
+    expect(nonTaskWithMaster.isError).toBe(true);
+    expect(nonTaskWithMaster.content[0]!.text).toMatch(/must be empty when label is empty/i);
+
+    // A genuine non-task (empty label, empty master and explanation) is accepted.
+    const nonTask = await call({ label: "", score: 0, right: "", wrong: "", improve: "", master: "", explanation: "" });
+    expect(JSON.parse(nonTask.content[0]!.text).ok).toBe(true);
+  } finally {
+    await c.close();
+    try { rmSync(outPath); } catch { /* ignore */ }
+  }
 });

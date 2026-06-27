@@ -85,6 +85,10 @@ function assertNotRealBrainInTests(dbPath: string): void {
 // only writes DDL when something is missing.
 function ensureSchema(query: (sql: string) => Stmt, exec: (sql: string) => void, wal: boolean): void {
   if (wal) exec("PRAGMA journal_mode = WAL");
+  // Block on a held write lock instead of failing instantly with SQLITE_BUSY. Without this, two concurrent
+  // writers (e.g. overlapping skill workers, or a worker plus the MCP server) lose most of their writes:
+  // measured 495/600 writes dropped. Writes are sub-millisecond, so the wait is only ever a brief queue.
+  exec("PRAGMA busy_timeout = 5000");
   const cols = query("PRAGMA table_info(neurons)").all() as { name: string }[];
   if (cols.length === 0) {
     exec(

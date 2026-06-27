@@ -8,45 +8,35 @@ beforeEach(() => {
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created */ }
 });
 
-test("processRun wires label -> categorize -> compact -> review -> store -> assemble", async () => {
-  const res = await processRun({ request: "write me a haiku about frost", transcript: "...", output: "..." }, 1, {
-    label: async () => ["haiku"],
-    compact: async () => ({ raw: "| t | s | r |" }),
-    review: async () => ({ score: 0.8, right: "vivid", wrong: "flat ending", improve: "sharpen line 3", raw: "{}" }),
-    assemble: async () => "MASTER PROMPT V1",
+test("processRun wires match -> learn (label + grade + master) -> categorize -> store", async () => {
+  const res = await processRun({ request: "write me a haiku about frost", transcript: "[user] frost\n[assistant] ok", output: "..." }, 1, {
+    match: async () => null,
+    learn: async () => ({ label: "haiku", review: { score: 0.8, right: "vivid", wrong: "flat ending", improve: "sharpen line 3", raw: "{}" }, master: "MASTER PROMPT V1", explanation: "RATIONALE V1" }),
   });
   expect(res[0]).toMatchObject({ task: "haiku", score: 0.8, created: true });
   const skill = skillByLabel("haiku")!;
-  expect(getSkill(skill.id)!.masterPrompt).toBe("MASTER PROMPT V1"); // master assembled and stored
+  expect(getSkill(skill.id)!.masterPrompt).toBe("MASTER PROMPT V1"); // instructions rewritten and stored
+  expect(getSkill(skill.id)!.explanation).toBe("RATIONALE V1");      // reviewer-only rationale stored separately
   const run = topRuns(skill.id)[0]!;
   expect(run.quality).toBe(0.8);
-  expect(run.recipe).toBe("| t | s | r |");      // compacted recipe stored
-  expect(run.review).toContain("flat ending");    // reviewer verdict stored with the run
+  expect(run.recipe).toBe("[user] frost\n[assistant] ok"); // the raw run transcript stored as the run's process
+  expect(run.review).toContain("flat ending"); // verdict stored with the run
 });
 
-test("processRun processes multiple skills serially into distinct skills", async () => {
-  const res = await processRun({ request: "a haiku and a poem", transcript: "x", output: "y" }, 1, {
-    label: async () => ["haiku", "poem"],
-    compact: async () => ({ raw: "table" }),
-    review: async (_s, t) => ({ score: t === "haiku" ? 0.7 : 0.6, right: "", wrong: "", improve: "", raw: "" }),
-    assemble: async () => null,
+test("the learner's label routes to, and reuses, the right skill", async () => {
+  const haikuLearn = async () => ({ label: "haiku", review: { score: 0.7, right: "", wrong: "", improve: "", raw: "" }, master: null, explanation: null });
+  await processRun({ request: "a haiku", transcript: "x", output: "y" }, 1, { match: async () => null, learn: haikuLearn });
+  await processRun({ request: "a poem", transcript: "x", output: "y" }, 2, { match: async () => null, learn: async () => ({ label: "poem", review: { score: 0.6, right: "", wrong: "", improve: "", raw: "" }, master: null, explanation: null }) });
+  await processRun({ request: "another haiku", transcript: "x", output: "y" }, 3, { match: async () => null, learn: haikuLearn });
+  expect(skillByLabel("haiku")!.id).not.toBe(skillByLabel("poem")!.id); // distinct labels -> distinct skills
+  expect(topRuns(skillByLabel("haiku")!.id).length).toBe(2);           // same label reused, no duplicate skill
+});
+
+test("processRun returns [] and creates no skill when the learner gives no label", async () => {
+  const res = await processRun({ request: "thanks, that's great!", transcript: "x", output: "y" }, 1, {
+    match: async () => null,
+    learn: async () => ({ label: null, review: null, master: null, explanation: null }), // non-task or failed call
   });
-  expect(res.map((r) => r.task)).toEqual(["haiku", "poem"]);
-  expect(skillByLabel("haiku")!.id).not.toBe(skillByLabel("poem")!.id);
-  expect(topRuns(skillByLabel("haiku")!.id)[0]!.quality).toBe(0.7);
-});
-
-test("processRun stores an ungraded run when the reviewer fails, never throws", async () => {
-  const res = await processRun({ request: "haiku", transcript: "x", output: "y" }, 1, {
-    label: async () => ["haiku"],
-    compact: async () => ({ raw: "t" }),
-    review: async () => null,        // reviewer unavailable
-    assemble: async () => null,
-  });
-  expect(res[0]!.score).toBe(0);
-  expect(topRuns(skillByLabel("haiku")!.id)[0]!.quality).toBe(0); // run still recorded
-});
-
-test("processRun returns [] when labeling yields nothing", async () => {
-  expect(await processRun({ request: "???", transcript: "", output: "" }, 1, { label: async () => [] })).toEqual([]);
+  expect(res).toEqual([]);
+  expect(skillByLabel("thanks that s great")).toBeNull();
 });

@@ -47,19 +47,58 @@ export async function retrieveSkill(query: string): Promise<{ skill: Skill; scor
   return (await retrieveSkills(query, 1))[0] ?? null;
 }
 
-// Format the matched skills' master prompts as the injected guidance shown to the agent. One skill reads
-// as "the" approach; several read as a related cluster to draw on.
-export function injectionText(skills: Skill[]): string {
+export interface RetrieveDiag { storeCount: number; embedOk: boolean; embedDim: number; threshold: number; top: { task: string; score: number }[] }
+
+// Explain a retrieval result, especially a 0-match: how many skills are in the store, whether the query
+// embedded (an embedder failure is the silent path that turns into a bare "0"), the embedding dimension (a
+// mismatch with the stored vectors zeroes every score), and the TOP raw scores even below threshold so a
+// near-miss is visible. Used by the injection debug log so "matched 0" is never a mystery.
+export async function retrieveDiagnostic(query: string): Promise<RetrieveDiag> {
+  const vecs = skillVectors();
+  let q: number[] = [], embedOk = false;
+  if (query.trim()) { try { q = await embed(query); embedOk = true; } catch { embedOk = false; } }
+  const top = vecs.map((s) => {
+    let score = -1;
+    if (q.length && s.vec.length === q.length) score = cosine(q, s.vec);
+    if (q.length && s.rich.length === q.length) score = Math.max(score, cosine(q, s.rich));
+    return { task: s.task, score };
+  }).sort((a, b) => b.score - a.score).slice(0, 5);
+  return { storeCount: vecs.length, embedOk, embedDim: q.length, threshold: RETRIEVE_THRESHOLD, top };
+}
+
+// The injected block has two parts, kept separate so a caller controls each on its own and can inject only
+// the skill itself: the INSTRUCTIONS (the curated master prompt, the given skill) and the EXPLANATION (the
+// framing that says what the block is and where it came from). injectionText composes whatever it is handed.
+
+// Just the skill instructions, no framing: one master prompt, or several stacked under task headers. This is
+// the "given skill" content and the only thing that must be injected.
+export function skillInstructions(skills: Skill[]): string {
   const withMaster = skills.filter((s) => s.masterPrompt.trim());
   if (!withMaster.length) return "";
-  if (withMaster.length === 1)
-    return `Curated steps for "${withMaster[0]!.task}", the most effective approach learned from prior successful runs. Follow them to accomplish the task:\n\n${withMaster[0]!.masterPrompt}`;
-  const blocks = withMaster.map((s) => `## ${s.task}\n${s.masterPrompt}`).join("\n\n");
-  return `Curated steps from related skills (${withMaster.map((s) => s.task).join(", ")}), learned from prior successful runs. Draw on what fits the task:\n\n${blocks}`;
+  if (withMaster.length === 1) return withMaster[0]!.masterPrompt;
+  return withMaster.map((s) => `## ${s.task}\n${s.masterPrompt}`).join("\n\n");
+}
+
+// The framing that explains what the instructions are. Separate from the instructions so it can be reworded
+// or dropped without touching the skill content. One skill reads as "the" approach; several as a cluster.
+export function explainInjection(skills: Skill[]): string {
+  const tasks = skills.filter((s) => s.masterPrompt.trim()).map((s) => s.task);
+  if (!tasks.length) return "";
+  if (tasks.length === 1)
+    return `Curated steps for "${tasks[0]}", the most effective approach learned from prior successful runs. Follow them to accomplish the task:`;
+  return `Curated steps from related skills (${tasks.join(", ")}), learned from prior successful runs. Draw on what fits the task:`;
+}
+
+// Compose the two separately-supplied parts into the final injected text. Instructions are required (no
+// instructions -> nothing injected); the explanation is optional framing placed above them. Pass only the
+// instructions to inject the given skill with no framing.
+export function injectionText(instructions: string, explanation = ""): string {
+  if (!instructions.trim()) return "";
+  return explanation.trim() ? `${explanation}\n\n${instructions}` : instructions;
 }
 
 // End to end: condense the turn's messages, retrieve the relevant skills, return the injection text (or null).
 export async function retrieveInjection(messages: string[]): Promise<string | null> {
   const skills = (await retrieveSkills(condenseMessages(messages))).map((x) => x.skill);
-  return injectionText(skills) || null;
+  return injectionText(skillInstructions(skills), explainInjection(skills)) || null;
 }

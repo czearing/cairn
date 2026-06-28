@@ -90,20 +90,25 @@ export async function processRunCoordinated(input: RunInput, session: string, no
   await coordinate(session, skill, input.output, input.transcript, {
     review: async (runs: ReadyRun[]) => {
       recordActivity({ ts: now, phase: "start", request: input.request });
-      const { skill: skillObj } = await categorize(skill, now);   // the skill already exists (it was injected)
-      const priors = topRuns(skillObj.id, 10);
-      const result = await reviewMany(input.request, runs.map((r) => ({ output: r.output, transcript: r.transcript })), skillLabels(), priors, skillObj.masterPrompt ?? "", skillObj.explanation ?? "");
-      const { review, master, explanation } = result;
-      if (result.failed || !review) {
+      // Priors for the learner come from the injected skill (its accumulated history). The learner then
+      // LABELS the turn, and that label, not the injected skill, decides where the result lands.
+      const { skill: injected } = await categorize(skill, now);
+      const priors = topRuns(injected.id, 10);
+      const result = await reviewMany(input.request, runs.map((r) => ({ output: r.output, transcript: r.transcript })), skillLabels(), priors, injected.masterPrompt ?? "", injected.explanation ?? "");
+      const { label, review, master, explanation } = result;
+      if (result.failed || !review || !label) {
         recordActivity({ ts: now, phase: result.failed ? "failed" : "skipped", request: input.request, error: result.error });
         return;
       }
-      // Purpose-guard the write target too: a coalesced rewrite that drifted off the skill's frozen purpose
-      // is routed to its own variant rather than clobbering the injected skill.
-      let target = skillObj, contentVec: number[] = [];
+      // Route the WRITE by the LEARNER'S label (the accurate classifier), NOT the embedding-matched injected
+      // skill. A debugging turn that merely injected "short story" must learn under "debugging" and never
+      // touch the story skill. The purpose guard still protects the resolved skill from an off-purpose rewrite.
+      let target: Skill, created: boolean, contentVec: number[] = [];
       if (master) {
         try { contentVec = await embedRequest(input.request); } catch { contentVec = []; }
-        if (contentVec.length) target = (await resolveForRun(skill, contentVec, now)).skill;
+        ({ skill: target, created } = contentVec.length ? await resolveForRun(label, contentVec, now) : await categorize(label, now));
+      } else {
+        ({ skill: target, created } = await categorize(label, now));
       }
       const conciseReview = JSON.stringify({ right: review.right, wrong: review.wrong, improve: review.improve });
       for (const r of runs) addRun({ skillId: target.id, recipe: r.transcript, quality: review.score, review: conciseReview, ts: now });
@@ -113,11 +118,11 @@ export async function processRunCoordinated(input: RunInput, session: string, no
         await reindexSkill(target.id, target.task, master);
       }
       recordActivity({
-        ts: now, phase: "learned", request: input.request, label: target.task, score: review.score, created: false, master: Boolean(master),
+        ts: now, phase: "learned", request: input.request, label: target.task, score: review.score, created, master: Boolean(master),
         review: { right: review.right, wrong: review.wrong, improve: review.improve },
         output: `${runs.length} concurrent run(s) merged: ` + input.output.slice(0, 400),
       });
-      out = [{ skillId: target.id, task: target.task, score: review.score, created: false }];
+      out = [{ skillId: target.id, task: target.task, score: review.score, created }];
     },
   });
   return out;

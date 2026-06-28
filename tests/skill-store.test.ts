@@ -1,10 +1,29 @@
 import { test, expect, beforeEach } from "bun:test";
-import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills } from "../src/skill/store";
+import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector } from "../src/skill/store";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
   try { db().run("DELETE FROM skills"); } catch { /* not created yet */ }
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created yet */ }
+});
+
+test("variantSkills matches minted variants by base_label, never an unrelated user label starting with the base", () => {
+  putSkill({ id: "base", task: "pr monitor", masterPrompt: "m", ts: 1 }, [1, 0]);
+  putSkill({ id: "user", task: "pr monitor 2024 audit", masterPrompt: "m", ts: 2 }, [0, 1]); // a real, unrelated user skill
+  expect(variantSkills("pr monitor").map((v) => v.task).sort()).toEqual(["pr monitor"]); // the user skill is NOT a variant
+  putSkill({ id: "v", task: "pr monitor (2)", masterPrompt: "m", ts: 3 }, [0, 0, 1]);
+  setBaseLabel("v", "pr monitor");                                  // a genuinely minted variant
+  expect(variantSkills("pr monitor").map((v) => v.task).sort()).toEqual(["pr monitor", "pr monitor (2)"]);
+});
+
+test("setIdentityVector freezes the vector once and never overwrites it", () => {
+  putSkill({ id: "s", task: "t", masterPrompt: "", ts: 1 }, [1, 0]);
+  setIdentityVector("s", [0.1, 0.2, 0.3], "first");
+  const v1 = skillIdentityVector("s");
+  expect(v1.length).toBe(3);
+  setIdentityVector("s", [0.9, 0.8, 0.7], "second");                // attempt to clobber a frozen identity
+  expect(skillIdentityVector("s")).toEqual(v1);                     // unchanged: it stays frozen
+  expect(skillIdentityVector("s")[0]).not.toBeCloseTo(0.9, 5);      // definitely not the second vector
 });
 
 test("putSkill/getSkill round-trips, vector decodes back", () => {

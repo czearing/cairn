@@ -54,13 +54,13 @@ export async function skillInject(text: string, sessionId?: string): Promise<str
   } catch { return ""; }
 }
 
-// On turn end: fire the background learner over the turn's transcript. Returns whether it fired. No-op when
-// disabled, with no path, or for a SUBAGENT's stop: a subagent is spawned to do part of the parent task (a
-// short-story master spawns a reviewer subagent), so its stop is not its own learnable turn. Learning from it
-// would run the learner twice and form a spurious sibling skill (the parent transcript already includes the
-// subagent's contribution, so nothing is lost by skipping it).
-export function skillLearn(transcriptPath: string | undefined, isSubagent = false): boolean {
-  if (!skillsEnabled() || !transcriptPath || isSubagent) return false;
+// On turn end, INCLUDING a subagent's stop: fire the background learner over that turn's transcript. A
+// subagent that did a real sub-task (e.g. the short-story reviewer the master spawns) has its OWN transcript
+// and produces a DISTINCT deliverable, so it is learned as its own skill in parallel with the parent's turn.
+// The learner classifies each by its deliverable, so the writer's turn forms "short story" and the reviewer's
+// forms "short story review" with no special-casing. Returns whether it fired.
+export function skillLearn(transcriptPath: string | undefined): boolean {
+  if (!skillsEnabled() || !transcriptPath) return false;
   try { learnFromTranscript(transcriptPath); return true; } catch { return false; }
 }
 

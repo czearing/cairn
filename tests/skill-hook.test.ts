@@ -111,13 +111,6 @@ test("a 0-match injection records WHY (store count, embed status, top scores) so
   }
 });
 
-test("skillLearn skips a SUBAGENT's stop, so spawning a subagent never triggers a second learner", () => {
-  const prev = process.env.CAIRN_SKILLS;
-  process.env.CAIRN_SKILLS = "1";                             // skills explicitly ON, so the skip is what stops it
-  expect(skillLearn("/some/transcript.jsonl", true)).toBe(false);  // isSubagent -> skipped, never spawns the learner
-  if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
-});
-
 test("skillBlob piggyback: gated off, returns curated steps for a synonym query when on", async () => {
   const master = "imperative subject under 50 chars, explain what changed and why";
   const { skill } = await categorize("commit message", 1);

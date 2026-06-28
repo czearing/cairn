@@ -12,6 +12,7 @@
   .sub a { color: inherit; }
   .now { display: flex; align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--c-cyan) 50%, transparent); background: color-mix(in srgb, var(--c-cyan) 10%, transparent); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; }
   .now .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c-cyan); animation: pulse 1.2s ease-in-out infinite; flex: none; }
+  .runcount { font-size: 12px; font-weight: 650; color: var(--c-cyan); margin: 0 0 8px; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
   .card { border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
   .card.skip { opacity: .55; }
@@ -84,10 +85,15 @@ async function load() {
   if (json === lastJson) return; // skip rebuild so an open "reasoning" panel doesn't snap shut
   lastJson = json;
 
+  // A "start" opens a run; a terminal event (learned/failed/skipped) sharing its ts closes it. Every start
+  // with no matching terminal is an agent still RUNNING. Learners run in parallel, so show ALL of them, not
+  // just the latest.
+  const closedTs = new Set(acts.filter((e) => e.phase !== "start").map((e) => e.ts));
+  const running = acts.filter((e) => e.phase === "start" && !closedTs.has(e.ts));
   const nowEl = document.getElementById("now");
-  const processing = acts[0] && acts[0].phase === "start" ? acts[0] : null;
-  nowEl.innerHTML = processing
-    ? `<div class="now"><span class="dot"></span><span>Reviewing your last turn… <span style="opacity:.7">${esc(clip(processing.request, 80))}</span></span></div>`
+  nowEl.innerHTML = running.length
+    ? (running.length > 1 ? `<p class="runcount">${running.length} agents running in parallel</p>` : "")
+      + running.map((p) => `<div class="now"><span class="dot"></span><span>reviewing <span style="opacity:.7">${esc(clip(p.request, 80))}</span></span></div>`).join("")
     : "";
 
   const done = acts.filter((e) => e.phase !== "start");

@@ -43,6 +43,10 @@ export function extractRun(path: string): RunInput | null {
 
   // Request = the user prompt(s) that opened this turn (successive messages batched). Output = the last
   // assistant message of the turn. Transcript = just this turn, capped.
+  // Request = the user prompt(s) that opened this turn; output = the last assistant message; transcript = this
+  // turn, capped. No content filtering here: classifying what a turn is (a real task, a system-event reply, a
+  // non-task) is the LEARNER's job, which reads the deliverable and assigns the label or an empty one. A bare
+  // string filter here would be a guess that the intelligent layer already makes better.
   const request = turn.filter((t) => t.role === "user").map((t) => t.text).join("\n").trim();
   const output = [...turn].reverse().find((t) => t.role === "assistant")?.text ?? "";
   if (!request || !output) return null;

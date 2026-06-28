@@ -22,7 +22,7 @@ function ensure(): void {
   ready = true; // set first: on a READ-ONLY connection (the hook) the DDL below throws, but reads against
   //              already-created tables must still proceed, so we never retry the failed DDL.
   try {
-    db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', explanation TEXT NOT NULL DEFAULT '', identity TEXT NOT NULL DEFAULT '', identity_vec BLOB, embedding BLOB, rich BLOB, embedding_model TEXT, ts INTEGER NOT NULL)");
+    db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', explanation TEXT NOT NULL DEFAULT '', identity TEXT NOT NULL DEFAULT '', identity_vec BLOB, base_label TEXT NOT NULL DEFAULT '', embedding BLOB, rich BLOB, embedding_model TEXT, ts INTEGER NOT NULL)");
     db().run("CREATE TABLE IF NOT EXISTS skill_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, recipe TEXT NOT NULL, quality REAL NOT NULL, review TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL)");
     db().run("CREATE INDEX IF NOT EXISTS skill_runs_skill_q ON skill_runs (skill_id, quality)");
     const cols = db().query("PRAGMA table_info(skills)").all() as { name: string }[]; // backfill older skills tables
@@ -30,6 +30,7 @@ function ensure(): void {
     if (!cols.some((c) => c.name === "explanation")) db().run("ALTER TABLE skills ADD COLUMN explanation TEXT NOT NULL DEFAULT ''"); // reviewer-only rationale, split out of master_prompt
     if (!cols.some((c) => c.name === "identity")) db().run("ALTER TABLE skills ADD COLUMN identity TEXT NOT NULL DEFAULT ''"); // frozen purpose text, set once
     if (!cols.some((c) => c.name === "identity_vec")) db().run("ALTER TABLE skills ADD COLUMN identity_vec BLOB"); // frozen purpose vector for the reuse guard
+    if (!cols.some((c) => c.name === "base_label")) db().run("ALTER TABLE skills ADD COLUMN base_label TEXT NOT NULL DEFAULT ''"); // base of a minted "<label> (N)" variant; empty for a base skill
     if (!cols.some((c) => c.name === "label_norm")) {
       db().run("ALTER TABLE skills ADD COLUMN label_norm TEXT NOT NULL DEFAULT ''");
       for (const r of db().query("SELECT id, task FROM skills WHERE label_norm = ''").all() as { id: string; task: string }[]) db().run("UPDATE skills SET label_norm = ? WHERE id = ?", normalizeLabel(r.task), r.id);
@@ -110,19 +111,28 @@ export function skillIdentityVector(id: string): number[] {
   } catch { return []; }
 }
 
-/** Freeze the skill's purpose vector (and a short text label for it). Set once at a skill's first master
- *  write or when a variant is minted; callers gate on skillIdentityVector being empty so it never drifts. */
+/** Freeze the skill's purpose vector (and a short text label for it). Set ONCE: the vector is written only
+ *  when it is still NULL, so a skill's frozen identity can never drift or be clobbered (even if a caller
+ *  mistakenly calls this on an already-frozen skill). The identity text is likewise preserved once set. */
 export function setIdentityVector(id: string, vec: number[], text = ""): void {
   ensure();
-  try { db().run("UPDATE skills SET identity_vec = ?, identity = CASE WHEN identity = '' THEN ? ELSE identity END WHERE id = ?", encodeVector(vec), text, id); } catch { /* read-only */ }
+  try { db().run("UPDATE skills SET identity_vec = COALESCE(identity_vec, ?), identity = CASE WHEN identity = '' THEN ? ELSE identity END WHERE id = ?", encodeVector(vec), text, id); } catch { /* read-only */ }
 }
 
-/** Skills sharing a base label: the exact base plus its numeric variants ("pr monitor" and "pr monitor (2)").
- *  Used by the guard so repeated off-purpose runs of one family converge onto one variant, not many. */
+/** Mark a skill as a minted variant of `baseLabel` (its normalized base), so variantSkills can find it
+ *  without a label-pattern match that would catch unrelated user labels like "pr monitor 2024". */
+export function setBaseLabel(id: string, baseLabelNorm: string): void {
+  ensure();
+  try { db().run("UPDATE skills SET base_label = ? WHERE id = ?", baseLabelNorm, id); } catch { /* read-only */ }
+}
+
+/** A base skill plus the variants explicitly minted from it (base_label = the base). Keyed on base_label,
+ *  NOT a label-text pattern, so a genuine user skill that merely starts with the base + a number (e.g.
+ *  "pr monitor 2024 audit") is never mistaken for a variant and clobbered. */
 export function variantSkills(baseLabel: string): { id: string; task: string }[] {
   ensure();
   const base = normalizeLabel(baseLabel);
-  try { return db().query("SELECT id, task FROM skills WHERE label_norm = ? OR label_norm GLOB ?").all(base, `${base} [0-9]*`) as { id: string; task: string }[]; } catch { return []; }
+  try { return db().query("SELECT id, task FROM skills WHERE label_norm = ? OR base_label = ?").all(base, base) as { id: string; task: string }[]; } catch { return []; }
 }
 
 /** Record a run under a skill, then prune to the top `keep` by quality (the reviewer's reference set). */

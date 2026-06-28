@@ -8,10 +8,11 @@ import type { Skill } from "./types";
 // so retrieval trades a little accuracy for speed. Calibrated (skill-retrieve-bench): real matches score
 // >= 0.32 (6/6 correct), unrelated requests <= 0.27, so 0.30 separates them cleanly with no false inject.
 export const RETRIEVE_THRESHOLD = Number(process.env.CAIRN_RETRIEVE_THRESHOLD || "0.30");
-// How many related skills to draw from. The threshold already excludes unrelated families (a short story
-// draws "poem" but never "git setup"; measured), so >1 lets a request pull its whole relevant cluster
-// (a poem draws poem + haiku) without ever pulling an irrelevant skill.
-export const RETRIEVE_K = Number(process.env.CAIRN_RETRIEVE_K || "2");
+// Inject the SINGLE best-fitting skill, not a cluster. Injecting the top 2 stacked two near-duplicate
+// masters (short story + short story review) behind a hedgy "draw on what fits" framing: a bloated wall the
+// agent has to triage. One strict match the agent simply follows is cleaner and shorter. Raise
+// CAIRN_RETRIEVE_K to pull a cluster again.
+export const RETRIEVE_K = Number(process.env.CAIRN_RETRIEVE_K || "1");
 
 // Condense a turn's user messages into ONE query, so a 10-message turn does ONE search, not ten. The most
 // recent messages carry the current ask; a little prior context disambiguates. Bounded so a long turn
@@ -84,9 +85,8 @@ export function skillInstructions(skills: Skill[]): string {
 export function explainInjection(skills: Skill[]): string {
   const tasks = skills.filter((s) => s.masterPrompt.trim()).map((s) => s.task);
   if (!tasks.length) return "";
-  if (tasks.length === 1)
-    return `Curated steps for "${tasks[0]}", the most effective approach learned from prior successful runs. Follow them to accomplish the task:`;
-  return `Curated steps from related skills (${tasks.join(", ")}), learned from prior successful runs. Draw on what fits the task:`;
+  if (tasks.length === 1) return `Curated steps for "${tasks[0]}" (learned from prior runs):`;
+  return `Curated steps from related skills (${tasks.join(", ")}), from prior runs:`;
 }
 
 // Compose the two separately-supplied parts into the final injected text. Instructions are required (no

@@ -97,9 +97,9 @@ async function main(): Promise<void> {
     try {
       const { skillInject, skillLearn } = await import("../../skill/hook");
       if (event.kind === "user_message") { const add = await skillInject(event.text, (payload as { session_id?: string }).session_id); if (add) out = `${out}\n\n${add}`; }
-      // A SubagentStop was remapped to "Stop" above for the brain-protocol enforcement, but the skill learner
-      // must NOT fire for it: a subagent is part of the parent task, so only the parent's Stop learns.
-      else if (event.kind === "turn_finished") skillLearn((payload as { transcript_path?: string }).transcript_path, hookName === "SubagentStop");
+      // A SubagentStop was remapped to "Stop" above; the learner fires for it too, over the subagent's own
+      // transcript, so a real sub-task (the short-story reviewer) is learned as its own skill in parallel.
+      else if (event.kind === "turn_finished") skillLearn((payload as { transcript_path?: string }).transcript_path);
     } catch { /* skills are best-effort */ }
   }
 

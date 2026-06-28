@@ -4,7 +4,7 @@ import { db } from "../src/core/db";
 import { registerInflight, markReady } from "../src/skill/coordinate";
 import { processRunCoordinated } from "../src/skill/pipeline";
 import { categorize } from "../src/skill/match";
-import { setMasterPrompt, getSkill, topRuns } from "../src/skill/store";
+import { setMasterPrompt, getSkill, topRuns, skillByLabel } from "../src/skill/store";
 import type { LearnResult } from "../src/skill/reviewer";
 
 const DIR = process.env.CAIRN_INFLIGHT_DIR!;
@@ -42,6 +42,26 @@ test("processRunCoordinated coalesces two peers into ONE review and updates the 
   expect(getSkill(skill.id)?.masterPrompt).toBe("new master");  // master updated exactly once
   expect(getSkill(skill.id)?.explanation).toBe("new rationale"); // reviewer-only rationale updated too
   expect(topRuns(skill.id, 10).length).toBe(2);                 // one run recorded per coalesced session
+});
+
+test("the coordinated write follows the LEARNER's label, not the injected skill (a debug turn that injected 'short story' learns under 'debugging')", async () => {
+  const now = Date.now();
+  const { skill: story } = await categorize("short story", now);  // the skill the turn happened to inject/match
+  setMasterPrompt(story.id, "STORY MASTER", "story why");
+
+  registerInflight("S", "short story", now);                      // session injected/registered "short story"
+  markReady("S", "short story", "out", "tx", now);
+
+  // The learner reads the actual deliverable and classifies it "debugging", NOT "short story".
+  const reviewMany = async (): Promise<LearnResult> =>
+    ({ label: "debugging", review: { score: 0.7, right: "r", wrong: "w", improve: "i", raw: "" }, master: "DEBUG MASTER", explanation: "debug why" });
+
+  const res = await processRunCoordinated({ request: "why did the skill get mislabeled", output: "db queries and a fix", transcript: "tx" }, "S", now, { reviewMany });
+
+  expect(res[0]?.task).toBe("debugging");                          // routed by the label
+  expect(skillByLabel("debugging")?.masterPrompt).toBe("DEBUG MASTER"); // learning landed on the right skill
+  expect(getSkill(story.id)?.masterPrompt).toBe("STORY MASTER");   // the injected story skill was NOT touched
+  expect(skillByLabel("short story 2")).toBeNull();                // and NOT split into a story variant
 });
 
 test("processRunCoordinated does nothing for a session with no injected skill (cold task path handled by solo processRun)", async () => {

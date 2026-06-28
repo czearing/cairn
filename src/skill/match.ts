@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { embed, cosine } from "../core/embed";
-import { skillVectors, getSkill, skillByLabel, insertSkillIfAbsent, normalizeLabel, setRichVector, skillIdentityVector, setIdentityVector, variantSkills } from "./store";
+import { skillVectors, getSkill, skillByLabel, insertSkillIfAbsent, normalizeLabel, setRichVector, skillIdentityVector, setIdentityVector, setBaseLabel, variantSkills } from "./store";
 import type { Skill } from "./types";
 
 export { normalizeLabel };
@@ -97,7 +97,9 @@ async function mintVariant(label: string, contentVec: number[], now: number): Pr
   const candidate: Skill = { id: randomUUID(), task: newLabel, masterPrompt: "", ts: now };
   insertSkillIfAbsent(candidate, q);
   const stored = skillByLabel(normalizeLabel(newLabel)) ?? candidate;
-  setIdentityVector(stored.id, contentVec, newLabel);
+  // Only stamp identity/base_label when WE created this skill. If the normalized label collided with a
+  // pre-existing skill (insert was a no-op), never touch its frozen identity.
+  if (stored.id === candidate.id) { setBaseLabel(stored.id, normalizeLabel(label)); setIdentityVector(stored.id, contentVec, newLabel); }
   return stored;
 }
 

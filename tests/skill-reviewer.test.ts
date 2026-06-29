@@ -43,6 +43,19 @@ test("fromCapture accepts a complete labeled submission, splitting master from e
   expect(r!.failed).toBeFalsy();
 });
 
+test("fromCapture takes the loop's forced label even when the submission omits one", () => {
+  // The learner no longer echoes a label; the loop supplies it. A complete review with no label field is kept.
+  const r = fromCapture('{"score":0.8,"right":"a","wrong":"b","improve":"c","master":"1. step","explanation":"why"}', "haiku");
+  expect(r).toMatchObject({ label: "haiku", master: "1. step", explanation: "why" });
+  expect(r!.review?.score).toBe(0.8);
+  expect(r!.failed).toBeFalsy();
+});
+
+test("fromCapture's forced label overrides any label the model strayed into", () => {
+  const r = fromCapture('{"label":"poem","score":0.8,"right":"a","wrong":"b","improve":"c","master":"1. step","explanation":"why"}', "haiku");
+  expect(r!.label).toBe("haiku"); // the loop's decision wins, never the model's
+});
+
 test("fromCapture HARD-fails a labeled submission missing the master", () => {
   const r = fromCapture('{"label":"haiku","score":0.8,"right":"a","wrong":"b","improve":"c","master":"","explanation":"why"}');
   expect(r!.failed).toBe(true);

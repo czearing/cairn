@@ -1,4 +1,4 @@
-Assign the reusable label for this request (reuse an existing one when the work fits), grade the OUTPUT, then rewrite the skill's master prompt from everything you have reviewed (best runs first).
+Grade the OUTPUT, then rewrite the skill's master prompt from everything you have reviewed (best runs first).
 
 EXISTING LABELS: {{existing}}
 

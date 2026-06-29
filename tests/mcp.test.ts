@@ -170,50 +170,61 @@ test("brain_delete removes a thought", async () => {
   expect(parse(await call("brain_delete", { id: n.id })).deleted).toBe(false);
 });
 
-test("skill_output captures a valid review and HARD-rejects incomplete ones", async () => {
-  const outPath = join(tmpdir(), `cairn-out-${randomUUID()}.json`);
-  const transport = new StdioClientTransport({
-    command: "bun",
-    args: ["src/mcp/server.ts"],
-    env: { ...process.env, CAIRN_DB_PATH: join(tmpdir(), `cairn-so-${randomUUID()}.db`), CAIRN_SKILL_OUTPUT_PATH: outPath },
-  });
-  const c = new Client({ name: "cairn-so-test", version: "1.0.0" });
-  await c.connect(transport);
-  const call = (args: Record<string, unknown>) => c.callTool({ name: "skill_output", arguments: args }) as Promise<{ isError?: boolean; content: { text: string }[] }>;
-  try {
-    // A complete labeled review (master = steps, explanation = rationale) is accepted and written verbatim.
-    const review = { label: "haiku", score: 0.78, right: "clean cut", wrong: "stock imagery", improve: "fresher second image", master: "1. pick a kigo\n2. count 5-7-5", explanation: "The best runs cut two clean images and avoid stock phrasing." };
-    const ok = await call(review);
-    expect(JSON.parse(ok.content[0]!.text).ok).toBe(true);
-    expect(JSON.parse(readFileSync(outPath, "utf8"))).toEqual(review);
+test("skill_output bakes in the loop's forced label and HARD-rejects incomplete ones", async () => {
+  const dbPath = join(tmpdir(), `cairn-so-${randomUUID()}.db`);
+  // The label is supplied by the loop via CAIRN_SKILL_FORCED_LABEL, never by the learner, so spin up one
+  // server per label scenario (the env is fixed per process, like a real learner spawn).
+  const spawn = async (forcedLabel?: string) => {
+    const outPath = join(tmpdir(), `cairn-out-${randomUUID()}.json`);
+    const env: Record<string, string> = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILL_OUTPUT_PATH: outPath };
+    if (forcedLabel !== undefined) env.CAIRN_SKILL_FORCED_LABEL = forcedLabel;
+    const transport = new StdioClientTransport({ command: "bun", args: ["src/mcp/server.ts"], env });
+    const c = new Client({ name: "cairn-so-test", version: "1.0.0" });
+    await c.connect(transport);
+    const call = (args: Record<string, unknown>) => c.callTool({ name: "skill_output", arguments: args }) as Promise<{ isError?: boolean; content: { text: string }[] }>;
+    return { c, call, outPath };
+  };
 
-    // A labeled review with NO master errors back, telling the learner to resend; it does not write.
-    try { rmSync(outPath); } catch { /* ignore */ }
-    const noMaster = await call({ ...review, master: "" });
+  // Labeled task: the loop supplies "haiku"; the learner submits NO label, and the capture bakes it in.
+  const L = await spawn("haiku");
+  try {
+    const review = { score: 0.78, right: "clean cut", wrong: "stock imagery", improve: "fresher second image", master: "1. pick a kigo\n2. count 5-7-5", explanation: "The best runs cut two clean images and avoid stock phrasing." };
+    const ok = await L.call(review);
+    expect(JSON.parse(ok.content[0]!.text).ok).toBe(true);
+    expect(JSON.parse(readFileSync(L.outPath, "utf8"))).toEqual({ label: "haiku", ...review }); // loop's label baked in
+
+    // A review with NO master errors back, telling the learner to resend; it does not write.
+    try { rmSync(L.outPath); } catch { /* ignore */ }
+    const noMaster = await L.call({ ...review, master: "" });
     expect(noMaster.isError).toBe(true);
     expect(noMaster.content[0]!.text).toMatch(/master must be a non-empty/i);
-    expect(existsSync(outPath)).toBe(false); // nothing captured on rejection
+    expect(existsSync(L.outPath)).toBe(false); // nothing captured on rejection
 
-    // A labeled review with NO explanation errors back too (the reviewer-only rationale is required).
-    const noExplanation = await call({ ...review, explanation: "" });
+    // A review with NO explanation errors back too (the reviewer-only rationale is required).
+    const noExplanation = await L.call({ ...review, explanation: "" });
     expect(noExplanation.isError).toBe(true);
     expect(noExplanation.content[0]!.text).toMatch(/explanation must be a non-empty/i);
 
     // A score out of [0,1] is rejected.
-    const badScore = await call({ ...review, score: 1.7 });
+    const badScore = await L.call({ ...review, score: 1.7 });
     expect(badScore.isError).toBe(true);
     expect(badScore.content[0]!.text).toMatch(/score must be a number/i);
+  } finally {
+    await L.c.close();
+    try { rmSync(L.outPath); } catch { /* ignore */ }
+  }
 
-    // An empty-label non-task that still carries a master is rejected.
-    const nonTaskWithMaster = await call({ label: "", score: 0, right: "", wrong: "", improve: "", master: "some steps", explanation: "" });
-    expect(nonTaskWithMaster.isError).toBe(true);
-    expect(nonTaskWithMaster.content[0]!.text).toMatch(/must be empty when label is empty/i);
+  // Non-task: the loop forced an EMPTY label. A master is rejected; empty master+explanation is accepted.
+  const N = await spawn("");
+  try {
+    const withMaster = await N.call({ score: 0, right: "", wrong: "", improve: "", master: "some steps", explanation: "" });
+    expect(withMaster.isError).toBe(true);
+    expect(withMaster.content[0]!.text).toMatch(/must be empty when label is empty/i);
 
-    // A genuine non-task (empty label, empty master and explanation) is accepted.
-    const nonTask = await call({ label: "", score: 0, right: "", wrong: "", improve: "", master: "", explanation: "" });
+    const nonTask = await N.call({ score: 0, right: "", wrong: "", improve: "", master: "", explanation: "" });
     expect(JSON.parse(nonTask.content[0]!.text).ok).toBe(true);
   } finally {
-    await c.close();
-    try { rmSync(outPath); } catch { /* ignore */ }
+    await N.c.close();
+    try { rmSync(N.outPath); } catch { /* ignore */ }
   }
 });

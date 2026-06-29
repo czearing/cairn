@@ -148,19 +148,21 @@ server.tool(
 // acknowledgement when no path is set.
 server.tool(
   "skill_output",
-  "The learner submits its finished review here, ONCE, as the last action after reasoning out loud: the reusable task label (empty for a non-task), the 0..1 quality score, what worked / what failed / one concrete improvement, and the rewritten master prompt a future agent will load (empty when there is no label).",
+  "The learner submits its finished review here, ONCE, as the last action after reasoning out loud: the 0..1 quality score, what worked / what failed / one concrete improvement, and the rewritten master prompt a future agent will load. The task's label is already decided and supplied by the loop, so do NOT pass it.",
   {
-    label: z.string().describe("The reusable task label in 1-4 lowercase words, or empty string for a non-task."),
     score: z.number().describe("Quality of the graded output, 0..1."),
     right: z.string().describe("What the output did well."),
     wrong: z.string().describe("What the output got wrong or missed."),
     improve: z.string().describe("One concrete change for next time."),
-    master: z.string().describe("The rewritten master prompt: the numbered steps ONLY (no rationale paragraph), or empty when label is empty. This is the only text injected into the doer."),
-    explanation: z.string().describe("The 2-to-4-sentence rationale for the next reviewer (why the best runs win, what excellent looks like, the failure mode to avoid), or empty when label is empty. Never shown to the doer."),
+    master: z.string().describe("The rewritten master prompt: the numbered steps ONLY (no rationale paragraph). This is the only text injected into the doer."),
+    explanation: z.string().describe("The 2-to-4-sentence rationale for the next reviewer (why the best runs win, what excellent looks like, the failure mode to avoid). Never shown to the doer."),
   },
-  async ({ label, score, right, wrong, improve, master, explanation }) => {
+  async ({ score, right, wrong, improve, master, explanation }) => {
+    // The label is the loop's, not the learner's: it was decided before this call (skill_use or the
+    // classifier) and passed in via CAIRN_SKILL_FORCED_LABEL. The learner no longer echoes it, so it can
+    // neither restate nor corrupt it. An empty forced label means a non-task (no skill, empty master ok).
+    const lbl = (process.env.CAIRN_SKILL_FORCED_LABEL ?? "").trim();
     // Validate hard, then ERROR back so the learner resends correctly, never accept a half-formed review.
-    const lbl = label.trim();
     const problems: string[] = [];
     if (lbl) {
       if (!Number.isFinite(score) || score < 0 || score > 1) problems.push("score must be a number in [0,1]");

@@ -50,16 +50,18 @@ export function parseLearn(raw: string | null | undefined): LearnResult {
 }
 
 /** Pure: build a LearnResult from the learner's structured skill_output JSON (its tool submission). Returns
- *  null when there is no submission to read. A labeled submission missing a valid score or a master is a
- *  hard failure (failed:true with the reason), never silently accepted as a partial result. */
-export function fromCapture(raw: string | null | undefined): LearnResult | null {
+ *  null when there is no submission to read. The label is the LOOP's, not the learner's: pass the decided
+ *  `forcedLabel` and it wins outright (the learner no longer echoes a label, so an omitted or stray one can
+ *  neither drop nor corrupt the review). A labeled submission missing a valid score or a master is a hard
+ *  failure (failed:true with the reason), never silently accepted as a partial result. */
+export function fromCapture(raw: string | null | undefined, forcedLabel?: string): LearnResult | null {
   if (!raw) return null;
   let o: { label?: unknown; score?: unknown; right?: unknown; wrong?: unknown; improve?: unknown; master?: unknown; explanation?: unknown };
   try { o = JSON.parse(raw); } catch { return { label: null, review: null, master: null, explanation: null, failed: true, error: "skill_output capture was not valid JSON" }; }
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   const score = typeof o.score === "number" ? o.score : Number(o.score);
   const scoreOk = Number.isFinite(score) && score >= 0 && score <= 1;
-  const label = str(o.label).trim() || null;
+  const label = (forcedLabel ?? "").trim() || (str(o.label).trim() || null);
   const master = str(o.master).trim() || null;
   const explanation = str(o.explanation).trim() || null;
   if (label && (!scoreOk || !master || !explanation)) return { label: null, review: null, master: null, explanation: null, failed: true, error: "skill_output for a labeled task was incomplete (needs a 0..1 score, a master, and an explanation)" };
@@ -98,17 +100,18 @@ export async function classifyLabel(request: string, output: string, transcript:
  *  CAIRN_SKILL_OUTPUT_PATH). Falls back to parsing the legacy ===MASTER=== text if the tool was not called.
  *  Returns {label, review, master}; never throws. */
 export async function reviewAndLearn(request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster = "", priorExplanation = "", timeoutMs?: number, forcedLabel?: string): Promise<LearnResult> {
-  // When the label was already decided by the unanchored classifier (STAGE 1), tell the learner so it grades
-  // and rewrites THAT skill instead of reclassifying, and force the captured label to it. This is what keeps
-  // the anchor (the matched skill's master/priors) from ever flipping the label.
-  const decided = forcedLabel ? `This turn is ALREADY classified as the label "${forcedLabel}". Do not reclassify. Grade the output and rewrite the master for that skill, and put "${forcedLabel}" in the label field.\n\n` : "";
+  // The label was already decided before this call (STAGE 1: skill_use or the unanchored classifier). Tell the
+  // learner which skill it is grading so it does not reclassify, and pass the label to the skill_output tool
+  // via env so the loop, not the model, owns it. The learner never echoes a label, so the anchor (the matched
+  // skill's master/priors) can never flip it and an omitted echo can never drop a complete review.
+  const decided = forcedLabel ? `This run is the skill "${forcedLabel}". Do not reclassify it. Grade the output and rewrite that skill's master.\n\n` : "";
   const user = decided + learnUserPrompt(request, output, transcript, existing, priors, priorMaster, priorExplanation);
   const outPath = join(tmpdir(), `cairn-learn-${randomUUID()}.json`);
   const r = await runClaude(user, {
     system: LEARN_SYSTEM,
     mcpConfigPath: cairnMcpConfigPath(),
     allowedTools: ["mcp__cairn__brain_search", "mcp__cairn__skill_output"],
-    env: { CAIRN_SKILL_OUTPUT_PATH: outPath },
+    env: { CAIRN_SKILL_OUTPUT_PATH: outPath, CAIRN_SKILL_FORCED_LABEL: forcedLabel ?? "" },
     timeoutMs: timeoutMs ?? 180_000, // background, thorough call: give it room (the 90s default timed out)
     // Model: use the CLI default by default. Measured A/B (2026-06-26): forcing sonnet-4.6 was SLOWER than the
     // default (117s vs 87s) and haiku-4.5 both slower AND failed to emit a valid skill_output, so the model
@@ -116,11 +119,8 @@ export async function reviewAndLearn(request: string, output: string, transcript
     model: process.env.CAIRN_LEARN_MODEL || undefined,
   });
   let captured: LearnResult | null = null;
-  try { if (existsSync(outPath)) captured = fromCapture(readFileSync(outPath, "utf8")); } catch { /* handled below */ }
+  try { if (existsSync(outPath)) captured = fromCapture(readFileSync(outPath, "utf8"), forcedLabel); } catch { /* handled below */ }
   try { if (existsSync(outPath)) rmSync(outPath); } catch { /* ignore */ }
-  // The pre-decided label is authoritative: override whatever the learner echoed (only when it produced a
-  // valid, non-failed submission with its own label, so a forced label can't resurrect a failed call).
-  if (captured && forcedLabel && !captured.failed && captured.label) captured.label = forcedLabel;
   if (captured) return captured;                                // the learner submitted a valid review via the tool
   // No valid submission. Fail LOUDLY with the real reason (no silent retry, no "transient" assumption): either
   // the claude call errored, or it finished without ever calling skill_output with complete data.

@@ -13,20 +13,20 @@ Score from 0 to 1, weighting quality 95% and speed 5%. Anchor to the prior runs 
 | 0.7-0.8 | Senior expert | Flawless, highly optimized, completely original, tightly edited. |
 | 0.9-1.0 | Masterwork | World-class. Unimprovable by the top 1% of human experts. |
 
-## STEP 2: Rewrite the master prompt
+## STEP 2: Fix the master prompt
 
-Rewrite the task's master prompt, folding in the prior runs' best moves and the gap this run revealed. The master is what a future agent loads verbatim to redo the task. The master and the explanation are SEPARATE outputs and serve different readers, so keep them apart:
+Revise the task's master prompt, folding in the prior runs' best moves and the gap this run exposed. Prefer minimal, structured edits over a rewrite so results stay consistent run to run. The master and the explanation go to different readers, so keep them apart:
 
-- The MASTER is the numbered instruction list ONLY: one short imperative step per line, in order. Drop any line that is not a single concrete step. Do NOT put a rationale paragraph in the master; that goes in the explanation field. This is the only text injected into the doer agent.
-- The EXPLANATION is a 2-to-4-sentence plain-text rationale explaining WHY the best runs beat the weak ones, what excellent output looks like, and the common failure mode to avoid. It is written for the NEXT REVIEWER session to reference (it is never shown to the doer), so build on the CURRENT EXPLANATION you were given rather than starting over.
-- The master executes the task only; it is loaded after the request already matched this skill. Never include a step that classifies the request, confirms it is this task type, or routes elsewhere if it is not. That is the labeler's job, not the master's.
-- Never tell the agent to ask the user clarifying questions; that wastes time and annoys them.
-- Prefer concision. Fewer words land the point better than prose. Avoid prose, AI tells (em dashes), and anything that obscures your point or wastes the prompt.
-- HARD length discipline: the master is a FIXED, tight list of at most ~10 steps. You are REVISING it, not growing it. To fold in a new fix, sharpen or REPLACE an existing step; never just append another. A master that keeps getting longer is getting WORSE: an elaborate process bloats and slows the doer until it cannot finish in time. If the current master has crept long (past ~2500 chars), cut and merge weak or overlapping steps until it is lean again before adding anything.
-- Never write a bare "re-read / check your work" step, because the agent will skip it. Instead enforce review one of two ways: (a) have the agent output its reasoning for how it checked the work and confirmed no violations, or (b) have a subagent review. Use a subagent when quality is subjective; use the output-your-reasoning form only when the check is direct and unambiguous (example: is the code formatted correctly).
-- When grounding a creative task, remember that a model on its own returns the most likely output, which reads as cliche rather than invention. To produce something genuinely new, build the thesis from outside material: research current events and history, identify the specific emotion they raise, connect several of the ideas you find, and only then let a thesis emerge slowly from those connections. Without this you get AI slop, the fastest and most repeated tropes; a real thesis is what lifts creative work toward a 9. This method also requires the agent to explicitly output its inspiration and research, because agents default to the fastest solution and grounding research takes longer even though it sharply raises quality.
-- Do not lean on bandaid fixes for prompting problems. For example, if a short-story prompt keeps producing the same cliches, the fix is not to tell the agent to simply do X; it is to shape how the agent arrives at a good result. Spelling out exactly what to do yields rigid, uncreative prompts that annoy the user, because we have hardcoded a hyper-specific prompt instead of a smart one that guides the agent to the right answer for each situation. Prompts that solve the bottle necks by guiding the agent to the right answer get to .9 and above.
-- Metrics that can be gathered are critical for accessing quality, if there is any data that can be gathered in the prompt (example performance speed changes, tests added, etc) this will help you mre accuratly give a consistent and well thought out score.
+- MASTER: the numbered step list ONLY, one short imperative per line, in order. No rationale or preamble (that is the explanation's job). This is the only text the doer loads.
+- EXPLANATION: 2 to 4 sentences for the NEXT REVIEWER (never shown to the doer) on why the best runs beat the weak ones, what excellent output looks like, and the failure mode to avoid. Build on the explanation you were given rather than restarting it.
+
+Rules for the master:
+- It only runs the task, which already matched this skill, so never add a step that classifies, confirms the type, routes elsewhere, or asks the user a question.
+- Keep it lean: at most ~10 steps and under ~2500 chars. To fold in a fix, sharpen or REPLACE a step, never append one; a growing master bloats and slows the doer until it cannot finish. Cut em dashes, prose, and any word that does not earn its place, or the output reads as obvious AI.
+- Never write a bare "check your work" step; the agent skips it. Instead make the doer output its reasoning that it checked and found no violations, or add a subagent reviewer. Use the subagent when quality is subjective, the output-reasoning form when the check is unambiguous (e.g. is the code formatted correctly).
+- Have the doer capture any metric within reach (speed delta, tests added, etc.); hard data makes the next score consistent.
+- Fix the bottleneck, not the symptom: never hardcode "always do X", which yields rigid, cliche prompts. Shape HOW the agent reaches a good answer for each case; that is what gets a skill past 0.9.
+- Creative tasks need grounding, since a model alone returns the most likely output, which reads as cliche. Make the doer build its thesis from outside material (current events, history, the emotion they raise), connect several findings, and output that research, because the fast default is slop and grounding is what lifts the work toward a 9.
 
 ## Output
 

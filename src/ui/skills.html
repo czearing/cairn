@@ -11,8 +11,14 @@
   body { font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; margin: 0; padding: 24px 20px 64px; max-width: 880px; margin-inline: auto; }
   h1 { font-size: 19px; margin: 0 0 3px; }
   h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; opacity: .5; margin: 30px 0 10px; }
-  .sub { opacity: .55; margin: 0 0 18px; font-size: 13px; }
+  .sub { opacity: .55; margin: 4px 0 0; font-size: 13px; }
   .sub a { color: inherit; }
+  .hdr { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+  .search { font: 13px ui-sans-serif, system-ui, sans-serif; padding: 8px 12px; border-radius: 9px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: color-mix(in srgb, currentColor 4%, transparent); color: inherit; min-width: 210px; flex: none; }
+  .search:focus { outline: none; border-color: color-mix(in srgb, var(--c-cyan) 60%, transparent); }
+  .feedwrap { margin-top: 30px; }
+  .feedsum { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; opacity: .5; font-weight: 650; padding: 5px 0; cursor: pointer; }
+  .feedwrap[open] > .feedsum { margin-bottom: 8px; }
   .empty { opacity: .5; font-size: 13px; }
   .muted { opacity: .5; font-size: 12px; font-variant-numeric: tabular-nums; }
 
@@ -75,12 +81,16 @@
 </style>
 </head>
 <body>
-<h1>Cairn Skills</h1>
-<p class="sub">What the agent has learned. Click a skill to see why it works and how it has improved. Auto-refreshes. <a href="/">brain &rarr;</a></p>
+<div class="hdr">
+  <div><h1>Cairn Skills</h1><p class="sub">What the agent has learned, most recently changed first. Click a skill for why it works and how it improved. <a href="/">brain &rarr;</a></p></div>
+  <input id="q" class="search" type="search" placeholder="search skills&hellip;" autocomplete="off" />
+</div>
 <div id="now"></div>
 <div id="skills"></div>
-<h2>Recent learning activity</h2>
-<div id="feed"></div>
+<details class="feedwrap">
+  <summary class="feedsum">Recent learning activity <span id="feedcount" class="muted"></span></summary>
+  <div id="feed"></div>
+</details>
 <script>
 const esc = (s) => (s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const fmtTs = (t) => t > 1e10 ? new Date(t).toLocaleString() : "#" + t;
@@ -173,16 +183,20 @@ function feedCard(e, live, open) {
   return `<details class="card${gone ? " muted" : ""}" data-skill="${esc(id)}"${open.has(id) ? " open" : ""}><summary class="fhead">${head}</summary><div class="fbody">${body}</div></details>`;
 }
 
+const lastTs = (s) => s.runs && s.runs.length ? Math.max(...s.runs.map((r) => r.ts)) : (s.ts || 0);
+
 let lastJson = "";
 async function load() {
+  const q = (document.getElementById("q").value || "").trim();
   let skills, activity;
   try {
     [skills, activity] = await Promise.all([
-      (await fetch("/api/skills")).json().then((d) => d.skills || []),
+      (await fetch("/api/skills" + (q ? "?q=" + encodeURIComponent(q) : ""))).json().then((d) => d.skills || []),
       (await fetch("/api/activity")).json().then((d) => d.activity || []),
     ]);
   } catch { return; }
-  const json = JSON.stringify({ skills, activity });
+  if (!q) skills = skills.slice().sort((a, b) => lastTs(b) - lastTs(a)); // no query: most recently changed first
+  const json = JSON.stringify({ q, skills, activity });
   if (json === lastJson) return;                 // skip the rebuild so an open panel never snaps shut
   lastJson = json;
   const live = new Set(skills.map((s) => s.task));
@@ -199,10 +213,15 @@ async function load() {
   document.getElementById("skills").innerHTML = skills.length ? skills.map((s) => skillCard(s, open)).join("") : '<p class="empty">No skills yet. They appear after the agent finishes a task.</p>';
 
   const done = activity.filter((e) => e.phase !== "start");
+  document.getElementById("feedcount") && (document.getElementById("feedcount").textContent = done.length ? "· " + done.length : "");
   document.getElementById("feed").innerHTML = done.length ? done.map((e) => feedCard(e, live, open)).join("") : '<p class="empty">Nothing learned yet.</p>';
 }
 load();
 setInterval(load, 2000);
+{
+  let deb; const qEl = document.getElementById("q");
+  qEl.addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(load, 220); }); // debounced live search
+}
 </script>
 </body>
 </html>

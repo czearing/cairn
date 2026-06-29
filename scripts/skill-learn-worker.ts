@@ -16,4 +16,9 @@ try {
     await processRunCoordinated(input, session, Date.now());
   }
 } catch { /* best-effort background work; never surface */ }
+finally {
+  // Release this worker's concurrency-cap lock so the next learner can run (learn.ts counts these files).
+  const lock = process.env.CAIRN_LEARNER_LOCK;
+  if (lock) { try { (await import("node:fs")).rmSync(lock, { force: true }); } catch { /* ignore */ } }
+}
 process.exit(0); // the coordinator may have polled; do not let any timer keep us alive

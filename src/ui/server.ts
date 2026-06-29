@@ -18,7 +18,20 @@ async function handler(req: Request): Promise<Response> {
   if (pathname === "/api/neurons" && m === "GET") return Response.json({ neurons: all() });
   if (pathname === "/api/search") return Response.json({ results: await search(searchParams.get("q") || "") });
   // Skill store viewer: what skills exist, their master prompts, and the score of each run over time.
-  if (pathname === "/api/skills" && m === "GET") { const { listSkills } = await import("../skill/store"); return Response.json({ skills: listSkills() }); }
+  if (pathname === "/api/skills" && m === "GET") {
+    const { listSkills } = await import("../skill/store");
+    const all = listSkills();
+    const q = searchParams.get("q");
+    if (q && q.trim()) {
+      // Semantic search: reorder ALL skills by relevance to the query (no hard filter), for the UI search box.
+      const { rankSkillIds } = await import("../skill/retrieve");
+      const order = await rankSkillIds(q);
+      const byId = new Map(all.map((s) => [s.id, s]));
+      const ranked = order.map((o) => { const s = byId.get(o.id); return s ? { ...s, score: o.score } : null; }).filter(Boolean);
+      return Response.json({ skills: ranked, query: q });
+    }
+    return Response.json({ skills: all });
+  }
   if (pathname === "/skills") return asset("skills.html", "text/html; charset=utf-8");
   // Live activity feed data, consumed by the unified /skills dashboard (newest first).
   if (pathname === "/api/activity" && m === "GET") { const { readActivity } = await import("../skill/activity"); return Response.json({ activity: readActivity().slice(-100).reverse() }); }

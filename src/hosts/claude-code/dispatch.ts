@@ -50,7 +50,30 @@ async function main(): Promise<void> {
     if (content) await emit(respond("SessionStart", content));
     return;
   }
-  if (hookName === "SubagentStop") (payload as { hook_event_name?: string }).hook_event_name = "Stop";
+
+  // A subagent (Task tool) finished. SubagentStop is a PARENT-session event: its `transcript_path` is the main
+  // session file, while the subagent's OWN transcript (its <session>/subagents/agent-*.jsonl, holding the Task
+  // prompt and the subagent's reply) is under `agent_transcript_path`. We must learn over the latter, or we'd
+  // re-learn the parent's last turn. Run ONLY the skill learner here, so a real sub-task (e.g. a short-story
+  // reviewer the master spawned) is learned as its own skill, in parallel with the parent's Stop. We
+  // deliberately skip the brain split-leaves audit and prompt injection: those govern the MAIN agent's
+  // reasoning, not a tool subagent, and a Stop-shaped nudge back into a finished subagent would be wrong.
+  if (hookName === "SubagentStop") {
+    const p = payload as { agent_transcript_path?: string; transcript_path?: string };
+    const tp = p.agent_transcript_path ?? p.transcript_path;
+    // Diagnostic: log every subagent stop (path + payload keys) so the reviewer-learning path is observable.
+    // Default-on, one tiny append per stop; set CAIRN_SUBAGENT_DEBUG=0 to silence.
+    if (process.env.CAIRN_SUBAGENT_DEBUG !== "0") {
+      try { (await import("node:fs")).appendFileSync((await import("node:path")).join((await import("node:os")).homedir(), ".cairn", "subagent-stops.log"), `${new Date().toISOString()} ${JSON.stringify({ keys: Object.keys(payload as object), transcript_path: tp })}\n`); } catch { /* best-effort */ }
+    }
+    try {
+      if ((await import("../../core/config")).skillsEnabled()) {
+        const { skillLearn } = await import("../../skill/hook");
+        skillLearn(tp);
+      }
+    } catch { /* skills are best-effort */ }
+    return;
+  }
 
   const event = await normalizeClaudeCode(payload);
   if (!event) return;
@@ -97,8 +120,7 @@ async function main(): Promise<void> {
     try {
       const { skillInject, skillLearn } = await import("../../skill/hook");
       if (event.kind === "user_message") { const add = await skillInject(event.text, (payload as { session_id?: string }).session_id); if (add) out = `${out}\n\n${add}`; }
-      // A SubagentStop was remapped to "Stop" above; the learner fires for it too, over the subagent's own
-      // transcript, so a real sub-task (the short-story reviewer) is learned as its own skill in parallel.
+      // The parent agent's turn finished. A subagent's stop is handled separately above (SubagentStop branch).
       else if (event.kind === "turn_finished") skillLearn((payload as { transcript_path?: string }).transcript_path);
     } catch { /* skills are best-effort */ }
   }

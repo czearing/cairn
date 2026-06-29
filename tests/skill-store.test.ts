@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector } from "../src/skill/store";
+import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector, deleteSkillByLabel, skillCatalog } from "../src/skill/store";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -24,6 +24,23 @@ test("setIdentityVector freezes the vector once and never overwrites it", () => 
   setIdentityVector("s", [0.9, 0.8, 0.7], "second");                // attempt to clobber a frozen identity
   expect(skillIdentityVector("s")).toEqual(v1);                     // unchanged: it stays frozen
   expect(skillIdentityVector("s")[0]).not.toBeCloseTo(0.9, 5);      // definitely not the second vector
+});
+
+test("deleteSkillByLabel removes the skill and its runs, by normalized label; returns false when absent", () => {
+  putSkill({ id: "k", task: "pr monitor 2", masterPrompt: "stub", ts: 1 }, [1, 0]);
+  addRun({ skillId: "k", recipe: "r", quality: 0.5, review: "", ts: 1 });
+  expect(deleteSkillByLabel("PR Monitor 2")).toBe(true);   // normalized to the same key
+  expect(skillByLabel("pr monitor 2")).toBeNull();          // skill gone
+  expect(topRuns("k", 10).length).toBe(0);                  // its runs gone too
+  expect(deleteSkillByLabel("never existed")).toBe(false);  // absent -> false, no throw
+});
+
+test("skillCatalog lists each skill as 'label: gist' from the master's first line", () => {
+  putSkill({ id: "c1", task: "haiku", masterPrompt: "1. count 5-7-5 syllables\n2. sharpen the cut", ts: 1 }, [1, 0]);
+  putSkill({ id: "c2", task: "blank", masterPrompt: "", ts: 2 }, [0, 1]);
+  const cat = skillCatalog();
+  expect(cat).toContain("haiku: 1. count 5-7-5 syllables"); // gist = first non-empty master line
+  expect(cat).toContain("blank");                            // no master -> bare label, never crashes
 });
 
 test("putSkill/getSkill round-trips, vector decodes back", () => {

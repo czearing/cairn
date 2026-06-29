@@ -36,8 +36,11 @@ const bun = () => (Bun.which("bun") ?? "bun").replace(/\\/g, "/");
 // throwaway name (e.g. CAIRN_MCP_NAME=cairn-sandbox) without touching the live `cairn` registration.
 const mcpName = () => process.env.CAIRN_MCP_NAME || "cairn";
 
-// Phase 2 — merge our four hooks, skipping any already present. Returns the events newly added.
+// Phase 2 — merge our hooks, skipping any already present. Returns the events newly added.
 // In dryRun mode nothing is written; `added` reports what WOULD change.
+// SubagentStop is a PARENT-session event that fires when a Task subagent finishes; we register it so the
+// skill learner runs over the subagent's own transcript (e.g. a short-story reviewer becomes its own skill).
+// Without it the SubagentStop branch in dispatch is dead and subagent work is never learned.
 async function installHooks(dryRun: boolean): Promise<{ added: string[]; bak: boolean }> {
   const path = settingsPath();
   const command = `"${bun()}" "${DISPATCH}"`;
@@ -45,7 +48,7 @@ async function installHooks(dryRun: boolean): Promise<{ added: string[]; bak: bo
   const hooks = settings.hooks ?? (settings.hooks = {});
 
   const added: string[] = [];
-  for (const event of ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"]) {
+  for (const event of ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop"]) {
     const list = hooks[event] ?? (hooks[event] = []);
     if (list.some((g) => g.hooks.some((h) => h.command.includes(MARKER)))) continue;
     list.push({ hooks: [{ type: "command", command }] });

@@ -33,7 +33,8 @@ test("processRunCoordinated coalesces two peers into ONE review and updates the 
     return { label: "haiku", review: { score: 0.8, right: "r", wrong: "w", improve: "i", raw: "" }, master: "new master", explanation: "new rationale" };
   };
 
-  const res = await processRunCoordinated({ request: "write a haiku", output: "haiku A", transcript: "tx A" }, "A", now, { reviewMany });
+  const classify = async () => ({ label: "haiku", failed: false });
+  const res = await processRunCoordinated({ request: "write a haiku", output: "haiku A", transcript: "tx A" }, "A", now, { classify, reviewMany });
 
   expect(sawRuns).toBe(2);                                      // ONE review saw BOTH concurrent runs
   expect(sawPriorMaster).toBe("old master");                    // the reviewer received the skill's current master
@@ -52,11 +53,12 @@ test("the coordinated write follows the LEARNER's label, not the injected skill 
   registerInflight("S", "short story", now);                      // session injected/registered "short story"
   markReady("S", "short story", "out", "tx", now);
 
-  // The learner reads the actual deliverable and classifies it "debugging", NOT "short story".
+  // The unanchored CLASSIFIER reads the actual deliverable and labels it "debugging", NOT "short story".
+  const classify = async () => ({ label: "debugging", failed: false });
   const reviewMany = async (): Promise<LearnResult> =>
     ({ label: "debugging", review: { score: 0.7, right: "r", wrong: "w", improve: "i", raw: "" }, master: "DEBUG MASTER", explanation: "debug why" });
 
-  const res = await processRunCoordinated({ request: "why did the skill get mislabeled", output: "db queries and a fix", transcript: "tx" }, "S", now, { reviewMany });
+  const res = await processRunCoordinated({ request: "why did the skill get mislabeled", output: "db queries and a fix", transcript: "tx" }, "S", now, { classify, reviewMany });
 
   expect(res[0]?.task).toBe("debugging");                          // routed by the label
   expect(skillByLabel("debugging")?.masterPrompt).toBe("DEBUG MASTER"); // learning landed on the right skill

@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { normalizeLabel, categorize, matchSkill } from "../src/skill/match";
+import { normalizeLabel, categorize } from "../src/skill/match";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -24,13 +24,17 @@ test("a repeated task exact-matches the same skill (the restore key)", async () 
   expect(b.skill.id).toBe("S1");
 });
 
-test("a distinct form stays a separate skill (haiku vs poem)", async () => {
+test("a distinct label stays a separate skill (haiku vs poem), never merged by similarity", async () => {
   await categorize("haiku", 1, () => "S1");
   const p = await categorize("poem", 2, () => "S2");
-  expect(p.created).toBe(true);              // poem is not merged into haiku (cosine 0.696 < 0.80 threshold)
+  expect(p.created).toBe(true);              // distinct labels never merge: routing is exact-label only, no cosine
   expect(p.skill.id).toBe("S2");
 });
 
-test("matchSkill returns null when there are no skills yet", async () => {
-  expect(await matchSkill("haiku")).toBeNull();
+test("a near-duplicate label is NOT merged into an existing skill (the bug that clobbered short story)", async () => {
+  await categorize("short story", 1, () => "S1");
+  const r = await categorize("short story review", 2, () => "S2"); // shares 2/3 words, embeds > 0.80 cosine
+  expect(r.created).toBe(true);              // a NEW skill: the classifier's distinct label is honored exactly
+  expect(r.skill.id).toBe("S2");
+  expect(r.skill.task).toBe("short story review");
 });

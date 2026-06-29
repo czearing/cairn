@@ -17,6 +17,18 @@ const fill = (template: string, vars: Record<string, string>): string =>
 // System prompt (the learner's behavioral prompt).
 export const LEARN_SYSTEM = load("learn-system.md");
 
+// Classifier prompts. The label decision runs FIRST, with NO skill master or priors as context, so the
+// classifier reads only the deliverable and cannot be anchored into mislabeling a review of X as X.
+export const CLASSIFY_SYSTEM = load("classify-system.md");
+const CLASSIFY_USER = load("classify-user.md");
+
+export function classifyUserPrompt(request: string, output: string, transcript: string, existing: string[]): string {
+  return fill(CLASSIFY_USER, {
+    existing: existing.length ? existing.map((e) => `- ${e}`).join("\n") : "(none yet)",
+    request, output, transcript: transcript.trim() || "(not recorded)",
+  });
+}
+
 // User-message template. The .md holds the wording; this builder fills in the per-call data.
 const LEARN_USER = load("learn-user.md");
 

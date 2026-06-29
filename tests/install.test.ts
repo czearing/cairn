@@ -45,10 +45,10 @@ const read = () => JSON.parse(readFileSync(settings, "utf8"));
 const cairnGroups = (s: ReturnType<typeof read>) =>
   Object.values(s.hooks ?? {}).flat().filter((g: any) => g.hooks.some((h: any) => h.command.includes("cairn")));
 
-test("install adds the four Cairn hooks", async () => {
+test("install adds every Cairn hook, including SubagentStop for subagent learning", async () => {
   await install();
   const s = read();
-  for (const ev of ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"]) {
+  for (const ev of ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop"]) {
     expect(s.hooks[ev].some((g: any) => g.hooks.some((h: any) => h.command.includes("cairn")))).toBe(true);
   }
 });

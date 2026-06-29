@@ -70,6 +70,17 @@ export function skillByLabel(labelNorm: string): Skill | null {
   return (db().query(`${SELECT_SKILL} WHERE label_norm = ?`).get(labelNorm) as Skill | undefined) ?? null;
 }
 
+/** Delete a skill (by its label) and all its runs. Returns true if a skill was found and removed. Used to prune
+ *  junk/obsolete skills (stubs, dead "<label> (N)" guard artifacts). The label is normalized to the restore key. */
+export function deleteSkillByLabel(label: string): boolean {
+  ensure();
+  const skill = skillByLabel(normalizeLabel(label));
+  if (!skill) return false;
+  db().run("DELETE FROM skill_runs WHERE skill_id = ?", skill.id);
+  db().run("DELETE FROM skills WHERE id = ?", skill.id);
+  return true;
+}
+
 /** Replace a skill's master prompt (the instructions the doer reuses). Pass `explanation` to also replace
  *  the reviewer-only rationale; omit it to leave the existing explanation untouched. */
 export function setMasterPrompt(id: string, masterPrompt: string, explanation?: string): void {
@@ -82,6 +93,20 @@ export function setMasterPrompt(id: string, masterPrompt: string, explanation?: 
 export function skillLabels(): string[] {
   ensure();
   return (db().query("SELECT task FROM skills").all() as { task: string }[]).map((r) => r.task);
+}
+
+/** Every skill as a `label — one-line gist` line, so the classifier (an LLM) can see WHAT each existing skill
+ *  is and decide reuse-vs-new itself, instead of a cosine threshold guessing redundancy. The gist is the first
+ *  line of the master (what the skill produces), falling back to the explanation. Capped so the prompt stays
+ *  small. */
+export function skillCatalog(): string[] {
+  ensure();
+  const rows = db().query("SELECT task, master_prompt, explanation FROM skills").all() as { task: string; master_prompt: string; explanation: string }[];
+  return rows.map((r) => {
+    const firstLine = (r.master_prompt || "").split("\n").map((l) => l.trim()).find((l) => l.length > 0);
+    const gist = (firstLine || r.explanation || "").slice(0, 140);
+    return gist ? `${r.task}: ${gist}` : r.task;
+  });
 }
 
 /** Every skill's id, task, label vector, and rich (label+master) vector. Assignment uses the clean label

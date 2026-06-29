@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector, deleteSkillByLabel, skillCatalog, addVersion, skillVersions } from "../src/skill/store";
+import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector, deleteSkillByLabel, deleteSkill, skillCatalog, addVersion, skillVersions } from "../src/skill/store";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -33,6 +33,17 @@ test("deleteSkillByLabel removes the skill and its runs, by normalized label; re
   expect(skillByLabel("pr monitor 2")).toBeNull();          // skill gone
   expect(topRuns("k", 10).length).toBe(0);                  // its runs gone too
   expect(deleteSkillByLabel("never existed")).toBe(false);  // absent -> false, no throw
+});
+
+test("deleteSkill removes the skill and its runs AND its version history, by id", () => {
+  putSkill({ id: "d", task: "doomed", masterPrompt: "m", ts: 1 }, [1, 0]);
+  addRun({ skillId: "d", recipe: "r", quality: 0.6, review: "", ts: 1 });
+  addVersion("d", "m", "why", 0.6, 1);
+  expect(deleteSkill("d")).toBe(true);
+  expect(getSkill("d")).toBeNull();
+  expect(topRuns("d", 10).length).toBe(0);
+  expect(skillVersions("d").length).toBe(0);
+  expect(deleteSkill("nope")).toBe(false); // absent -> false, no throw
 });
 
 test("addVersion records each CHANGED master (dedup unchanged), skillVersions returns them oldest-first", () => {

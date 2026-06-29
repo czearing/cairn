@@ -23,14 +23,25 @@ async function handler(req: Request): Promise<Response> {
     const all = listSkills();
     const q = searchParams.get("q");
     if (q && q.trim()) {
-      // Semantic search: reorder ALL skills by relevance to the query (no hard filter), for the UI search box.
+      // Semantic search: rank skills by relevance, then keep only the RELEVANT ones (drop the anisotropy-floor
+      // tail so "how to write code" stops surfacing "audio ref selection"). Floor at 0.25; if nothing clears it,
+      // fall back to the single best match so a vague query still returns something.
       const { rankSkillIds } = await import("../skill/retrieve");
       const order = await rankSkillIds(q);
+      const FLOOR = Number(process.env.CAIRN_SKILL_SEARCH_FLOOR || "0.25");
+      const kept = order.filter((o) => o.score >= FLOOR);
+      const chosen = kept.length ? kept : order.slice(0, 1);
       const byId = new Map(all.map((s) => [s.id, s]));
-      const ranked = order.map((o) => { const s = byId.get(o.id); return s ? { ...s, score: o.score } : null; }).filter(Boolean);
+      const ranked = chosen.map((o) => { const s = byId.get(o.id); return s ? { ...s, score: o.score } : null; }).filter(Boolean);
       return Response.json({ skills: ranked, query: q });
     }
     return Response.json({ skills: all });
+  }
+  // Delete a skill (and its runs + version history) by id, for the /skills page delete button.
+  if (pathname.startsWith("/api/skills/") && m === "DELETE") {
+    const id = decodeURIComponent(pathname.slice("/api/skills/".length));
+    const { deleteSkill } = await import("../skill/store");
+    return Response.json({ deleted: deleteSkill(id) });
   }
   if (pathname === "/skills") return asset("skills.html", "text/html; charset=utf-8");
   // Live activity feed data, consumed by the unified /skills dashboard (newest first).

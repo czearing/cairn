@@ -5,223 +5,246 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Cairn Skills</title>
 <style>
-  :root { color-scheme: light dark; --c-cyan:#2a9fd6; --c-green:#2e9b57; --c-amber:#c98a16; --c-red:#cc4444; }
+  :root { color-scheme: light dark; --c-cyan:#2a9fd6; --c-green:#2e9b57; --c-amber:#c98a16; --c-red:#cc4444; --bd: color-mix(in srgb, currentColor 14%, transparent); }
   @media (prefers-color-scheme: dark) { :root { --c-cyan:#5cc4ef; --c-green:#52c47e; --c-amber:#e0a93a; --c-red:#e06b6b; } }
   * { box-sizing: border-box; }
-  body { font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; margin: 0; padding: 24px 20px 64px; max-width: 880px; margin-inline: auto; }
-  h1 { font-size: 19px; margin: 0 0 3px; }
-  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; opacity: .5; margin: 30px 0 10px; }
-  .sub { opacity: .55; margin: 4px 0 0; font-size: 13px; }
-  .sub a { color: inherit; }
-  .hdr { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
-  .search { font: 13px ui-sans-serif, system-ui, sans-serif; padding: 8px 12px; border-radius: 9px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: color-mix(in srgb, currentColor 4%, transparent); color: inherit; min-width: 210px; flex: none; }
+  body { font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; margin: 0; padding: 20px 22px 48px; max-width: 1120px; margin-inline: auto; }
+  h1 { font-size: 18px; margin: 0; }
+  .hdr { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  .search { font: 13px ui-sans-serif, system-ui, sans-serif; padding: 8px 12px; border-radius: 9px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: color-mix(in srgb, currentColor 4%, transparent); color: inherit; width: 260px; }
   .search:focus { outline: none; border-color: color-mix(in srgb, var(--c-cyan) 60%, transparent); }
-  .feedwrap { margin-top: 30px; }
-  .feedsum { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; opacity: .5; font-weight: 650; padding: 5px 0; cursor: pointer; }
-  .feedwrap[open] > .feedsum { margin-bottom: 8px; }
-  .empty { opacity: .5; font-size: 13px; }
-  .muted { opacity: .5; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .muted { opacity: .5; font-size: 12px; }
+  .empty { opacity: .5; font-size: 13px; padding: 20px 4px; }
 
-  /* live "reviewing now" */
-  .runcount { font-size: 12px; font-weight: 650; color: var(--c-cyan); margin: 0 0 8px; }
-  .now { display: flex; align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--c-cyan) 45%, transparent); background: color-mix(in srgb, var(--c-cyan) 9%, transparent); border-radius: 9px; padding: 9px 13px; margin-bottom: 8px; font-size: 13px; }
-  .now .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-cyan); animation: pulse 1.2s ease-in-out infinite; flex: none; }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+  .now { display: flex; align-items: flex-start; gap: 9px; border: 1px solid color-mix(in srgb, var(--c-cyan) 45%, transparent); background: color-mix(in srgb, var(--c-cyan) 9%, transparent); border-radius: 9px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+  .now .dot { margin-top: 4px; }
+  .nowq { display: inline-block; max-height: 3.1em; overflow: auto; opacity: .65; vertical-align: top; }
+  .now .dot, .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--c-cyan); animation: pulse 1.2s ease-in-out infinite; flex: none; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .2; } }
 
-  /* score pill, shared by skills + feed */
-  .chip { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 12px; padding: 2px 9px; border-radius: 20px; background: color-mix(in srgb, currentColor 13%, transparent); flex: none; }
+  .chip { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 12px; padding: 2px 8px; border-radius: 20px; background: color-mix(in srgb, currentColor 13%, transparent); flex: none; }
   .chip.hi { color: var(--c-green); background: color-mix(in srgb, var(--c-green) 15%, transparent); }
   .chip.mid { color: var(--c-amber); background: color-mix(in srgb, var(--c-amber) 16%, transparent); }
   .chip.lo { color: var(--c-red); background: color-mix(in srgb, var(--c-red) 15%, transparent); }
 
-  /* a skill = one collapsible row; collapsed by default so the page is a scannable list */
-  .skill { border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 10px; margin-bottom: 7px; background: color-mix(in srgb, currentColor 2%, transparent); }
-  .skill[open] { background: color-mix(in srgb, currentColor 4%, transparent); border-color: color-mix(in srgb, currentColor 22%, transparent); }
-  summary { list-style: none; cursor: pointer; }
-  summary::-webkit-details-marker { display: none; }
-  .skhead { display: flex; align-items: center; gap: 11px; padding: 10px 14px; }
-  .skhead::before { content: "›"; opacity: .35; font-size: 15px; transition: transform .15s ease; flex: none; }
-  .skill[open] > .skhead::before { transform: rotate(90deg); }
-  .skname { font-weight: 650; font-size: 15px; }
-  .sksub { opacity: .45; font-size: 12px; }
-  .skspark { margin-left: auto; opacity: .65; display: flex; }
-  .skbody { padding: 2px 16px 15px 16px; }
-  .sect { text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; opacity: .4; font-weight: 650; margin: 14px 0 6px; }
-  .why2 { font-size: 13px; line-height: 1.55; opacity: .8; }
+  /* master-detail layout: list nav (left) + detail (right) */
+  .grid { display: grid; grid-template-columns: 290px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } .nav { max-height: none; position: static; } }
+  .nav { position: sticky; top: 14px; max-height: calc(100vh - 96px); overflow: auto; border: 1px solid var(--bd); border-radius: 11px; padding: 6px; }
+  .navsec { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; opacity: .4; font-weight: 700; padding: 9px 9px 5px; }
+  .navitem { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 8px; cursor: pointer; }
+  .navitem:hover { background: color-mix(in srgb, currentColor 5%, transparent); }
+  .navitem.sel { background: color-mix(in srgb, var(--c-cyan) 14%, transparent); }
+  .navname { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .navsub { opacity: .45; font-size: 11.5px; margin-left: auto; flex: none; }
+  .navspark { opacity: .6; flex: none; display: flex; }
 
-  /* a run = score + what went well/badly/next, color-coded */
-  .run { padding: 8px 0; border-top: 1px solid color-mix(in srgb, currentColor 9%, transparent); }
-  .run:first-child { border-top: none; padding-top: 2px; }
+  .pane { border: 1px solid var(--bd); border-radius: 11px; padding: 18px 20px; min-height: 200px; }
+  .dhead { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; }
+  .dtitle { font-weight: 650; font-size: 17px; }
+  .del { margin-left: auto; font: 12px ui-sans-serif, system-ui, sans-serif; color: var(--c-red); background: none; border: 1px solid color-mix(in srgb, var(--c-red) 35%, transparent); border-radius: 7px; padding: 4px 10px; cursor: pointer; }
+  .del:hover { background: color-mix(in srgb, var(--c-red) 12%, transparent); }
+  .sect { text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; opacity: .42; font-weight: 700; margin: 18px 0 7px; }
+  .why { font-size: 13px; line-height: 1.6; opacity: .85; }
+
+  .run { padding: 9px 0; border-top: 1px solid color-mix(in srgb, currentColor 9%, transparent); }
+  .run:first-child { border-top: none; }
   .runtop { display: flex; align-items: center; gap: 9px; }
-  .runbody { margin: 5px 0 0 1px; }
-  .ln { font-size: 12.5px; line-height: 1.5; padding: 1px 0 1px 16px; text-indent: -16px; }
+  .runbody { margin: 5px 0 0; }
+  .ln { font-size: 13px; line-height: 1.55; padding: 1px 0 1px 18px; text-indent: -18px; }
   .ln.ok { color: var(--c-green); } .ln.bad { color: var(--c-red); } .ln.next { color: var(--c-cyan); }
 
-  /* nested disclosures (master, history, version prompt) */
-  .more { margin-top: 12px; }
-  .more > summary { font-size: 11.5px; opacity: .6; padding: 3px 0; }
-  .more > summary:hover { opacity: .9; }
-  pre { white-space: pre-wrap; word-break: break-word; background: color-mix(in srgb, currentColor 6%, transparent); padding: 11px; border-radius: 8px; font: 12px/1.5 ui-monospace, monospace; margin: 7px 0 0; }
-  .version { border-left: 2px solid color-mix(in srgb, currentColor 13%, transparent); padding: 0 0 0 12px; margin: 12px 0; }
-  .vhead { font-size: 12.5px; display: flex; align-items: center; gap: 8px; }
+  details.more { margin-top: 14px; }
+  details.more > summary { font-size: 11.5px; opacity: .6; cursor: pointer; list-style: none; }
+  details.more > summary::-webkit-details-marker { display: none; }
+  details.more > summary::before { content: "▸ "; opacity: .6; }
+  details.more[open] > summary::before { content: "▾ "; }
+  pre { white-space: pre-wrap; word-break: break-word; background: color-mix(in srgb, currentColor 6%, transparent); padding: 12px; border-radius: 8px; font: 12px/1.55 ui-monospace, monospace; margin: 8px 0 0; }
+  .diff { font: 12px/1.5 ui-monospace, monospace; background: color-mix(in srgb, currentColor 5%, transparent); padding: 9px 11px; border-radius: 8px; margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; }
+  .dl { padding: 1px 4px; border-radius: 3px; }
+  .dl.add { color: var(--c-green); background: color-mix(in srgb, var(--c-green) 12%, transparent); }
+  .dl.del { color: var(--c-red); background: color-mix(in srgb, var(--c-red) 11%, transparent); }
+  .dl.ctx { opacity: .5; }
+  .version { border-left: 2px solid color-mix(in srgb, currentColor 13%, transparent); padding-left: 13px; margin: 14px 0; }
+  .vhead { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
 
-  /* feed: one collapsible row per learning event */
-  .card { border: 1px solid color-mix(in srgb, currentColor 13%, transparent); border-radius: 9px; margin-bottom: 6px; }
-  .card.muted { opacity: .5; }
-  .fhead { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 8px 12px; }
-  .ftime { opacity: .45; font-size: 12px; font-variant-numeric: tabular-nums; min-width: 132px; }
-  .label { font-weight: 600; font-size: 13.5px; }
+  /* activity feed (default right-pane view) */
+  .ev { border-top: 1px solid color-mix(in srgb, currentColor 9%, transparent); padding: 9px 0; }
+  .ev:first-child { border-top: none; }
+  .evtop { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .evtime { opacity: .45; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .evlabel { font-weight: 600; cursor: pointer; }
   .tag { font-size: 10.5px; padding: 1px 7px; border-radius: 20px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); opacity: .75; }
   .tag.new { color: var(--c-green); border-color: color-mix(in srgb, var(--c-green) 40%, transparent); }
   .tag.gone { color: var(--c-amber); border-color: color-mix(in srgb, var(--c-amber) 40%, transparent); }
-  .fbody { padding: 0 12px 11px 12px; }
-  .req { opacity: .75; font-size: 12.5px; margin: 6px 0 0; }
-  .out { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; background: color-mix(in srgb, currentColor 6%, transparent); padding: 9px 11px; border-radius: 8px; font: 12px/1.55 ui-monospace, monospace; }
+  details.ev > summary { list-style: none; cursor: pointer; }
+  details.ev > summary::-webkit-details-marker { display: none; }
+  details.ev > summary.evtop::before { content: "▸"; opacity: .35; font-size: 11px; flex: none; }
+  details.ev[open] > summary.evtop::before { content: "▾"; }
+  .req { opacity: .8; font-size: 13px; margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; }
+  .out { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; background: color-mix(in srgb, currentColor 6%, transparent); padding: 10px 12px; border-radius: 8px; font: 12px/1.6 ui-monospace, monospace; }
   .lo { color: var(--c-red); }
 </style>
 </head>
 <body>
 <div class="hdr">
-  <div><h1>Cairn Skills</h1><p class="sub">What the agent has learned, most recently changed first. Click a skill for why it works and how it improved. <a href="/">brain &rarr;</a></p></div>
-  <input id="q" class="search" type="search" placeholder="search skills&hellip;" autocomplete="off" />
+  <h1>Cairn Skills</h1>
+  <input id="q" class="search" type="search" placeholder="search skills by meaning&hellip;" autocomplete="off" />
 </div>
-<div id="now"></div>
-<div id="skills"></div>
-<details class="feedwrap">
-  <summary class="feedsum">Recent learning activity <span id="feedcount" class="muted"></span></summary>
-  <div id="feed"></div>
-</details>
+<div class="grid">
+  <nav class="nav" id="nav"></nav>
+  <main class="pane" id="pane"></main>
+</div>
 <script>
-const esc = (s) => (s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-const fmtTs = (t) => t > 1e10 ? new Date(t).toLocaleString() : "#" + t;
-const fmtClock = (t) => t > 1e10 ? new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "#" + t;
+const esc = (s) => (s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtTs = (t) => t > 1e10 ? new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "#" + t;
 const tier = (s) => s >= 0.7 ? "hi" : s >= 0.5 ? "mid" : "lo";
-const clip = (s, n = 200) => { s = (s ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 const rev = (r) => { try { return JSON.parse(r) || {}; } catch { return {}; } };
+const lastTs = (s) => s.runs && s.runs.length ? Math.max(...s.runs.map((r) => r.ts)) : (s.ts || 0);
 
-function sparkline(scores, w0) {
+function sparkline(scores, w0, h0) {
   if (!scores.length) return "";
-  const w = w0 || Math.max(48, Math.min(120, scores.length * 14)), h = 22, pad = 3;
+  const w = w0 || Math.max(36, Math.min(80, scores.length * 11)), h = h0 || 18, pad = 2.5;
   const x = (i) => pad + (scores.length === 1 ? 0 : i * (w - 2 * pad) / (scores.length - 1));
   const y = (v) => h - pad - Math.max(0, Math.min(1, v)) * (h - 2 * pad);
   const pts = scores.map((v, i) => x(i) + "," + y(v).toFixed(1)).join(" ");
-  const dots = scores.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="1.9" fill="currentColor"/>`).join("");
-  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".55"/>${dots}</svg>`;
+  const dots = scores.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="1.7" fill="currentColor"/>`).join("");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".55"/>${dots}</svg>`;
+}
+const reviewLines = (v) => [
+  v.right ? `<div class="ln ok">✓ ${esc(v.right)}</div>` : "",
+  v.wrong ? `<div class="ln bad">✗ ${esc(v.wrong)}</div>` : "",
+  v.improve ? `<div class="ln next">→ ${esc(v.improve)}</div>` : "",
+].join("");
+
+// LCS line diff: which lines of the master prompt were added (+) / removed (-) between two versions, in order.
+function diffLines(oldT, newT) {
+  const a = (oldT || "").split("\n"), b = (newT || "").split("\n"), m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < m && j < n) { if (a[i] === b[j]) { out.push([" ", a[i]]); i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push(["-", a[i]]); i++; } else { out.push(["+", b[j]]); j++; } }
+  while (i < m) out.push(["-", a[i++]]);
+  while (j < n) out.push(["+", b[j++]]);
+  return out;
+}
+function renderDiff(oldT, newT) {
+  const d = diffLines(oldT, newT);
+  if (!d.some(([t]) => t !== " ")) return `<div class="diff"><div class="dl ctx">(no textual change)</div></div>`;
+  return `<div class="diff">${d.map(([t, line]) => `<div class="dl ${t === "+" ? "add" : t === "-" ? "del" : "ctx"}">${t} ${esc(line)}</div>`).join("")}</div>`;
 }
 
-// what went well / badly / next, color-coded; nothing is truncated, it just lives inside the expanded run.
-function reviewLines(v) {
-  return [
-    v.right ? `<div class="ln ok">✓ ${esc(v.right)}</div>` : "",
-    v.wrong ? `<div class="ln bad">✗ ${esc(v.wrong)}</div>` : "",
-    v.improve ? `<div class="ln next">→ ${esc(v.improve)}</div>` : "",
-  ].join("");
+let SKILLS = [], ACTIVITY = [], FILTERED = null, q = "", sel = "activity", FORCE_OPEN = [], applied = false;
+const openSet = () => new Set([...[...document.querySelectorAll("details[open]")].map((d) => d.dataset.k).filter(Boolean), ...FORCE_OPEN]);
+// Deep-link: /skills?sel=<skill name> preselects a skill; &open expands its panels (also used for screenshots).
+function applyUrl() {
+  if (applied) return; applied = true;
+  const p = new URLSearchParams(location.search), sn = p.get("sel");
+  if (sn) { const k = SKILLS.find((s) => s.task === sn); if (k) sel = k.id; }
+  if (p.has("open") && sel !== "activity") {
+    FORCE_OPEN = [sel + ":master", sel + ":hist"];
+    const sk = SKILLS.find((s) => s.id === sel);
+    if (sk && sk.versions) sk.versions.forEach((_, i) => { FORCE_OPEN.push(sel + ":d" + (i + 1)); FORCE_OPEN.push(sel + ":v" + (i + 1)); });
+  }
 }
 
-function runsBlock(s, open) {
-  const id = esc(s.id) + ":runs";
-  const items = s.runs.slice().reverse().map((r) => {
+function navList() {
+  const list = (FILTERED !== null ? FILTERED : SKILLS.slice().sort((a, b) => lastTs(b) - lastTs(a)));
+  const reviewing = ACTIVITY.some((e) => e.phase === "start" && !ACTIVITY.some((x) => x.phase !== "start" && x.ts === e.ts));
+  const act = `<div class="navitem ${sel === "activity" ? "sel" : ""}" data-sel="activity"><span class="${reviewing ? "pulse" : ""}"></span><span class="navname">Recent activity</span><span class="navsub">${ACTIVITY.filter((e) => e.phase !== "start").length}</span></div>`;
+  const rows = list.map((s) => {
+    const scores = s.runs.map((r) => r.quality), last = scores.length ? scores[scores.length - 1] : null;
+    return `<div class="navitem ${sel === s.id ? "sel" : ""}" data-sel="${esc(s.id)}">
+      <span class="chip ${last != null ? tier(last) : ""}">${last != null ? last.toFixed(2) : "—"}</span>
+      <span class="navname">${esc(s.task)}</span>
+      ${scores.length > 1 ? `<span class="navspark">${sparkline(scores)}</span>` : `<span class="navsub">${s.runs.length}r</span>`}
+    </div>`;
+  }).join("");
+  return `<div class="navsec">${q ? `Search &middot; ${list.length}` : "Skills"}</div>${rows || '<div class="muted" style="padding:8px 9px">no matches</div>'}
+    <div class="navsec">View</div>${act}`;
+}
+
+function skillDetail(s) {
+  const scores = s.runs.map((r) => r.quality), last = scores.length ? scores[scores.length - 1].toFixed(2) : "n/a", o = openSet();
+  const runs = s.runs.slice().reverse().map((r) => {
     const lines = reviewLines(rev(r.review));
     return `<div class="run"><div class="runtop"><span class="chip ${tier(r.quality)}">${r.quality.toFixed(2)}</span><span class="muted">${fmtTs(r.ts)}</span></div>${lines ? `<div class="runbody">${lines}</div>` : ""}</div>`;
   }).join("");
-  return `<details class="more" data-skill="${id}"${open.has(id) ? " open" : ""}><summary>runs &middot; ${s.runs.length} (what worked / what didn't)</summary>${items}</details>`;
-}
-
-// master-prompt evolution, newest first: score, char-delta, why it changed, and the full prompt for that version.
-function versionsBlock(s, open) {
   const vs = s.versions || [];
-  if (vs.length < 2) return ""; // a single version is just the current master shown above; no timeline yet
-  const items = vs.map((v, i) => ({ ...v, n: i + 1 })).reverse().map((v) => {
-    const pid = esc(s.id) + ":v" + v.n, prev = vs[v.n - 2];
-    const d = prev ? v.master.length - prev.master.length : v.master.length, sign = d > 0 ? "+" : "";
-    return `<div class="version">
-      <div class="vhead"><span class="chip ${tier(v.score || 0)}">${(v.score || 0).toFixed(2)}</span><b>v${v.n}</b><span class="muted">${fmtTs(v.ts)} &middot; ${sign}${d} chars</span></div>
-      ${v.explanation ? `<div class="why2" style="margin-top:5px">${esc(v.explanation)}</div>` : ""}
-      <details class="more" data-skill="${pid}"${open.has(pid) ? " open" : ""}><summary>prompt for v${v.n}</summary><pre>${esc(v.master)}</pre></details>
-    </div>`;
+  const versions = vs.length < 2 ? "" : `<details class="more" data-k="${esc(s.id)}:hist"${o.has(s.id + ":hist") ? " open" : ""}><summary>master history &middot; ${vs.length} versions</summary>${
+    vs.map((v, i) => ({ ...v, n: i + 1 })).reverse().map((v) => {
+      const prev = vs[v.n - 2], d = prev ? v.master.length - prev.master.length : v.master.length, sign = d > 0 ? "+" : "";
+      const dk = esc(s.id) + ":d" + v.n, pk = esc(s.id) + ":v" + v.n;
+      const changed = prev
+        ? `<details class="more" data-k="${dk}"${o.has(s.id + ":d" + v.n) ? " open" : ""}><summary>what changed from v${v.n - 1} &rarr; v${v.n}</summary>${renderDiff(prev.master, v.master)}</details>`
+        : "";
+      return `<div class="version"><div class="vhead"><span class="chip ${tier(v.score || 0)}">${(v.score || 0).toFixed(2)}</span><b>v${v.n}</b><span class="muted">${fmtTs(v.ts)} &middot; ${sign}${d} chars</span></div>${v.explanation ? `<div class="why" style="margin-top:5px">${esc(v.explanation)}</div>` : ""}${changed}<details class="more" data-k="${pk}"${o.has(s.id + ":v" + v.n) ? " open" : ""}><summary>full prompt for v${v.n}</summary><pre>${esc(v.master)}</pre></details></div>`;
+    }).join("")}</details>`;
+  return `<div class="dhead"><span class="chip ${scores.length ? tier(scores[scores.length - 1]) : ""}">${last}</span><span class="dtitle">${esc(s.task)}</span><span class="muted">${s.runs.length} run${s.runs.length === 1 ? "" : "s"}</span>${scores.length > 1 ? sparkline(scores, 90, 22) : ""}<button class="del" data-del="${esc(s.id)}" data-name="${esc(s.task)}">delete skill</button></div>
+    ${s.explanation ? `<div class="sect">why this works</div><div class="why">${esc(s.explanation)}</div>` : ""}
+    ${s.runs.length ? `<div class="sect">runs &middot; what worked / what didn't</div>${runs}` : ""}
+    ${s.masterPrompt ? `<details class="more" data-k="${esc(s.id)}:master"${o.has(s.id + ":master") ? " open" : ""}><summary>current master prompt</summary><pre>${esc(s.masterPrompt)}</pre></details>` : '<div class="muted" style="margin-top:12px">no master prompt yet</div>'}
+    ${versions}`;
+}
+
+function activityView() {
+  const o = openSet(), live = new Set(SKILLS.map((s) => s.task));
+  const running = ACTIVITY.filter((e) => e.phase === "start" && !ACTIVITY.some((x) => x.phase !== "start" && x.ts === e.ts));
+  const banner = running.length ? running.map((p) => `<div class="now"><span class="dot"></span><span>reviewing <span class="nowq">${esc(p.request || "")}</span></span></div>`).join("") : "";
+  const done = ACTIVITY.filter((e) => e.phase !== "start");
+  const evs = done.map((e) => {
+    if (e.phase === "failed") return `<div class="ev"><div class="evtop"><span class="evtime">${fmtTs(e.ts)}</span><span class="lo">learner call failed</span><span class="muted">${esc(e.error || "")}</span></div></div>`;
+    if (e.phase === "skipped") return `<div class="ev"><div class="evtop"><span class="evtime">${fmtTs(e.ts)}</span><span class="muted">not a reusable task</span></div></div>`;
+    const s = e.score ?? 0, r = e.review || {}, gone = e.label && !live.has(e.label), k = "ev:" + e.ts + ":" + (e.label || "");
+    const tags = `${e.created ? `<span class="tag new">new</span>` : `<span class="tag">updated</span>`}${gone ? `<span class="tag gone">removed</span>` : ""}`;
+    const detail = `${e.request ? `<div class="req">${esc(e.request)}</div>` : ""}${e.output ? `<div class="out">${esc(e.output)}</div>` : ""}${reviewLines({ right: r.right, wrong: r.wrong, improve: r.improve })}`;
+    const head = `<span class="evtime">${fmtTs(e.ts)}</span><span class="chip ${tier(s)}">${s.toFixed(2)}</span><span class="evlabel" ${gone ? "" : `data-sel-label="${esc(e.label || "")}"`}>${esc(e.label || "?")}</span>${tags}`;
+    if (!detail.trim()) return `<div class="ev"><div class="evtop">${head}</div></div>`;
+    return `<details class="ev" data-k="${esc(k)}"${o.has(k) ? " open" : ""}><summary class="evtop">${head}</summary><div style="padding:6px 0 10px">${detail}</div></details>`;
   }).join("");
-  const hid = esc(s.id) + ":hist";
-  return `<details class="more" data-skill="${hid}"${open.has(hid) ? " open" : ""}><summary>master history &middot; ${vs.length} versions</summary>${items}</details>`;
+  return `${banner}<div class="sect">recent learning activity &middot; ${done.length}</div>${evs || '<div class="empty">Nothing learned yet.</div>'}`;
 }
 
-function skillCard(s, open) {
-  const scores = s.runs.map((r) => r.quality);
-  const last = scores.length ? scores[scores.length - 1] : null;
-  const sid = esc(s.id), mid = sid + ":master";
-  return `<details class="skill" data-skill="${sid}"${open.has(sid) ? " open" : ""}>
-    <summary class="skhead">
-      <span class="chip ${last != null ? tier(last) : ""}">${last != null ? last.toFixed(2) : "—"}</span>
-      <span class="skname">${esc(s.task)}</span>
-      <span class="sksub">${s.runs.length} run${s.runs.length === 1 ? "" : "s"}</span>
-      <span class="skspark">${sparkline(scores)}</span>
-    </summary>
-    <div class="skbody">
-      ${s.explanation ? `<div class="sect">why this works</div><div class="why2">${esc(s.explanation)}</div>` : ""}
-      ${s.runs.length ? runsBlock(s, open) : ""}
-      ${s.masterPrompt ? `<details class="more" data-skill="${mid}"${open.has(mid) ? " open" : ""}><summary>current master prompt</summary><pre>${esc(s.masterPrompt)}</pre></details>` : '<div class="muted" style="margin-top:10px">no master prompt yet</div>'}
-      ${versionsBlock(s, open)}
-    </div>
-  </details>`;
+function render() {
+  document.getElementById("nav").innerHTML = navList();
+  const pane = document.getElementById("pane");
+  if (sel === "activity") { pane.innerHTML = activityView(); return; }
+  const s = SKILLS.find((x) => x.id === sel);
+  pane.innerHTML = s ? skillDetail(s) : activityView();
 }
-
-// one feed event, collapsed to a scannable header; expand for the deliverable + review. `live` = current labels.
-function feedCard(e, live, open) {
-  const t = `<span class="ftime">${fmtClock(e.ts)}</span>`;
-  if (e.phase === "failed")
-    return `<div class="card muted"><div class="fhead">${t}<span class="lo">learner call failed</span><span class="muted">${e.error ? esc(clip(e.error, 80)) : ""}</span></div></div>`;
-  if (e.phase === "skipped")
-    return `<div class="card muted"><div class="fhead">${t}<span class="muted">not a reusable task</span></div></div>`;
-  const s = e.score ?? 0, gone = e.label && !live.has(e.label), r = e.review || {};
-  const tags = [
-    e.created ? `<span class="tag new">new</span>` : `<span class="tag">updated</span>`,
-    gone ? `<span class="tag gone">removed</span>` : "",
-  ].join("");
-  const head = `${t}<span class="chip ${tier(s)}">${s.toFixed(2)}</span><span class="label">${esc(e.label || "?")}</span>${tags}`;
-  const body = `${e.request ? `<div class="req">${esc(clip(e.request))}</div>` : ""}${e.output ? `<div class="out">${esc(e.output)}</div>` : ""}${reviewLines({ right: r.right, wrong: r.wrong, improve: r.improve })}`;
-  if (!body.trim()) return `<div class="card${gone ? " muted" : ""}"><div class="fhead">${head}</div></div>`;
-  const id = "feed:" + e.ts + ":" + (e.label || "");
-  return `<details class="card${gone ? " muted" : ""}" data-skill="${esc(id)}"${open.has(id) ? " open" : ""}><summary class="fhead">${head}</summary><div class="fbody">${body}</div></details>`;
-}
-
-const lastTs = (s) => s.runs && s.runs.length ? Math.max(...s.runs.map((r) => r.ts)) : (s.ts || 0);
 
 let lastJson = "";
 async function load() {
-  const q = (document.getElementById("q").value || "").trim();
-  let skills, activity;
   try {
-    [skills, activity] = await Promise.all([
-      (await fetch("/api/skills" + (q ? "?q=" + encodeURIComponent(q) : ""))).json().then((d) => d.skills || []),
+    [SKILLS, ACTIVITY] = await Promise.all([
+      (await fetch("/api/skills")).json().then((d) => d.skills || []),
       (await fetch("/api/activity")).json().then((d) => d.activity || []),
     ]);
+    FILTERED = q ? await (await fetch("/api/skills?q=" + encodeURIComponent(q))).json().then((d) => d.skills || []) : null;
   } catch { return; }
-  if (!q) skills = skills.slice().sort((a, b) => lastTs(b) - lastTs(a)); // no query: most recently changed first
-  const json = JSON.stringify({ q, skills, activity });
-  if (json === lastJson) return;                 // skip the rebuild so an open panel never snaps shut
+  applyUrl();
+  if (sel !== "activity" && !SKILLS.some((s) => s.id === sel)) sel = "activity"; // selected skill was deleted
+  const json = JSON.stringify({ q, sel, SKILLS, ACTIVITY, FILTERED });
+  if (json === lastJson) return;
   lastJson = json;
-  const live = new Set(skills.map((s) => s.task));
-  // one set of every expanded panel id, so a refresh re-opens exactly what the user had open
-  const open = new Set([...document.querySelectorAll("details[open]")].map((d) => d.dataset.skill).filter(Boolean));
-
-  const closedTs = new Set(activity.filter((e) => e.phase !== "start").map((e) => e.ts));
-  const running = activity.filter((e) => e.phase === "start" && !closedTs.has(e.ts));
-  document.getElementById("now").innerHTML = running.length
-    ? (running.length > 1 ? `<p class="runcount">${running.length} learners running in parallel</p>` : "")
-      + running.map((p) => `<div class="now"><span class="dot"></span><span>reviewing <span style="opacity:.7">${esc(clip(p.request, 80))}</span></span></div>`).join("")
-    : "";
-
-  document.getElementById("skills").innerHTML = skills.length ? skills.map((s) => skillCard(s, open)).join("") : '<p class="empty">No skills yet. They appear after the agent finishes a task.</p>';
-
-  const done = activity.filter((e) => e.phase !== "start");
-  document.getElementById("feedcount") && (document.getElementById("feedcount").textContent = done.length ? "· " + done.length : "");
-  document.getElementById("feed").innerHTML = done.length ? done.map((e) => feedCard(e, live, open)).join("") : '<p class="empty">Nothing learned yet.</p>';
+  render();
 }
 load();
 setInterval(load, 2000);
-{
-  let deb; const qEl = document.getElementById("q");
-  qEl.addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(load, 220); }); // debounced live search
-}
+
+document.addEventListener("click", async (e) => {
+  const nav = e.target.closest("[data-sel]");
+  if (nav) { sel = nav.dataset.sel; lastJson = ""; render(); return; }
+  const byLabel = e.target.closest("[data-sel-label]");
+  if (byLabel) { const s = SKILLS.find((x) => x.task === byLabel.dataset.selLabel); if (s) { sel = s.id; lastJson = ""; render(); } return; }
+  const del = e.target.closest("[data-del]");
+  if (del) {
+    if (!confirm(`Delete skill "${del.dataset.name}"?\nThis permanently removes its master prompt, all runs, and version history.`)) return;
+    await fetch("/api/skills/" + encodeURIComponent(del.dataset.del), { method: "DELETE" });
+    sel = "activity"; lastJson = ""; load();
+  }
+});
+{ let deb; document.getElementById("q").addEventListener("input", (e) => { q = e.target.value.trim(); clearTimeout(deb); deb = setTimeout(() => { lastJson = ""; load(); }, 220); }); }
 </script>
 </body>
 </html>

@@ -75,15 +75,23 @@ export function skillByLabel(labelNorm: string): Skill | null {
   return (db().query(`${SELECT_SKILL} WHERE label_norm = ?`).get(labelNorm) as Skill | undefined) ?? null;
 }
 
-/** Delete a skill (by its label) and all its runs. Returns true if a skill was found and removed. Used to prune
- *  junk/obsolete skills (stubs, dead "<label> (N)" guard artifacts). The label is normalized to the restore key. */
+/** Delete a skill by id and everything attached to it (runs + version history). Returns true if a row was
+ *  removed. The single delete primitive used by the UI delete button and the label/CLI helper below. */
+export function deleteSkill(id: string): boolean {
+  ensure();
+  if (!id || !getSkill(id)) return false;
+  db().run("DELETE FROM skill_runs WHERE skill_id = ?", id);
+  db().run("DELETE FROM skill_versions WHERE skill_id = ?", id);
+  db().run("DELETE FROM skills WHERE id = ?", id);
+  return true;
+}
+
+/** Delete a skill (and its runs + versions) by its label. Returns false (no-op) when no skill owns that label.
+ *  Used by scripts/prune-skills.ts; the UI deletes by id via deleteSkill. */
 export function deleteSkillByLabel(label: string): boolean {
   ensure();
   const skill = skillByLabel(normalizeLabel(label));
-  if (!skill) return false;
-  db().run("DELETE FROM skill_runs WHERE skill_id = ?", skill.id);
-  db().run("DELETE FROM skills WHERE id = ?", skill.id);
-  return true;
+  return skill ? deleteSkill(skill.id) : false;
 }
 
 /** Replace a skill's master prompt (the instructions the doer reuses). Pass `explanation` to also replace

@@ -33,6 +33,17 @@ test("a new turn re-arms the one reminder", () => {
   expect(claimSkillReminder("S")).toBe(true);    // armed again
 });
 
+test("a turn that ended after searching is re-armed at the turn boundary (a resume fires no user_message)", () => {
+  // Regression: dispatch used to clear the latch ONLY on user_message. A resume after compaction fires no
+  // user_message, so a searched=true latch from a prior turn stayed set and silently suppressed the reminder
+  // for the rest of the session. The fix also clears the latch on turn_finished (Stop), modeled here.
+  resetSkillTurn("S");
+  noteSkillSearched("S");                        // turn 1: agent searched -> reminder correctly suppressed
+  expect(claimSkillReminder("S")).toBe(false);
+  resetSkillTurn("S");                           // turn boundary (turn_finished/Stop) clears the latch
+  expect(claimSkillReminder("S")).toBe(true);    // resumed turn 2's first action re-arms despite no user_message
+});
+
 test("turn state is per-session", () => {
   resetSkillTurn("A"); resetSkillTurn("B");
   noteSkillSearched("A");

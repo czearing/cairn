@@ -134,16 +134,19 @@ async function main(): Promise<void> {
 
   // Skill layer, OFF by default (opt in with "skills": true in ~/.cairn/config.json or CAIRN_SKILLS=1). The
   // agent retrieves skills ITSELF via the skill_search tool (taught in the base prompt) rather than via a
-  // cosine auto-injection that mispicks near-duplicates. We enforce that with one per-turn reminder: clear the
-  // latch on each user message, record when the agent calls skill_search, and remind ONCE if it reaches for an
-  // action tool first. On turn end, fire background learning. Best-effort and isolated.
+  // cosine auto-injection that mispicks near-duplicates. We enforce that with one per-turn reminder: record
+  // when the agent calls skill_search, and remind ONCE if it reaches for an action tool first. The latch is
+  // cleared at BOTH turn boundaries — the user_message that starts a normal turn AND the turn_finished that
+  // ends any turn — so the next turn starts clean even when it is a resume after compaction, which fires no
+  // user_message (that gap left a stale searched=true latch and silently suppressed the reminder all session).
+  // On turn end, also fire background learning. Best-effort and isolated.
   const session = (payload as { session_id?: string }).session_id ?? "";
   if ((await import("../../core/config")).skillsEnabled()) {
     try {
       const { skillInject, skillLearn, skillsExist } = await import("../../skill/hook");
       const { resetSkillTurn, noteSkillSearched, claimSkillReminder, isActionTool, isSkillSearch } = await import("../../skill/turngate");
       if (event.kind === "user_message") { resetSkillTurn(session); await skillInject(event.text, session); }
-      else if (event.kind === "turn_finished") skillLearn((payload as { transcript_path?: string }).transcript_path);
+      else if (event.kind === "turn_finished") { resetSkillTurn(session); skillLearn((payload as { transcript_path?: string }).transcript_path); }
       else if (event.kind === "tool_completed" && isSkillSearch(event.tool)) noteSkillSearched(session);
       else if (event.kind === "tool_pending" && isActionTool(event.tool) && skillsExist() && claimSkillReminder(session)) {
         out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;

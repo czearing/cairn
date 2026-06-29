@@ -16,7 +16,7 @@ import type { SkillRun } from "./types";
 // stored. A non-task yields an empty label and no skill. Each step is best-effort; the LLM steps are
 // injectable for deterministic tests.
 
-export interface RunInput { request: string; transcript: string; output: string; declaredLabel?: string }
+export interface RunInput { request: string; transcript: string; output: string }
 export interface SkillResult { skillId: string; task: string; score: number; created: boolean }
 
 export interface PipelineDeps {
@@ -31,12 +31,9 @@ export async function processRun(input: RunInput, now: number, deps: PipelineDep
   recordActivity({ ts: now, phase: "start", request: input.request });
   const labels = skillLabels();
 
-  // STAGE 1: get the label. If the agent DECLARED one this turn (it called skill_use), trust that pick and skip
-  // the classify LLM call entirely (faster, cheaper, and more accurate since the agent chose with full
-  // context). Otherwise classify the deliverable, unanchored, shown the existing skills.
-  const cls = input.declaredLabel
-    ? { label: input.declaredLabel, failed: false }
-    : await classify(input.request, input.output, input.transcript, skillCatalog());
+  // STAGE 1: get the label. Labeling is entirely the loop's job, never the doer's: classify the deliverable,
+  // unanchored, shown the existing skills, so the agent never has to think about labels.
+  const cls = await classify(input.request, input.output, input.transcript, skillCatalog());
   if (cls.failed) { recordActivity({ ts: now, phase: "failed", request: input.request, error: cls.error }); return []; }
   const label = cls.label;
   if (!label) { recordActivity({ ts: now, phase: "skipped", request: input.request }); return []; } // genuine non-task
@@ -96,12 +93,9 @@ export async function processRunCoordinated(input: RunInput, session: string, no
     review: async (runs: ReadyRun[]) => {
       recordActivity({ ts: now, phase: "start", request: input.request });
       const labels = skillLabels();
-      // STAGE 1: get the label. A skill the agent DECLARED this turn (skill_use) is trusted and skips the
-      // classify call; otherwise classify unanchored from the representative deliverable, shown the existing
-      // skills. The injected skill does NOT decide the label.
-      const cls = input.declaredLabel
-        ? { label: input.declaredLabel, failed: false }
-        : await classify(input.request, input.output, input.transcript, skillCatalog());
+      // STAGE 1: get the label. Labeling is the loop's job: classify unanchored from the representative
+      // deliverable, shown the existing skills. The injected skill does NOT decide the label.
+      const cls = await classify(input.request, input.output, input.transcript, skillCatalog());
       if (cls.failed) { recordActivity({ ts: now, phase: "failed", request: input.request, error: cls.error }); return; }
       const label = cls.label;
       if (!label) { recordActivity({ ts: now, phase: "skipped", request: input.request }); return; }

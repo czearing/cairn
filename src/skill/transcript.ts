@@ -19,25 +19,10 @@ function isToolResult(content: unknown): boolean {
   return Array.isArray(content) && content.some((c) => (c as { type?: string })?.type === "tool_result");
 }
 
-// The label the agent DECLARED for this turn by calling the skill_use tool, read straight from the tool_use
-// entry's input. This is the agent's own pick (made with full context), so the learner can skip its classify
-// call and grade/rewrite that skill directly. Returns "" when the message has no skill_use call.
-function declaredLabelOf(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  for (const c of content) {
-    const t = c as { type?: string; name?: string; input?: { label?: unknown } };
-    if (t?.type === "tool_use" && typeof t.name === "string" && (t.name === "skill_use" || t.name.endsWith("__skill_use"))) {
-      const lbl = t.input?.label;
-      if (typeof lbl === "string" && lbl.trim()) return lbl.trim();
-    }
-  }
-  return "";
-}
-
 export function extractRun(path: string): RunInput | null {
   let lines: string[];
   try { lines = readFileSync(path, "utf8").split("\n").filter(Boolean); } catch { return null; }
-  const turns: { role: "user" | "assistant"; text: string; declared: string }[] = [];
+  const turns: { role: "user" | "assistant"; text: string }[] = [];
   for (const line of lines) {
     let o: { type?: string; message?: { content?: unknown } };
     try { o = JSON.parse(line); } catch { continue; }
@@ -45,8 +30,7 @@ export function extractRun(path: string): RunInput | null {
     if (!role) continue;
     if (role === "user" && isToolResult(o.message?.content)) continue; // tool output, not a human prompt
     const text = textOf(o.message?.content);
-    const declared = role === "assistant" ? declaredLabelOf(o.message?.content) : ""; // skill_use marker
-    if (text || declared) turns.push({ role, text, declared });
+    if (text) turns.push({ role, text });
   }
   if (turns.length === 0) return null;
 
@@ -67,7 +51,5 @@ export function extractRun(path: string): RunInput | null {
   const output = [...turn].reverse().find((t) => t.role === "assistant" && t.text)?.text ?? "";
   if (!request || !output) return null;
   const transcript = turn.filter((t) => t.text).map((t) => `[${t.role}] ${t.text}`).join("\n").slice(0, 8000);
-  // The agent's own skill pick this turn (the LAST skill_use it called), so the learner can skip classify.
-  const declaredLabel = [...turn].reverse().find((t) => t.declared)?.declared ?? "";
-  return { request, transcript, output, declaredLabel };
+  return { request, transcript, output };
 }

@@ -105,7 +105,7 @@ async function main(): Promise<void> {
   // Subagent prompt injection. A subagent does NOT inherit the cairn prompt (SessionStart does not fire for
   // subagents, tested 2026-06-29). The ONE channel that reaches a subagent's own context is its Task prompt, so
   // when the parent spawns a Task we rewrite the prompt (PreToolUse updatedInput) to prepend the cairn protocol,
-  // giving every subagent the skill_search/skill_use + brain behavior. The orchestrate.md reminder still rides
+  // giving every subagent the skill_search + brain behavior. The orchestrate.md reminder still rides
   // back to the parent as additionalContext. Best-effort: on any failure, fall through to normal handling.
   if (event.kind === "tool_pending" && (event.tool === "Task" || event.tool === "Agent")) {
     try {

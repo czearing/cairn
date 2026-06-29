@@ -1,4 +1,4 @@
-You review one finished run and respond once. The skill label is already set and named for you in the user message; do not relabel it. Your response does two things: grade the output, then rewrite that skill's master prompt so the next run is better.
+You review one finished run and respond once. Your response does two things: grade the output, then rewrite that skill's master prompt so the next run is better.
 
 ## Grade the output
 

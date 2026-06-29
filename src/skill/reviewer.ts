@@ -100,12 +100,10 @@ export async function classifyLabel(request: string, output: string, transcript:
  *  CAIRN_SKILL_OUTPUT_PATH). Falls back to parsing the legacy ===MASTER=== text if the tool was not called.
  *  Returns {label, review, master}; never throws. */
 export async function reviewAndLearn(request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster = "", priorExplanation = "", timeoutMs?: number, forcedLabel?: string): Promise<LearnResult> {
-  // The label was already decided before this call (STAGE 1: skill_use or the unanchored classifier). Tell the
-  // learner which skill it is grading so it does not reclassify, and pass the label to the skill_output tool
-  // via env so the loop, not the model, owns it. The learner never echoes a label, so the anchor (the matched
-  // skill's master/priors) can never flip it and an omitted echo can never drop a complete review.
-  const decided = forcedLabel ? `This run is the skill "${forcedLabel}". Do not reclassify it. Grade the output and rewrite that skill's master.\n\n` : "";
-  const user = decided + learnUserPrompt(request, output, transcript, existing, priors, priorMaster, priorExplanation);
+  // Labeling is the loop's job, never the learner's: the label was decided in STAGE 1 and is handed to the
+  // skill_output tool via the CAIRN_SKILL_FORCED_LABEL env below. The learner only grades and rewrites the
+  // master, so it never sees, echoes, or can corrupt a label.
+  const user = learnUserPrompt(request, output, transcript, existing, priors, priorMaster, priorExplanation);
   const outPath = join(tmpdir(), `cairn-learn-${randomUUID()}.json`);
   const r = await runClaude(user, {
     system: LEARN_SYSTEM,

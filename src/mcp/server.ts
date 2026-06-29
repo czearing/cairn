@@ -127,21 +127,6 @@ server.tool(
   }
 );
 
-// The doer DECLARES which skill it is doing. After skill_search, the agent calls this with the chosen label so
-// the background reviewer knows the skill upfront and skips its classify step (faster, cheaper, and more
-// accurate since the agent picked with full context). The declaration is just this tool_use entry in the
-// transcript, which the learner reads (extractRun); the tool itself only validates and acknowledges.
-server.tool(
-  "skill_use",
-  "Declare which learned skill you are doing this turn. Call this right after skill_search once you have picked the skill whose steps you are following (use its exact label, or a new short label for a new task). It makes the background review faster and more accurate. Skip it only when no skill applies.",
-  { label: z.string().describe("The exact label of the skill you are following (or a new 1-4 word label for a new task type).") },
-  async ({ label }) => {
-    const lbl = label.trim();
-    if (!lbl) return fail("label is required: pass the skill label you are following");
-    return json({ ok: true, declared: lbl });
-  }
-);
-
 // The LEARNER's submission tool. The learner reasons out loud to judge the run (reasoning makes it sharper
 // and is never suppressed), then hands its finished review here as structured fields. The skill loop reads
 // that JSON (via CAIRN_SKILL_OUTPUT_PATH) instead of parsing the master back out of free text. No-op
@@ -158,8 +143,8 @@ server.tool(
     explanation: z.string().describe("The 2-to-4-sentence rationale for the next reviewer (why the best runs win, what excellent looks like, the failure mode to avoid). Never shown to the doer."),
   },
   async ({ score, right, wrong, improve, master, explanation }) => {
-    // The label is the loop's, not the learner's: it was decided before this call (skill_use or the
-    // classifier) and passed in via CAIRN_SKILL_FORCED_LABEL. The learner no longer echoes it, so it can
+    // The label is the loop's, not the learner's: it was decided before this call by the classifier and
+    // passed in via CAIRN_SKILL_FORCED_LABEL. The learner no longer echoes it, so it can
     // neither restate nor corrupt it. An empty forced label means a non-task (no skill, empty master ok).
     const lbl = (process.env.CAIRN_SKILL_FORCED_LABEL ?? "").trim();
     // Validate hard, then ERROR back so the learner resends correctly, never accept a half-formed review.

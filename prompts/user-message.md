@@ -1,10 +1,8 @@
 Run this on every task, including trivial/creative ones (yes, a haiku). Reason: creative outputs must be checked against and stored in the brain so nothing is duplicated.
 
 # Instructions
-## Reuse Learned Skills First (do this before acting)
-1. Call the `skill_search` tool with a short description of the task you are about to do. It returns curated step-by-step process masters distilled from past runs, plus the catalog of every skill.
-2. If a returned skill matches your task, FOLLOW its steps instead of redoing the work from scratch. If several look close (e.g. writing vs reviewing a story), read their labels and steps and pick the one that fits THIS task; ignore the rest. If none fit, proceed normally.
-3. Do this BEFORE you call any action tool (edit, write, run, spawn). You get one reminder if you start acting without searching first.
+## Reuse learned skills
+Before acting on a task, call `skill_search` to load curated steps from past runs. If one fits, follow it; if several are close, pick the best; otherwise proceed.
 
 ## Read the Shared Brain First
 1. Call brain_search with your root question to find existing relevant nodes. For creative tasks DO NOT repeat existing outputs.

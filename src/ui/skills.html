@@ -5,11 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Cairn Skills</title>
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: light dark; --c-cyan:#2a9fd6; --c-green:#2e9b57; --c-amber:#c98a16; --c-red:#cc4444; }
+  @media (prefers-color-scheme: dark) { :root { --c-cyan:#5cc4ef; --c-green:#52c47e; --c-amber:#e0a93a; --c-red:#e06b6b; } }
   body { font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; margin: 0; padding: 24px; max-width: 900px; margin-inline: auto; }
   h1 { font-size: 20px; margin: 0 0 4px; }
-  .sub { opacity: .6; margin: 0 0 20px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; opacity: .55; margin: 28px 0 10px; }
+  .sub { opacity: .6; margin: 0 0 16px; }
   .sub a { color: inherit; }
+  /* live "reviewing now" */
+  .runcount { font-size: 12px; font-weight: 650; color: var(--c-cyan); margin: 0 0 8px; }
+  .now { display: flex; align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--c-cyan) 50%, transparent); background: color-mix(in srgb, var(--c-cyan) 10%, transparent); border-radius: 10px; padding: 10px 14px; margin-bottom: 10px; }
+  .now .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c-cyan); animation: pulse 1.2s ease-in-out infinite; flex: none; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+  /* skills */
   .skill { border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
   .row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   .task { font-weight: 650; font-size: 16px; }
@@ -22,56 +30,118 @@
   details { margin-top: 8px; }
   summary { cursor: pointer; opacity: .7; font-size: 12px; }
   pre { white-space: pre-wrap; word-break: break-word; background: color-mix(in srgb, currentColor 6%, transparent); padding: 10px; border-radius: 8px; font: 12px/1.45 ui-monospace, monospace; margin: 6px 0 0; }
+  /* recent activity feed */
+  .card { border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 10px; padding: 10px 13px; margin-bottom: 8px; }
+  .card.muted { opacity: .5; }
+  .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .time { font-variant-numeric: tabular-nums; opacity: .5; font-size: 12px; min-width: 150px; }
+  .label { font-weight: 650; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 20px; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); opacity: .8; }
+  .tag.new { color: var(--c-green); border-color: color-mix(in srgb, var(--c-green) 45%, transparent); }
+  .tag.gone { color: var(--c-amber); border-color: color-mix(in srgb, var(--c-amber) 45%, transparent); }
+  .score { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+  .score b { font-variant-numeric: tabular-nums; }
+  .bar { width: 56px; height: 6px; border-radius: 4px; background: color-mix(in srgb, currentColor 14%, transparent); overflow: hidden; }
+  .bar > i { display: block; height: 100%; border-radius: 4px; }
+  .req { opacity: .8; margin: 6px 0 0; font-size: 13px; }
+  .lo { color: var(--c-red); } .mid { color: var(--c-amber); } .hi { color: var(--c-green); }
   .empty { opacity: .6; }
 </style>
 </head>
 <body>
 <h1>Cairn Skills</h1>
-<p class="sub">What the agent has learned, and how each skill's quality moves over time. Auto-refreshes. <a href="/activity">activity &rarr;</a> &middot; <a href="/">brain &rarr;</a></p>
-<div id="list"></div>
+<p class="sub">Everything the agent has learned, live. The skills are what it knows; the feed below is each learning run as it happens. Auto-refreshes. <a href="/">brain &rarr;</a></p>
+<div id="now"></div>
+<div id="skills"></div>
+<h2>Recent learning activity</h2>
+<div id="feed"></div>
 <script>
-const fmtTs = (t) => t > 1e10 ? new Date(t).toLocaleString() : "#" + t;
 const esc = (s) => (s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const fmtTs = (t) => t > 1e10 ? new Date(t).toLocaleString() : "#" + t;
+const fmtClock = (t) => t > 1e10 ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "#" + t;
+const tier = (s) => s >= 0.7 ? "hi" : s >= 0.5 ? "mid" : "lo";
+const tierColor = (s) => s >= 0.7 ? "var(--c-green)" : s >= 0.5 ? "var(--c-amber)" : "var(--c-red)";
+const clip = (s, n = 100) => { s = (s ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 
 function sparkline(scores) {
   if (!scores.length) return "";
   const w = Math.max(60, scores.length * 16), h = 32, pad = 3;
   const x = (i) => pad + (scores.length === 1 ? 0 : i * (w - 2 * pad) / (scores.length - 1));
-  const y = (v) => h - pad - Math.max(0, Math.min(1, v)) * (h - 2 * pad); // score 0..1
+  const y = (v) => h - pad - Math.max(0, Math.min(1, v)) * (h - 2 * pad);
   const pts = scores.map((v, i) => x(i) + "," + y(v).toFixed(1)).join(" ");
   const dots = scores.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.2" fill="currentColor"/>`).join("");
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".6"/>${dots}</svg>`;
 }
+function reviewNote(r) { try { const v = JSON.parse(r); return v.improve || v.wrong || ""; } catch { return ""; } }
 
-function review(r) {
-  try { const v = JSON.parse(r); return v.improve || v.wrong || ""; } catch { return ""; }
+// One feed card. `live` = the set of current skill labels, so a learned run whose skill was later pruned or
+// renamed is shown muted with a "removed" tag instead of looking like a skill that should be on the list.
+function feedCard(e, live) {
+  if (e.phase === "failed")
+    return `<div class="card muted"><div class="top"><span class="time">${fmtClock(e.ts)}</span><span class="lo">learner call failed${e.error ? ": " + esc(clip(e.error, 120)) : ""}</span></div>${e.request ? `<p class="req">${esc(clip(e.request))}</p>` : ""}</div>`;
+  if (e.phase === "skipped")
+    return `<div class="card muted"><div class="top"><span class="time">${fmtClock(e.ts)}</span><span>not a reusable task (nothing learned)</span></div>${e.request ? `<p class="req">${esc(clip(e.request))}</p>` : ""}</div>`;
+  const s = e.score ?? 0, pct = Math.round(Math.max(0, Math.min(1, s)) * 100);
+  const gone = e.label && !live.has(e.label);
+  const tags = [
+    e.created ? `<span class="tag new">new skill</span>` : `<span class="tag">updated</span>`,
+    e.master ? `<span class="tag">master rewritten</span>` : "",
+    gone ? `<span class="tag gone">skill since removed</span>` : "",
+  ].join("");
+  return `<div class="card${gone ? " muted" : ""}">
+    <div class="top">
+      <span class="time">${fmtClock(e.ts)}</span>
+      <span class="label">${esc(e.label || "?")}</span>
+      ${tags}
+      <span class="score"><b class="${tier(s)}">${s.toFixed(2)}</b><span class="bar"><i style="width:${pct}%;background:${tierColor(s)}"></i></span></span>
+    </div>
+    ${e.request ? `<p class="req">${esc(clip(e.request))}</p>` : ""}
+  </div>`;
 }
 
 let lastJson = "";
 async function load() {
-  const { skills } = await (await fetch("/api/skills")).json();
-  const list = document.getElementById("list");
-  // Skip the rebuild when nothing changed, so the 5s auto-refresh never collapses an open master prompt.
-  const json = JSON.stringify(skills);
-  if (json === lastJson) return;
+  let skills, activity;
+  try {
+    [skills, activity] = await Promise.all([
+      (await fetch("/api/skills")).json().then((d) => d.skills || []),
+      (await fetch("/api/activity")).json().then((d) => d.activity || []),
+    ]);
+  } catch { return; }
+  const json = JSON.stringify({ skills, activity });
+  if (json === lastJson) return;                 // skip rebuild so an open master prompt / panel never snaps shut
   lastJson = json;
-  if (!skills.length) { list.innerHTML = '<p class="empty">No skills yet. They appear after the agent finishes tasks.</p>'; return; }
-  // Remember which master prompts are expanded so a real data change does not snap them shut.
-  const open = new Set([...list.querySelectorAll("details[open]")].map((d) => d.dataset.skill));
-  list.innerHTML = skills.map((s) => {
+  const live = new Set(skills.map((s) => s.task));
+
+  // Live "reviewing now": a "start" with no terminal event at the same ts is a learner still running. Parallel.
+  const closedTs = new Set(activity.filter((e) => e.phase !== "start").map((e) => e.ts));
+  const running = activity.filter((e) => e.phase === "start" && !closedTs.has(e.ts));
+  document.getElementById("now").innerHTML = running.length
+    ? (running.length > 1 ? `<p class="runcount">${running.length} learners running in parallel</p>` : "")
+      + running.map((p) => `<div class="now"><span class="dot"></span><span>reviewing <span style="opacity:.7">${esc(clip(p.request, 80))}</span></span></div>`).join("")
+    : "";
+
+  // Skills: the durable state. Preserve which master prompts are expanded across refreshes.
+  const skEl = document.getElementById("skills");
+  const open = new Set([...skEl.querySelectorAll("details[open]")].map((d) => d.dataset.skill));
+  skEl.innerHTML = skills.length ? skills.map((s) => {
     const scores = s.runs.map((r) => r.quality);
     const last = scores.length ? scores[scores.length - 1].toFixed(2) : "n/a";
-    const runs = s.runs.map((r) => `<div><span class="q">${r.quality.toFixed(2)}</span><span>${fmtTs(r.ts)}</span><span class="note">${esc(review(r.review))}</span></div>`).join("");
+    const runs = s.runs.map((r) => `<div><span class="q">${r.quality.toFixed(2)}</span><span>${fmtTs(r.ts)}</span><span class="note">${esc(reviewNote(r.review))}</span></div>`).join("");
     return `<div class="skill">
       <div class="row"><span class="task">${esc(s.task)}</span><span class="meta">${s.runs.length} run${s.runs.length === 1 ? "" : "s"} &middot; latest ${last}</span></div>
       ${sparkline(scores)}
       <div class="runs">${runs}</div>
       ${s.masterPrompt ? `<details data-skill="${esc(s.id)}"${open.has(s.id) ? " open" : ""}><summary>master prompt</summary><pre>${esc(s.masterPrompt)}</pre></details>` : '<div class="meta">no master prompt yet</div>'}
     </div>`;
-  }).join("");
+  }).join("") : '<p class="empty">No skills yet. They appear after the agent finishes tasks.</p>';
+
+  // Feed: the same runs as they happened, reconciled against the live skills above.
+  const done = activity.filter((e) => e.phase !== "start");
+  document.getElementById("feed").innerHTML = done.length ? done.map((e) => feedCard(e, live)).join("") : '<p class="empty">Nothing learned yet.</p>';
 }
 load();
-setInterval(load, 5000);
+setInterval(load, 2000);
 </script>
 </body>
 </html>

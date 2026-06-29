@@ -20,9 +20,10 @@ async function handler(req: Request): Promise<Response> {
   // Skill store viewer: what skills exist, their master prompts, and the score of each run over time.
   if (pathname === "/api/skills" && m === "GET") { const { listSkills } = await import("../skill/store"); return Response.json({ skills: listSkills() }); }
   if (pathname === "/skills") return asset("skills.html", "text/html; charset=utf-8");
-  // Live activity feed: what the background learner is processing right now, newest first.
+  // Live activity feed data, consumed by the unified /skills dashboard (newest first).
   if (pathname === "/api/activity" && m === "GET") { const { readActivity } = await import("../skill/activity"); return Response.json({ activity: readActivity().slice(-100).reverse() }); }
-  if (pathname === "/activity") return asset("activity.html", "text/html; charset=utf-8");
+  // /activity converged into /skills (one dashboard: skills + live feed). Redirect old links there.
+  if (pathname === "/activity") return new Response(null, { status: 302, headers: { location: "/skills" } });
 
   if (pathname === "/api/neurons" && m === "POST") {
     const b = (await req.json()) as Body;

@@ -112,6 +112,21 @@ server.tool(
   async ({ id }) => json({ deleted: remove(id) })
 );
 
+// Agent-facing skill retrieval. Before doing a task, the agent calls this with a description of it and gets
+// back curated step-by-step "masters" distilled from past runs of that task, plus the catalog of all skills.
+// The agent picks the matching one and follows its steps. Returning several candidates (not force-injecting
+// one) is deliberate: it lets the agent disambiguate near-duplicate skills (writing vs reviewing a story) with
+// full context, which a cosine auto-injection cannot. Returns empty arrays when the skill layer is off/empty.
+server.tool(
+  "skill_search",
+  "Search your LEARNED SKILLS before doing a task. Returns curated, step-by-step process masters distilled from past runs of similar tasks, plus the catalog of every skill. Call this FIRST with a short description of the task you are about to do; if a returned skill matches, FOLLOW its steps instead of redoing the work from scratch. This is how you reuse hard-won process.",
+  { task: z.string().describe("A short description of the task you are about to do (e.g. 'write a short story', 'review a PR', 'debug a flaky test').") },
+  async ({ task }) => {
+    const { skillSearch } = await import("../skill/hook");
+    return json(await skillSearch(task));
+  }
+);
+
 // The LEARNER's submission tool. The learner reasons out loud to judge the run (reasoning makes it sharper
 // and is never suppressed), then hands its finished review here as structured fields. The skill loop reads
 // that JSON (via CAIRN_SKILL_OUTPUT_PATH) instead of parsing the master back out of free text. No-op

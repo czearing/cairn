@@ -18,6 +18,10 @@ process.env.CAIRN_READONLY = "1";
 
 const isBrainCreate = (t: string) => t === "brain_create" || t.endsWith("__brain_create");
 
+// Fired once per turn (PreToolUse) if the agent reaches for an action tool without having called skill_search.
+const SKILL_REMINDER =
+  "Before acting, search your learned skills: call skill_search with a short description of this task. If a curated skill matches, follow its steps instead of redoing the work. You will not be reminded again this turn.";
+
 // Awaited write so the buffer is fully flushed before we force-exit (a bare process.exit() right
 // after process.stdout.write() can truncate piped output).
 const emit = (obj: object) => Bun.write(Bun.stdout, JSON.stringify(obj));
@@ -99,12 +103,11 @@ async function main(): Promise<void> {
   }
 
   const content = await inject(event);
-  if (!content) return;
 
   // Reward depth, not count: praise a new node ONLY when it was linked under a non-root parent
   // (genuine descent). Flat root-children earn no praise.
-  let out = content;
-  if (event.kind === "tool_completed" && isBrainCreate(event.tool)) {
+  let out = content ?? "";
+  if (content && event.kind === "tool_completed" && isBrainCreate(event.tool)) {
     const edges = Array.isArray(event.input.edges) ? (event.input.edges as string[]) : [];
     const root = rootId();
     if (root && edges.some((e) => e !== root)) {
@@ -112,19 +115,26 @@ async function main(): Promise<void> {
     }
   }
 
-  // Skill layer, OFF by default (opt in with "skills": true in ~/.cairn/config.json or CAIRN_SKILLS=1). On a
-  // user message, append the curated-steps injection for the matching skill(s); on turn end, fire background
-  // learning. Best-effort and isolated so it can never disrupt the turn; the config read is cheap and gates
-  // the heavier skill/hook import so a default (skills-off) install pays almost nothing.
+  // Skill layer, OFF by default (opt in with "skills": true in ~/.cairn/config.json or CAIRN_SKILLS=1). The
+  // agent retrieves skills ITSELF via the skill_search tool (taught in the base prompt) rather than via a
+  // cosine auto-injection that mispicks near-duplicates. We enforce that with one per-turn reminder: clear the
+  // latch on each user message, record when the agent calls skill_search, and remind ONCE if it reaches for an
+  // action tool first. On turn end, fire background learning. Best-effort and isolated.
+  const session = (payload as { session_id?: string }).session_id ?? "";
   if ((await import("../../core/config")).skillsEnabled()) {
     try {
-      const { skillInject, skillLearn } = await import("../../skill/hook");
-      if (event.kind === "user_message") { const add = await skillInject(event.text, (payload as { session_id?: string }).session_id); if (add) out = `${out}\n\n${add}`; }
-      // The parent agent's turn finished. A subagent's stop is handled separately above (SubagentStop branch).
+      const { skillInject, skillLearn, skillsExist } = await import("../../skill/hook");
+      const { resetSkillTurn, noteSkillSearched, claimSkillReminder, isActionTool, isSkillSearch } = await import("../../skill/turngate");
+      if (event.kind === "user_message") { resetSkillTurn(session); await skillInject(event.text, session); }
       else if (event.kind === "turn_finished") skillLearn((payload as { transcript_path?: string }).transcript_path);
+      else if (event.kind === "tool_completed" && isSkillSearch(event.tool)) noteSkillSearched(session);
+      else if (event.kind === "tool_pending" && isActionTool(event.tool) && skillsExist() && claimSkillReminder(session)) {
+        out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
+      }
     } catch { /* skills are best-effort */ }
   }
 
+  if (!out) return;
   const eventName = getEventName(payload);
   if (!eventName) return;
 

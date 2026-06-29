@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { extractRun } from "../src/skill/transcript";
-import { skillsEnabled, skillInject, skillLearn, skillBlob } from "../src/skill/hook";
+import { skillsEnabled, skillInject, skillLearn, skillBlob, skillSearch, skillsExist } from "../src/skill/hook";
 import { categorize, reindexSkill } from "../src/skill/match";
 import { setMasterPrompt } from "../src/skill/store";
 import { db } from "../src/core/db";
@@ -126,7 +126,7 @@ test("skillBlob piggyback: gated off, returns curated steps for a synonym query 
   expect(blob[0]!.steps).toContain("imperative subject");
 });
 
-test("the injection debug file is written BY DEFAULT (no env var needed), and CAIRN_SKILL_DEBUG=0 turns it off", async () => {
+test("skillInject NO LONGER auto-injects a master (agent retrieves via skill_search), but still logs the match", async () => {
   const master = "1. imperative subject under 50 chars\n2. explain what changed and why";
   const { skill } = await categorize("commit message", 1);
   setMasterPrompt(skill.id, master);
@@ -137,10 +137,10 @@ test("the injection debug file is written BY DEFAULT (no env var needed), and CA
   process.env.CAIRN_SKILL_DEBUG_FILE = dbg;
   try {
     const out = await skillInject("how to write a good commit message");
-    expect(out).toContain("imperative subject");                 // it injected the steps
+    expect(out).toBe("");                                          // nothing is auto-injected into the agent now
     const logged = readFileSync(dbg, "utf8");
-    expect(logged).toContain("matched 1 skill(s): commit message"); // header names the matched skill + score
-    expect(logged).toContain("imperative subject");                 // the raw injected text is captured verbatim
+    expect(logged).toContain("matched 1 skill(s): commit message"); // the cosine match is still recorded for diagnostics
+    expect(logged).toContain("auto-injection disabled");            // and it is explicitly marked disabled
 
     rmSync(dbg);
     process.env.CAIRN_SKILL_DEBUG = "0";                          // explicit opt-out: nothing written
@@ -151,4 +151,27 @@ test("the injection debug file is written BY DEFAULT (no env var needed), and CA
     if (prevFile === undefined) delete process.env.CAIRN_SKILL_DEBUG_FILE; else process.env.CAIRN_SKILL_DEBUG_FILE = prevFile;
     try { rmSync(dbg); } catch { /* ignore */ }
   }
+});
+
+test("skill_search returns several candidate masters plus the catalog, so the agent disambiguates near-duplicates", async () => {
+  const writer = await categorize("short story", 1); setMasterPrompt(writer.skill.id, "1. write a two-paragraph story");
+  await reindexSkill(writer.skill.id, "short story", "1. write a two-paragraph story about a domain");
+  const reviewer = await categorize("short story review", 2); setMasterPrompt(reviewer.skill.id, "1. score the story and name its weakest tells");
+  await reindexSkill(reviewer.skill.id, "short story review", "1. score the story and name its weakest tells");
+  const prev = process.env.CAIRN_SKILLS; process.env.CAIRN_SKILLS = "1";
+  const res = await skillSearch("write a short story about a lighthouse");
+  if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
+  const labels = res.matches.map((m) => m.task);
+  expect(labels).toContain("short story");                         // the writer surfaces as a candidate...
+  expect(labels).toContain("short story review");                  // ...alongside the near-duplicate, for the agent to pick
+  expect(res.catalog.some((c) => c.startsWith("short story"))).toBe(true); // the full catalog rides along
+});
+
+test("skillsExist is false on an empty store, true once a skill exists (gates the search-first reminder)", async () => {
+  const prev = process.env.CAIRN_SKILLS; process.env.CAIRN_SKILLS = "1";
+  expect(skillsExist()).toBe(false);                               // nothing learned yet -> no reminder
+  const { skill } = await categorize("haiku", 1); setMasterPrompt(skill.id, "1. count 5-7-5");
+  await reindexSkill(skill.id, "haiku", "1. count 5-7-5");
+  expect(skillsExist()).toBe(true);
+  if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
 });

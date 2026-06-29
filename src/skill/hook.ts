@@ -2,9 +2,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { skillsEnabled } from "../core/config";
-import { retrieveSkills, condenseMessages, injectionText, skillInstructions, explainInjection, retrieveDiagnostic } from "./retrieve";
+import { retrieveSkills, condenseMessages, retrieveDiagnostic } from "./retrieve";
 import { learnFromTranscript } from "./learn";
 import { registerInflight } from "./coordinate";
+import { skillCatalog, skillVectors } from "./store";
 
 // Entry points the Claude Code dispatch calls. The skill feature is OFF by default (a fresh install never
 // runs it); opt in per machine with `"skills": true` in ~/.cairn/config.json or CAIRN_SKILLS=1. All are
@@ -33,25 +34,47 @@ function writeInjectionDebug(text: string, matches: { skill: { task: string }; s
 // also REGISTER each matched skill as in-flight for that session (a file write, safe from the read-only hook),
 // so the post-turn coordinator knows which windows are refining the same skill before they finish.
 export async function skillInject(text: string, sessionId?: string): Promise<string> {
+  // Auto-injection of a single cosine-matched master is DISABLED. Cosine mispicks near-duplicate skills (a
+  // story-WRITING prompt scored the reviewer's skill 0.568 vs the writer's 0.536 and injected the wrong steps).
+  // The agent now retrieves skills itself with the skill_search tool (instructed in the base prompt, enforced
+  // by a one-shot reminder), so it disambiguates with full context. We still run the cheap match here ONLY to
+  // register the in-flight skill for the post-turn coordinator and to record a diagnostic. Always returns ""
+  // (nothing is appended to the agent's context).
   if (!skillsEnabled() || !text.trim()) return "";
   try {
     const query = condenseMessages([text]);
     const matches = await retrieveSkills(query);
-    // Register only the TOP match as in-flight for coordination. Registering every match (k=2) left the
-    // non-reviewed skill orphaned as a 'doing' file each turn, and those orphans piled up and blocked later
-    // reviews via peersBusy. The doer still gets all matched masters; only the single best skill is tracked.
     if (sessionId && matches[0]) registerInflight(sessionId, matches[0].skill.task, Date.now());
-    const skills = matches.map((m) => m.skill);
-    const injected = injectionText(skillInstructions(skills), explainInjection(skills));
-    // On a 0-match, record WHY (empty store / embed failure / near-miss scores) so the bare "0" is diagnosable.
     let why = "";
     if (!matches.length && process.env.CAIRN_SKILL_DEBUG !== "0") {
       const d = await retrieveDiagnostic(query);
       why = `\nWHY 0: store=${d.storeCount} skills, embed=${d.embedOk ? `ok(dim ${d.embedDim})` : "FAILED"}, threshold=${d.threshold}, top: ${d.top.map((t) => `${t.task} ${t.score.toFixed(3)}`).join(", ") || "(store empty)"}`;
     }
-    writeInjectionDebug(injected, matches, why);
-    return injected || "";
-  } catch { return ""; }
+    writeInjectionDebug("(auto-injection disabled; agent retrieves via skill_search)", matches, why);
+  } catch { /* best-effort */ }
+  return "";
+}
+
+// Agent-facing skill retrieval. The agent calls this (via the skill_search MCP tool) with a description of the
+// task it is about to do; it gets back the top matching skills WITH their full step lists, plus the full
+// catalog of skill labels, and PICKS the right one itself. Returning several candidates (not one) is what fixes
+// the near-duplicate mispick: a "write a story" query surfaces both "short story" and "short story review", and
+// the agent follows the writer. Empty when the skill layer is off or the store is empty.
+export async function skillSearch(query: string): Promise<{ matches: { task: string; steps: string }[]; catalog: string[] }> {
+  if (!skillsEnabled() || !query.trim()) return { matches: [], catalog: [] };
+  try {
+    const matches = (await retrieveSkills(query, 3))
+      .filter((m) => m.skill.masterPrompt.trim())
+      .map((m) => ({ task: m.skill.task, steps: m.skill.masterPrompt }));
+    return { matches, catalog: skillCatalog() };
+  } catch { return { matches: [], catalog: [] }; }
+}
+
+// True only when the skill layer is on AND at least one skill exists, so the search-first reminder never fires
+// on a fresh/empty store (there would be nothing to find).
+export function skillsExist(): boolean {
+  if (!skillsEnabled()) return false;
+  try { return skillVectors().length > 0; } catch { return false; }
 }
 
 // On turn end, INCLUDING a subagent's stop: fire the background learner over that turn's transcript. A

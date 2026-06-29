@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   // rather than crashing the process before it can exit cleanly.
   const { inject } = await import("../../inject/inject");
   const { getEventName, normalizeClaudeCode } = await import("./normalize");
-  const { respond, denyPreTool } = await import("./respond");
+  const { respond, denyPreTool, modifyPreTool } = await import("./respond");
   const { rootId, openBranchExists, isClosedQuestion } = await import("../../core/audit");
 
   const raw = await Bun.stdin.text();
@@ -100,6 +100,23 @@ async function main(): Promise<void> {
       ));
       return;
     }
+  }
+
+  // Subagent prompt injection. A subagent does NOT inherit the cairn prompt (SessionStart does not fire for
+  // subagents, tested 2026-06-29). The ONE channel that reaches a subagent's own context is its Task prompt, so
+  // when the parent spawns a Task we rewrite the prompt (PreToolUse updatedInput) to prepend the cairn protocol,
+  // giving every subagent the skill_search/skill_use + brain behavior. The orchestrate.md reminder still rides
+  // back to the parent as additionalContext. Best-effort: on any failure, fall through to normal handling.
+  if (event.kind === "tool_pending" && (event.tool === "Task" || event.tool === "Agent")) {
+    try {
+      const orig = typeof event.input.prompt === "string" ? event.input.prompt : "";
+      if (orig.trim()) {
+        const proto = (await import("node:fs")).readFileSync(new URL("../../../prompts/subagent-protocol.md", import.meta.url), "utf8").trim();
+        const orchestrate = await inject(event); // parent-facing disjoint-coordination reminder (or null)
+        await emit(modifyPreTool({ ...event.input, prompt: `${proto}\n${orig}` }, orchestrate ?? ""));
+        return;
+      }
+    } catch { /* fall through to normal handling */ }
   }
 
   const content = await inject(event);

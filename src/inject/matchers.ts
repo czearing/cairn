@@ -23,7 +23,7 @@ export function matchEvent(event: NormalizedEvent): Match {
   // brain-coordinated delegation.
   if (event.kind === "tool_pending") {
     if (isTool(event.tool, "brain_create") || isTool(event.tool, "brain_mutate")) return { promptFile: "entry-format.md" };
-    if (event.tool === "Task") return { promptFile: "orchestrate.md" };
+    if (event.tool === "Task" || event.tool === "Agent") return { promptFile: "orchestrate.md" };
     return null;
   }
 
@@ -36,7 +36,7 @@ export function matchEvent(event: NormalizedEvent): Match {
       ? { promptFile: "answer-check.md" }
       : { promptFile: "node-modified.md" };
   }
-  if (tool === "Task") return { promptFile: "subtask-spawned.md" };
+  if (tool === "Task" || tool === "Agent") return { promptFile: "subtask-spawned.md" };
 
   return null;
 }

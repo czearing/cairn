@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { brainUsedThisTurn, mutatedIdsThisTurn } from "../src/hosts/claude-code/transcript";
 import { matchEvent } from "../src/inject/matchers";
 import { normalizeClaudeCode } from "../src/hosts/claude-code/normalize";
-import { respond } from "../src/hosts/claude-code/respond";
+import { respond, modifyPreTool } from "../src/hosts/claude-code/respond";
 
 function transcript(entries: object[]): string {
   const p = join(tmpdir(), `cairn-tx-${randomUUID()}.jsonl`);
@@ -112,5 +112,16 @@ test("delivery mechanism per moment is correct", () => {
   expect(respond("Stop", "R")).toEqual({ decision: "block", reason: "R" });
   expect(respond("PostToolUse", "C")).toEqual({
     hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "C" },
+  });
+});
+
+test("modifyPreTool rewrites the tool input (and optionally adds parent context)", () => {
+  // Rewriting a subagent's prompt: updatedInput REPLACES the tool input before it runs.
+  expect(modifyPreTool({ prompt: "PROTO\n\norig" })).toEqual({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { prompt: "PROTO\n\norig" } },
+  });
+  // With parent-facing context too.
+  expect(modifyPreTool({ prompt: "x" }, "PARENT")).toEqual({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { prompt: "x" }, additionalContext: "PARENT" },
   });
 });

@@ -1,6 +1,6 @@
 import { categorize, reindexSkill } from "./match";
 import { reviewAndLearn, reviewAndLearnMany, classifyLabel, type LearnResult, type ClassifyResult } from "./reviewer";
-import { addRun, setMasterPrompt, skillLabels, skillCatalog, topRuns, skillByLabel, normalizeLabel } from "./store";
+import { addRun, addVersion, setMasterPrompt, skillLabels, skillCatalog, topRuns, skillByLabel, normalizeLabel } from "./store";
 import { recordActivity } from "./activity";
 import { sessionSkill, type ReadyRun } from "./coordinate";
 import { coordinatedReview } from "./coordinator";
@@ -61,6 +61,7 @@ export async function processRun(input: RunInput, now: number, deps: PipelineDep
   addRun({ skillId: skill.id, recipe: input.transcript, quality: score, review: conciseReview, ts: now });
   if (master) {
     setMasterPrompt(skill.id, master, explanation ?? "");
+    addVersion(skill.id, master, explanation ?? "", score, now); // append to the master-version timeline (if it changed)
     await reindexSkill(skill.id, skill.task, master);
   }
   recordActivity({
@@ -120,6 +121,7 @@ export async function processRunCoordinated(input: RunInput, session: string, no
       for (const r of runs) addRun({ skillId: target.id, recipe: r.transcript, quality: review.score, review: conciseReview, ts: now });
       if (master) {
         setMasterPrompt(target.id, master, explanation ?? "");
+        addVersion(target.id, master, explanation ?? "", review.score, now); // append to the master-version timeline (if it changed)
         await reindexSkill(target.id, target.task, master);
       }
       recordActivity({

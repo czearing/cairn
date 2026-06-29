@@ -27,6 +27,14 @@
   .runs div { display: flex; gap: 10px; padding: 1px 0; }
   .runs .q { font-variant-numeric: tabular-nums; min-width: 38px; }
   .runs .note { opacity: .75; }
+  .why { font-size: 13px; line-height: 1.5; background: color-mix(in srgb, var(--c-cyan) 8%, transparent); border-left: 2px solid color-mix(in srgb, var(--c-cyan) 55%, transparent); padding: 7px 10px; border-radius: 0 6px 6px 0; margin: 8px 0; }
+  .why.current { margin: 8px 0 2px; }
+  .why b { color: var(--c-cyan); font-weight: 600; }
+  .vhist { margin-top: 8px; }
+  .vhist > summary { color: var(--c-cyan); }
+  .version { border-left: 2px solid color-mix(in srgb, currentColor 14%, transparent); padding: 2px 0 2px 12px; margin: 10px 0 10px 4px; }
+  .vhead { font-size: 13px; }
+  .vmeta { opacity: .55; font-size: 12px; font-variant-numeric: tabular-nums; }
   details { margin-top: 8px; }
   summary { cursor: pointer; opacity: .7; font-size: 12px; }
   pre { white-space: pre-wrap; word-break: break-word; background: color-mix(in srgb, currentColor 6%, transparent); padding: 10px; border-radius: 8px; font: 12px/1.45 ui-monospace, monospace; margin: 6px 0 0; }
@@ -78,6 +86,26 @@ function sparkline(scores) {
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".6"/>${dots}</svg>`;
 }
 function reviewNote(r) { try { const v = JSON.parse(r); return v.improve || v.wrong || ""; } catch { return ""; } }
+
+// The master-prompt evolution timeline: every version, newest first, each with the score of the run that
+// produced it, the explanation (WHY it changed / what good looks like), and the full prompt for that version.
+// `openSet` keeps a version's prompt expanded across the 2s auto-refresh.
+function versionsBlock(s, openSet) {
+  const vs = s.versions || [];
+  if (!vs.length) return "";
+  const items = vs.map((v, i) => ({ ...v, n: i + 1 })).reverse().map((v) => {
+    const did = esc(s.id) + ":v" + v.n, prev = vs[v.n - 2];
+    const delta = prev ? (v.master.length - prev.master.length) : v.master.length;
+    const sign = delta > 0 ? "+" : "";
+    return `<div class="version">
+      <div class="vhead"><b>v${v.n}</b> <span class="vmeta">${fmtTs(v.ts)} &middot; score ${(v.score || 0).toFixed(2)} &middot; ${v.master.length} chars (${sign}${delta})</span></div>
+      ${v.explanation ? `<div class="why">${esc(v.explanation)}</div>` : ""}
+      <details data-skill="${did}"${openSet.has(did) ? " open" : ""}><summary>prompt for v${v.n}</summary><pre>${esc(v.master)}</pre></details>
+    </div>`;
+  }).join("");
+  const hid = esc(s.id) + ":hist";
+  return `<details class="vhist" data-skill="${hid}"${openSet.has(hid) ? " open" : ""}><summary>master history &middot; ${vs.length} version${vs.length === 1 ? "" : "s"}</summary>${items}</details>`;
+}
 
 // One feed card. `live` = the set of current skill labels, so a learned run whose skill was later pruned or
 // renamed is shown muted with a "removed" tag instead of looking like a skill that should be on the list.
@@ -142,9 +170,11 @@ async function load() {
     const runs = s.runs.map((r) => `<div><span class="q">${r.quality.toFixed(2)}</span><span>${fmtTs(r.ts)}</span><span class="note">${esc(reviewNote(r.review))}</span></div>`).join("");
     return `<div class="skill">
       <div class="row"><span class="task">${esc(s.task)}</span><span class="meta">${s.runs.length} run${s.runs.length === 1 ? "" : "s"} &middot; latest ${last}</span></div>
+      ${s.explanation ? `<div class="why current"><b>why this works:</b> ${esc(s.explanation)}</div>` : ""}
       ${sparkline(scores)}
       <div class="runs">${runs}</div>
-      ${s.masterPrompt ? `<details data-skill="${esc(s.id)}"${open.has(s.id) ? " open" : ""}><summary>master prompt</summary><pre>${esc(s.masterPrompt)}</pre></details>` : '<div class="meta">no master prompt yet</div>'}
+      ${s.masterPrompt ? `<details data-skill="${esc(s.id)}"${open.has(s.id) ? " open" : ""}><summary>current master prompt</summary><pre>${esc(s.masterPrompt)}</pre></details>` : '<div class="meta">no master prompt yet</div>'}
+      ${versionsBlock(s, open)}
     </div>`;
   }).join("") : '<p class="empty">No skills yet. They appear after the agent finishes tasks.</p>';
 

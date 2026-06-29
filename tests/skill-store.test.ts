@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector, deleteSkillByLabel, skillCatalog } from "../src/skill/store";
+import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector, deleteSkillByLabel, skillCatalog, addVersion, skillVersions } from "../src/skill/store";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -33,6 +33,26 @@ test("deleteSkillByLabel removes the skill and its runs, by normalized label; re
   expect(skillByLabel("pr monitor 2")).toBeNull();          // skill gone
   expect(topRuns("k", 10).length).toBe(0);                  // its runs gone too
   expect(deleteSkillByLabel("never existed")).toBe(false);  // absent -> false, no throw
+});
+
+test("addVersion records each CHANGED master (dedup unchanged), skillVersions returns them oldest-first", () => {
+  putSkill({ id: "v1", task: "t", masterPrompt: "", ts: 1 }, [1, 0]);
+  addVersion("v1", "master A", "why A", 0.7, 100);
+  addVersion("v1", "master A", "why A v2", 0.7, 110);  // identical master -> NOT a new version
+  addVersion("v1", "master B", "why B", 0.85, 120);
+  const vs = skillVersions("v1");
+  expect(vs.map((v) => v.master)).toEqual(["master A", "master B"]); // oldest first, the dup dropped
+  expect(vs[1]!.explanation).toBe("why B");
+  expect(vs[1]!.score).toBeCloseTo(0.85, 5);
+});
+
+test("listSkills includes the master-version timeline", () => {
+  putSkill({ id: "v2", task: "t2", masterPrompt: "B", ts: 1 }, [1, 0]);
+  addVersion("v2", "A", "wA", 0.6, 1);
+  addVersion("v2", "B", "wB", 0.8, 2);
+  const sk = listSkills().find((x) => x.id === "v2")!;
+  expect(sk.versions.length).toBe(2);
+  expect(sk.versions[0]!.master).toBe("A"); // oldest first
 });
 
 test("skillCatalog lists each skill as 'label: gist' from the master's first line", () => {

@@ -25,6 +25,11 @@ function ensure(): void {
     db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', explanation TEXT NOT NULL DEFAULT '', identity TEXT NOT NULL DEFAULT '', identity_vec BLOB, base_label TEXT NOT NULL DEFAULT '', embedding BLOB, rich BLOB, embedding_model TEXT, ts INTEGER NOT NULL)");
     db().run("CREATE TABLE IF NOT EXISTS skill_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, recipe TEXT NOT NULL, quality REAL NOT NULL, review TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL)");
     db().run("CREATE INDEX IF NOT EXISTS skill_runs_skill_q ON skill_runs (skill_id, quality)");
+    // Append-only history of every master-prompt VERSION (each rewrite), with the explanation = why it changed
+    // and the score of the run that produced it. The skills table keeps only the CURRENT master (last-write-
+    // wins); this table is what the UI timeline reads to show how the master evolved and why.
+    db().run("CREATE TABLE IF NOT EXISTS skill_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, master TEXT NOT NULL DEFAULT '', explanation TEXT NOT NULL DEFAULT '', score REAL NOT NULL DEFAULT 0, ts INTEGER NOT NULL)");
+    db().run("CREATE INDEX IF NOT EXISTS skill_versions_skill ON skill_versions (skill_id, ts)");
     const cols = db().query("PRAGMA table_info(skills)").all() as { name: string }[]; // backfill older skills tables
     if (!cols.some((c) => c.name === "rich")) db().run("ALTER TABLE skills ADD COLUMN rich BLOB"); // domain-vocab vector
     if (!cols.some((c) => c.name === "explanation")) db().run("ALTER TABLE skills ADD COLUMN explanation TEXT NOT NULL DEFAULT ''"); // reviewer-only rationale, split out of master_prompt
@@ -160,6 +165,25 @@ export function variantSkills(baseLabel: string): { id: string; task: string }[]
   try { return db().query("SELECT id, task FROM skills WHERE label_norm = ? OR base_label = ?").all(base, base) as { id: string; task: string }[]; } catch { return []; }
 }
 
+/** Append a master-prompt VERSION to the skill's history when the master actually changed (no-op when the new
+ *  master is identical to the latest one, so an unchanged rewrite does not spam the timeline). Keeps the last
+ *  `keep` versions. This is the source for the UI's "how the master evolved and why" timeline. */
+export function addVersion(skillId: string, master: string, explanation: string, score: number, ts: number, keep = 50): void {
+  ensure();
+  try {
+    const last = db().query("SELECT master FROM skill_versions WHERE skill_id = ? ORDER BY ts DESC, id DESC LIMIT 1").get(skillId) as { master: string } | undefined;
+    if (last && last.master === master) return; // master unchanged: nothing new to version
+    db().run("INSERT INTO skill_versions (skill_id, master, explanation, score, ts) VALUES (?, ?, ?, ?, ?)", skillId, master, explanation, score, ts);
+    db().run("DELETE FROM skill_versions WHERE skill_id = ? AND id NOT IN (SELECT id FROM skill_versions WHERE skill_id = ? ORDER BY ts DESC, id DESC LIMIT ?)", skillId, skillId, keep);
+  } catch { /* read-only */ }
+}
+
+/** A skill's master-prompt versions, oldest first (the evolution timeline). */
+export function skillVersions(skillId: string): { master: string; explanation: string; score: number; ts: number }[] {
+  ensure();
+  try { return db().query("SELECT master, explanation, score, ts FROM skill_versions WHERE skill_id = ? ORDER BY ts ASC, id ASC").all(skillId) as { master: string; explanation: string; score: number; ts: number }[]; } catch { return []; }
+}
+
 /** Record a run under a skill, then prune to the top `keep` by quality (the reviewer's reference set). */
 export function addRun(run: SkillRun, keep = 10): void {
   ensure();
@@ -175,10 +199,14 @@ export function topRuns(skillId: string, n = 10): SkillRun[] {
 
 /** Every skill with its runs in chronological order, for the viewer (what is in the store + how it has
  *  changed over time). Read-only-tolerant. */
-export function listSkills(): (Skill & { runs: SkillRun[] })[] {
+export function listSkills(): (Skill & { runs: SkillRun[]; versions: { master: string; explanation: string; score: number; ts: number }[] })[] {
   ensure();
   try {
     const skills = db().query("SELECT id, task, master_prompt AS masterPrompt, explanation, ts FROM skills ORDER BY ts DESC").all() as Skill[];
-    return skills.map((s) => ({ ...s, runs: db().query("SELECT id, skill_id AS skillId, recipe, quality, review, ts FROM skill_runs WHERE skill_id = ? ORDER BY ts ASC").all(s.id) as SkillRun[] }));
+    return skills.map((s) => ({
+      ...s,
+      runs: db().query("SELECT id, skill_id AS skillId, recipe, quality, review, ts FROM skill_runs WHERE skill_id = ? ORDER BY ts ASC").all(s.id) as SkillRun[],
+      versions: skillVersions(s.id),
+    }));
   } catch { return []; }
 }

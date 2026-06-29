@@ -44,6 +44,11 @@
   .bar { width: 56px; height: 6px; border-radius: 4px; background: color-mix(in srgb, currentColor 14%, transparent); overflow: hidden; }
   .bar > i { display: block; height: 100%; border-radius: 4px; }
   .req { opacity: .8; margin: 6px 0 0; font-size: 13px; }
+  .out { margin: 7px 0 0; white-space: pre-wrap; word-break: break-word; background: color-mix(in srgb, currentColor 6%, transparent); padding: 8px 10px; border-radius: 8px; font: 12.5px/1.5 ui-monospace, monospace; }
+  .improve { margin: 7px 0 0; font-size: 13px; }
+  .improve b { color: var(--c-cyan); font-weight: 600; }
+  .reason { font-size: 13px; margin: 6px 0 0; }
+  .reason div { padding: 1px 0; }
   .lo { color: var(--c-red); } .mid { color: var(--c-amber); } .hi { color: var(--c-green); }
   .empty { opacity: .6; }
 </style>
@@ -88,6 +93,10 @@ function feedCard(e, live) {
     e.master ? `<span class="tag">master rewritten</span>` : "",
     gone ? `<span class="tag gone">skill since removed</span>` : "",
   ].join("");
+  const r = e.review || {};
+  const reason = (r.right || r.wrong) ? `<details><summary>reasoning</summary><div class="reason">
+      ${r.right ? `<div>✓ ${esc(r.right)}</div>` : ""}
+      ${r.wrong ? `<div>✗ ${esc(r.wrong)}</div>` : ""}</div></details>` : "";
   return `<div class="card${gone ? " muted" : ""}">
     <div class="top">
       <span class="time">${fmtClock(e.ts)}</span>
@@ -96,6 +105,9 @@ function feedCard(e, live) {
       <span class="score"><b class="${tier(s)}">${s.toFixed(2)}</b><span class="bar"><i style="width:${pct}%;background:${tierColor(s)}"></i></span></span>
     </div>
     ${e.request ? `<p class="req">${esc(clip(e.request))}</p>` : ""}
+    ${e.output ? `<div class="out">${esc(e.output)}</div>` : ""}
+    ${r.improve ? `<p class="improve"><b>next:</b> ${esc(r.improve)}</p>` : ""}
+    ${reason}
   </div>`;
 }
 

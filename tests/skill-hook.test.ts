@@ -77,6 +77,32 @@ test("extractRun returns null on an unreadable path", () => {
   expect(extractRun(join(tmpdir(), "does-not-exist-cairn.jsonl"))).toBeNull();
 });
 
+test("extractRun reads the agent's declared skill from a skill_use tool call (the LAST one)", () => {
+  const p = join(tmpdir(), `cairn-decl-${process.pid}.jsonl`);
+  writeFileSync(p, [
+    JSON.stringify({ type: "user", message: { content: "write me a haiku about frost" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_use", input: { label: "poem" } }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_use", input: { label: "haiku" } }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "first frost on the gate" }] } }),
+  ].join("\n"));
+  const run = extractRun(p);
+  rmSync(p, { force: true });
+  expect(run!.declaredLabel).toBe("haiku");               // the latest declaration wins
+  expect(run!.output).toBe("first frost on the gate");    // a tool-only assistant msg is not the output
+  expect(run!.request).toBe("write me a haiku about frost");
+});
+
+test("extractRun leaves declaredLabel empty when the agent never called skill_use", () => {
+  const p = join(tmpdir(), `cairn-nodecl-${process.pid}.jsonl`);
+  writeFileSync(p, [
+    JSON.stringify({ type: "user", message: { content: "write a haiku" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "THE_HAIKU" }] } }),
+  ].join("\n"));
+  const run = extractRun(p);
+  rmSync(p, { force: true });
+  expect(run!.declaredLabel).toBe("");
+});
+
 test("the skill layer is OFF by default, ON via CAIRN_SKILLS=1 (or the config flag)", () => {
   const prev = process.env.CAIRN_SKILLS;
   delete process.env.CAIRN_SKILLS;

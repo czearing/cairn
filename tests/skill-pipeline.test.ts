@@ -44,6 +44,17 @@ test("processRun returns [] and creates no skill when the classifier gives no la
   expect(skillByLabel("thanks that s great")).toBeNull();
 });
 
+test("a declared label (skill_use) skips the classifier and routes to that skill", async () => {
+  let classifyCalled = false;
+  const res = await processRun({ request: "write about a lighthouse", transcript: "t", output: "a story", declaredLabel: "short story" }, 1, {
+    classify: async () => { classifyCalled = true; return { label: "short story review", failed: false }; }, // would mispick
+    learn: async () => ({ label: "short story", review: { score: 0.8, right: "", wrong: "", improve: "", raw: "" }, master: "STORY MASTER", explanation: "why" }),
+  });
+  expect(classifyCalled).toBe(false);                       // the agent's pick is trusted; no classify LLM call
+  expect(res[0]!.task).toBe("short story");                 // routed by the declared label, not the classifier
+  expect(skillByLabel("short story")!.masterPrompt).toBe("STORY MASTER");
+});
+
 test("a failed classify call is recorded as failed, not a non-task", async () => {
   const res = await processRun({ request: "real task", transcript: "x", output: "y" }, 1, {
     classify: async () => ({ label: "", failed: true, error: "claude call failed" }),

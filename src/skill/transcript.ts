@@ -8,21 +8,17 @@ import type { RunInput } from "./pipeline";
 // message (so a deliverable produced mid-turn is never lost behind end-of-turn bookkeeping), the tool calls
 // (so the learner sees it searched skills, spawned a subagent, etc.), and the message timestamps.
 
-interface Parts { text: string; tools: { name: string; arg: string }[] }
-// Split one message's content into its visible text and the tools it invoked. tool_use entries are kept as
-// (name + a short arg preview) so the learner can see the ACTION without the noisy full input/output.
+interface Parts { text: string; tools: string[] }
+// Split one message's content into its visible text and the NAMES of the tools it invoked, so the learner
+// can see the ACTION sequence without the noisy full tool inputs/outputs.
 function partsOf(content: unknown): Parts {
   if (typeof content === "string") return { text: content.trim(), tools: [] };
   if (!Array.isArray(content)) return { text: "", tools: [] };
-  const texts: string[] = [], tools: { name: string; arg: string }[] = [];
+  const texts: string[] = [], tools: string[] = [];
   for (const c of content) {
-    const o = c as { type?: string; text?: string; name?: string; input?: unknown };
+    const o = c as { type?: string; text?: string; name?: string };
     if (o?.type === "text" && typeof o.text === "string") texts.push(o.text);
-    else if (o?.type === "tool_use" && typeof o.name === "string") {
-      const name = o.name.includes("__") ? o.name.slice(o.name.lastIndexOf("__") + 2) : o.name;
-      let arg = ""; try { arg = JSON.stringify(o.input ?? "").slice(0, 80); } catch { /* unserializable */ }
-      tools.push({ name, arg });
-    }
+    else if (o?.type === "tool_use" && typeof o.name === "string") tools.push(o.name.includes("__") ? o.name.slice(o.name.lastIndexOf("__") + 2) : o.name);
   }
   return { text: texts.join(" ").trim(), tools };
 }
@@ -36,7 +32,7 @@ function isToolResult(content: unknown): boolean {
 // HH:MM:SS from an ISO timestamp ("2026-06-24T19:45:35.130Z"), or "" when the line has no timestamp.
 function clock(ts: unknown): string { return typeof ts === "string" && ts.length >= 19 && ts[10] === "T" ? ts.slice(11, 19) : ""; }
 
-interface Event { role: "user" | "assistant"; text: string; tools: { name: string; arg: string }[]; ts: string }
+interface Event { role: "user" | "assistant"; text: string; tools: string[]; ts: string }
 
 export function extractRun(path: string): RunInput | null {
   let lines: string[];
@@ -65,14 +61,15 @@ export function extractRun(path: string): RunInput | null {
   // agent's text this turn joined, so a story written before end-of-turn bookkeeping is graded, not the last
   // line. The learner (the intelligent layer) picks out the actual deliverable; we never drop it in code.
   const request = turn.filter((e) => e.role === "user" && e.text).map((e) => e.text).join("\n").trim();
-  const output = turn.filter((e) => e.role === "assistant" && e.text).map((e) => e.text).join("\n\n").trim().slice(0, 8000);
+  const output = turn.filter((e) => e.role === "assistant" && e.text).map((e) => e.text).join("\n\n").trim();
   if (!request || !output) return null;
   // Process = the whole turn with timestamps and tool calls, in order, so the learner sees what actually
-  // happened (which skills it searched, when it spawned a subagent, where it went back and forth).
+  // happened (which skills it searched, when it spawned a subagent, where it went back and forth). No length
+  // cap: the deliverable must never be truncated out of what gets graded.
   const transcript = turn.map((e) => {
     const time = e.ts ? `${e.ts} ` : "";
-    const tools = e.tools.length ? ` (tools: ${e.tools.map((t) => (t.arg ? `${t.name} ${t.arg}` : t.name)).join("; ")})` : "";
+    const tools = e.tools.length ? ` (tools: ${e.tools.join("; ")})` : "";
     return `${time}[${e.role}] ${e.text}${tools}`.trimEnd();
-  }).join("\n").slice(0, 10000);
+  }).join("\n");
   return { request, transcript, output };
 }

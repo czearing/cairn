@@ -37,7 +37,7 @@ export const config: CairnConfig = {
     baseUrl: process.env.CAIRN_EMBED_BASE_URL || "",
   },
   relevanceThreshold: Number(process.env.CAIRN_RELEVANCE_THRESHOLD || "0.3"),
-  relativeFloor: Number(process.env.CAIRN_RELATIVE_FLOOR || "0.7"), // adaptive gate: keep results >= 0.7*top score (0 = off)
+  relativeFloor: Number(process.env.CAIRN_RELATIVE_FLOOR || "0.85"), // adaptive gate: keep results >= 0.85*top score (0 = off)
   expandSubtree: process.env.CAIRN_SEARCH_EXPAND === "1", // off by default: return only direct matches
   maxAnswerChars: Number(process.env.CAIRN_MAX_ANSWER_CHARS || "2000"), // reject insanely verbose answers
 

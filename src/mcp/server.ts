@@ -6,7 +6,6 @@ import { create, mutate, remove, refsByIds } from "../core/neurons";
 import { isClosedQuestion } from "../core/audit";
 import { search } from "../core/search";
 import { config } from "../core/config";
-import { fitToBudget } from "./budget";
 import { neighborContext } from "./context";
 import type { Neuron } from "../core/neurons.types";
 import type { ScoredResult } from "../core/search.types";
@@ -35,13 +34,6 @@ const leanHit = ({ id, text, answer, citation, score }: ScoredResult) => ({ id, 
 // count cap. Set CAIRN_SEARCH_LIMIT > 0 to also impose a top-N count cap as a backstop.
 const SEARCH_LIMIT = Number(process.env.CAIRN_SEARCH_LIMIT || "0");
 
-// Character budget for the serialized result. NOT a result-count cap: results are filled most-relevant
-// -first until this budget is spent (see fitToBudget). Calibrated from real overflows: agent-facing
-// brain_search results of 66k and 140k chars both exceeded the host's tool-output token ceiling (~25k
-// tokens; dense JSON tokenizes near ~2.5 chars/token, so ~62k chars is the failing edge). 50k leaves
-// real headroom under that. Set CAIRN_SEARCH_BUDGET to retune, or 0 to disable.
-const SEARCH_BUDGET = Number(process.env.CAIRN_SEARCH_BUDGET ?? "50000");
-
 server.tool(
   "brain_search",
   "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a `score` (0-1 cosine relevance): weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. A result may also carry `prior`/`next`: the adjacent question above/below it in the brain's reasoning graph, for context. Use this as much as possible to learn from previous thoughts",
@@ -54,12 +46,12 @@ server.tool(
     // a compact, useful use of edges (where a recalled thought sits in the reasoning flow) instead of
     // raw neighbor UUIDs the agent can't act on. One batched lookup for every referenced neighbor.
     const refs = refsByIds(capped.flatMap((h) => [h.id, ...h.edges]));
-    const withCtx = capped.map((h) => ({ ...leanHit(h), ...neighborContext(h, refs) }));
-    // Then fit the ranked hits into the output budget (most-relevant-first) so a large result never
-    // overflows the transport and fails the whole call.
-    const thoughts = fitToBudget(withCtx, SEARCH_BUDGET);
+    const thoughts = capped.map((h) => ({ ...leanHit(h), ...neighborContext(h, refs) }));
+    // The result set is kept tight by the adaptive relevance floor (CAIRN_RELATIVE_FLOOR, default 0.85 of the
+    // top score) rather than a character cap — only genuinely-relevant thoughts qualify, so the payload stays
+    // small without ever truncating a node's answer. Tighten the floor (or set CAIRN_SEARCH_LIMIT) to trim more.
     // Piggyback: when the skill layer is enabled (skillsEnabled, off by default), surface the matching skill's
-    // curated steps as a SEPARATE blob (top-2, ~0.6% of the budget); skillBlob returns [] when it is off.
+    // curated steps as a SEPARATE blob (top-2); skillBlob returns [] when it is off.
     // Threshold-gated so an unrelated search returns none. Shape is unchanged (the bare array) unless a skill
     // actually matches, so default consumers are untouched.
     const { skillBlob } = await import("../skill/hook");

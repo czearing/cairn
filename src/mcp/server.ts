@@ -154,4 +154,40 @@ server.tool(
   }
 );
 
+// The SEGMENTER's submission tool (STAGE 1 of the skill loop). The segmenter reads ONE finished turn and
+// lists each distinct reusable deliverable it produced — UNANCHORED (it gets no skill master or priors, and
+// only this one tool), so it can never be biased into mislabeling a review of X as X. It submits the list
+// here as structured rows instead of printing a JSON array we'd have to regex back out of free text; the
+// loop reads that JSON via CAIRN_SKILL_SEGMENT_PATH. A non-task submits an empty list. No-op when no path.
+server.tool(
+  "skill_segment",
+  "Submit the list of distinct reusable DELIVERABLES this turn produced, ONCE, as the last action after reasoning out loud. Each row is a {label, what}. Pass an EMPTY list for a turn that produced no reusable deliverable (chit-chat, bookkeeping, a correction). A turn that writes a story AND reviews it submits TWO rows.",
+  {
+    deliverables: z
+      .array(
+        z.object({
+          label: z.string().describe("The reusable task label in 1-4 lowercase words, by WHAT was produced (a review of a story is 'short story review', never 'short story')."),
+          what: z.string().describe("One short phrase naming THIS specific deliverable so a grader can find it in the turn (e.g. 'the story about the lighthouse keeper')."),
+        })
+      )
+      .describe("Every distinct reusable deliverable in the turn. Empty for a non-task."),
+  },
+  async ({ deliverables }) => {
+    // Deterministic normalization only (trim/lowercase/clip/dedup) — never a content judgment: the model
+    // decided WHAT the deliverables are; this just canonicalizes the rows and drops exact-label duplicates so
+    // one turn never makes two runs of the same skill.
+    const out: { label: string; what: string }[] = [];
+    const seen = new Set<string>();
+    for (const it of deliverables) {
+      const label = (it.label ?? "").trim().slice(0, 60).toLowerCase();
+      if (!label || seen.has(label)) continue;
+      seen.add(label);
+      out.push({ label, what: (it.what ?? "").trim().slice(0, 200) });
+    }
+    const p = process.env.CAIRN_SKILL_SEGMENT_PATH;
+    if (p) { try { writeFileSync(p, JSON.stringify({ deliverables: out })); } catch { /* capture is best-effort */ } }
+    return json({ ok: true, count: out.length });
+  }
+);
+
 await server.connect(new StdioServerTransport());

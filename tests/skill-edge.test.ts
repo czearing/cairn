@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { parseReview, parseLearn } from "../src/skill/reviewer";
+import { readSegment } from "../src/skill/reviewer";
 import { normalizeLabel, categorize } from "../src/skill/match";
 import { putSkill } from "../src/skill/store";
 import { db } from "../src/core/db";
@@ -9,27 +9,18 @@ beforeEach(() => {
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created */ }
 });
 
-// ---- parser hostility: a consumer LLM returns messy output; nothing should crash or yield garbage ----
+// ---- reader hostility: a malformed/empty capture must yield null (not submitted) or a clean list ----
 
-test("parseLearn: missing master section, missing label, and a normal split", () => {
-  expect(parseLearn(null)).toEqual({ label: null, review: null, master: null, explanation: null });
-  expect(parseLearn('{"label":"haiku","score":0.5,"right":"","wrong":"","improve":""}')).toMatchObject({ label: "haiku", master: null });
-  const both = parseLearn('{"label":"haiku","score":0.9,"right":"a","wrong":"b","improve":"c"}\n===MASTER===\nWhy.\n\n1. step');
-  expect(both.label).toBe("haiku");
-  expect(both.review?.score).toBe(0.9);
-  expect(both.master).toContain("1. step");
+test("readSegment: null when nothing was submitted; clean rows when it was", () => {
+  expect(readSegment(null)).toBeNull();          // tool never called
+  expect(readSegment("not json")).toBeNull();    // unreadable capture
+  expect(readSegment('{"deliverables":[]}')).toEqual([]); // submitted a non-task (empty list)
+  expect(readSegment('{"deliverables":[{"label":"Haiku","what":"the frost haiku"}]}')).toEqual([{ label: "haiku", what: "the frost haiku" }]);
 });
 
-test("parseLearn: empty label string is treated as no label (non-task)", () => {
-  expect(parseLearn('{"label":"","score":0.4,"right":"","wrong":"","improve":""}').label).toBeNull();
-});
-
-test("parseReview: out-of-range, missing, junk, and nested braces", () => {
-  expect(parseReview('{"score":2,"right":"x"}')).toBeNull();
-  expect(parseReview('{"right":"no score"}')).toBeNull();
-  expect(parseReview("plain prose, no json")).toBeNull();
-  expect(parseReview(null)).toBeNull();
-  expect(parseReview('{"score":0.5,"right":"use {x}","wrong":"","improve":""}')?.score).toBe(0.5); // brace in a string
+test("readSegment: dedups by label and drops blank labels", () => {
+  const out = readSegment('{"deliverables":[{"label":"haiku","what":"a"},{"label":"haiku","what":"b"},{"label":"","what":"c"}]}');
+  expect(out).toEqual([{ label: "haiku", what: "a" }]);
 });
 
 test("normalizeLabel: empty and all-punctuation collapse to empty, never throw", () => {

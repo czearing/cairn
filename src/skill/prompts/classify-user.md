@@ -11,4 +11,4 @@ WHAT THE AGENT DELIVERED (find each distinct deliverable in here and in the proc
 RUN PROCESS (ordered, with tool calls and any subagent activity — a reviewer subagent's critique counts as its OWN deliverable):
 {{transcript}}
 
-End with `===DELIVERABLES===` then, on the next line, a single-line JSON array of {"label","what"} objects (or `[]` for a turn with no reusable deliverable).
+Call the skill_segment tool exactly once with one {label, what} row per distinct deliverable (an empty list for a turn with no reusable deliverable).

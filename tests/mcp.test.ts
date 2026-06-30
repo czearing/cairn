@@ -31,7 +31,7 @@ const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.t
 
 test("exposes the brain tools", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_output", "skill_search"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_output", "skill_search", "skill_segment"]);
 });
 
 test("brain_create returns a neuron with an id and a viewer url", async () => {
@@ -189,5 +189,35 @@ test("skill_output bakes in the loop's forced label and HARD-rejects incomplete 
   } finally {
     await N.c.close();
     try { rmSync(N.outPath); } catch { /* ignore */ }
+  }
+});
+
+test("skill_segment captures the submitted deliverables as clean JSON (trim/lowercase/dedup)", async () => {
+  const segPath = join(tmpdir(), `cairn-seg-${randomUUID()}.json`);
+  const env: Record<string, string> = { ...process.env, CAIRN_DB_PATH: TEST_DB, CAIRN_SKILL_SEGMENT_PATH: segPath };
+  const transport = new StdioClientTransport({ command: "bun", args: ["src/mcp/server.ts"], env });
+  const c = new Client({ name: "cairn-seg-test", version: "1.0.0" });
+  await c.connect(transport);
+  const call = (args: Record<string, unknown>) => c.callTool({ name: "skill_segment", arguments: args }) as Promise<{ isError?: boolean; content: { text: string }[] }>;
+  try {
+    // A turn that wrote a story AND reviewed it, with a duplicate and a stray-cased label to canonicalize.
+    const r = await call({ deliverables: [
+      { label: "Short Story", what: "the lighthouse story" },
+      { label: "short story review", what: "the critique" },
+      { label: "short story", what: "dup, dropped" },
+    ] });
+    expect(JSON.parse(r.content[0]!.text)).toMatchObject({ ok: true, count: 2 });
+    expect(JSON.parse(readFileSync(segPath, "utf8"))).toEqual({ deliverables: [
+      { label: "short story", what: "the lighthouse story" },
+      { label: "short story review", what: "the critique" },
+    ] });
+
+    // A non-task submits an empty list — captured as such, never a failure.
+    const empty = await call({ deliverables: [] });
+    expect(JSON.parse(empty.content[0]!.text)).toMatchObject({ ok: true, count: 0 });
+    expect(JSON.parse(readFileSync(segPath, "utf8"))).toEqual({ deliverables: [] });
+  } finally {
+    await c.close();
+    try { rmSync(segPath); } catch { /* ignore */ }
   }
 });

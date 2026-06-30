@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { parseReview, parseLearn, fromCapture } from "../src/skill/reviewer";
+import { readSegment, fromCapture } from "../src/skill/reviewer";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -7,33 +7,22 @@ beforeEach(() => {
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created yet */ }
 });
 
-test("parseReview accepts a full verdict", () => {
-  const r = parseReview('{"score":0.8,"right":"vivid imagery","wrong":"flat ending","improve":"sharpen line 3"}');
-  expect(r).toMatchObject({ score: 0.8, right: "vivid imagery", wrong: "flat ending", improve: "sharpen line 3" });
+test("readSegment reads the structured skill_segment capture into clean rows", () => {
+  const out = readSegment('{"deliverables":[{"label":"short story","what":"the lighthouse story"},{"label":"short story review","what":"the critique"}]}');
+  expect(out).toEqual([
+    { label: "short story", what: "the lighthouse story" },
+    { label: "short story review", what: "the critique" },
+  ]);
 });
 
-test("parseReview extracts from surrounding prose", () => {
-  expect(parseReview('Here is my review:\n{"score":0.5,"right":"a","wrong":"b","improve":"c"}\nthanks')?.score).toBe(0.5);
+test("readSegment also accepts a bare array (not wrapped in {deliverables})", () => {
+  expect(readSegment('[{"label":"haiku","what":"the frost haiku"}]')).toEqual([{ label: "haiku", what: "the frost haiku" }]);
 });
 
-test("parseReview rejects out-of-range score and junk", () => {
-  expect(parseReview('{"score":1.5,"right":"x"}')).toBeNull();
-  expect(parseReview("no json here")).toBeNull();
-  expect(parseReview(null)).toBeNull();
-});
-
-test("parseLearn splits the verdict JSON from the rewritten master", () => {
-  const raw = '{"score":0.8,"right":"a","wrong":"b","improve":"c"}\n===MASTER===\nBecause the best runs did X.\n\n1. step one\n2. step two';
-  const { review, master } = parseLearn(raw);
-  expect(review?.score).toBe(0.8);
-  expect(master).toContain("1. step one");
-  expect(master).not.toContain("score"); // the verdict JSON is not bleed into the master
-});
-
-test("parseLearn handles a response with no master section", () => {
-  const { review, master } = parseLearn('{"score":0.5,"right":"","wrong":"","improve":""}');
-  expect(review?.score).toBe(0.5);
-  expect(master).toBeNull();
+test("readSegment returns [] for a submitted non-task and null when nothing was submitted", () => {
+  expect(readSegment('{"deliverables":[]}')).toEqual([]); // the segmenter submitted an empty list
+  expect(readSegment(null)).toBeNull();                   // the tool was never called
+  expect(readSegment("garbage, not json")).toBeNull();
 });
 
 test("fromCapture accepts a complete labeled submission, splitting master from explanation", () => {

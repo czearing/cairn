@@ -19,36 +19,6 @@ import type { Review, SkillRun } from "./types";
  *  non-task where the learner ran fine and chose an empty label. */
 export interface LearnResult { label: string | null; review: Review | null; master: string | null; explanation: string | null; failed?: boolean; error?: string }
 
-// Pure: extract and validate a JSON verdict from text. Returns null on junk or an out-of-range score.
-export function parseReview(raw: string | null | undefined): Review | null {
-  if (!raw) return null;
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  let o: { score?: unknown; right?: unknown; wrong?: unknown; improve?: unknown };
-  try { o = JSON.parse(m[0]); } catch { return null; }
-  const score = typeof o.score === "number" ? o.score : Number(o.score);
-  if (!Number.isFinite(score) || score < 0 || score > 1) return null;
-  const str = (v: unknown) => (typeof v === "string" ? v : "");
-  return { score, right: str(o.right), wrong: str(o.wrong), improve: str(o.improve), raw: raw.trim() };
-}
-
-// Pure: split the single response into the verdict JSON (before ===MASTER===) and the rewritten master
-// (after). The label is read from the same JSON object as the verdict. The delimiter avoids embedding a
-// long, newline-heavy master inside JSON, which models escape unreliably.
-export function parseLearn(raw: string | null | undefined): LearnResult {
-  if (!raw) return { label: null, review: null, master: null, explanation: null };
-  const sep = "===MASTER===";
-  const i = raw.indexOf(sep);
-  const head = i >= 0 ? raw.slice(0, i) : raw;
-  const master = (i >= 0 ? raw.slice(i + sep.length).trim() : "") || null;
-  let label: string | null = null;
-  const m = head.match(/\{[\s\S]*\}/);
-  if (m) {
-    try { const o = JSON.parse(m[0]) as { label?: unknown }; if (typeof o.label === "string" && o.label.trim()) label = o.label.trim(); } catch { /* no label */ }
-  }
-  return { label, review: parseReview(head), master, explanation: null }; // legacy text path carries no explanation
-}
-
 /** Pure: build a LearnResult from the learner's structured skill_output JSON (its tool submission). Returns
  *  null when there is no submission to read. The label is the LOOP's, not the learner's: pass the decided
  *  `forcedLabel` and it wins outright (the learner no longer echoes a label, so an omitted or stray one can
@@ -70,50 +40,58 @@ export function fromCapture(raw: string | null | undefined, forcedLabel?: string
   return { label, review, master, explanation };
 }
 
-// Pure: read the deliverables JSON array printed after the final ===DELIVERABLES=== delimiter. Each is a
-// {label, what}; dedup by label so one turn never makes two runs of the same skill. Empty/garbage -> [].
+// Pure: read the deliverables list the segmenter submitted via the skill_segment tool (captured as clean
+// JSON to CAIRN_SKILL_SEGMENT_PATH). Returns null when there is no submission to read (the tool was never
+// called) so segmentRun can tell "non-task" (an empty list WAS submitted) from "failed" (nothing submitted).
+// The tool already trims/lowercases/clips/dedups, so this just validates the shape.
 export interface Deliverable { label: string; what: string }
-export function parseDeliverables(raw: string | null | undefined): Deliverable[] {
-  if (!raw) return [];
-  const sep = "===DELIVERABLES===";
-  const i = raw.lastIndexOf(sep);
-  const tail = (i >= 0 ? raw.slice(i + sep.length) : raw).trim();
-  const m = tail.match(/\[[\s\S]*\]/);
-  if (!m) return [];
-  let arr: unknown;
-  try { arr = JSON.parse(m[0]); } catch { return []; }
-  if (!Array.isArray(arr)) return [];
+export function readSegment(raw: string | null | undefined): Deliverable[] | null {
+  if (!raw) return null;
+  let o: unknown;
+  try { o = JSON.parse(raw); } catch { return null; }
+  const arr = Array.isArray(o) ? o : (o && typeof o === "object" && Array.isArray((o as { deliverables?: unknown }).deliverables) ? (o as { deliverables: unknown[] }).deliverables : null);
+  if (!arr) return null;
   const out: Deliverable[] = [];
   const seen = new Set<string>();
   for (const it of arr) {
-    const o = (it ?? {}) as { label?: unknown; what?: unknown };
-    const label = typeof o.label === "string" ? o.label.trim().slice(0, 60).toLowerCase() : "";
+    const d = (it ?? {}) as { label?: unknown; what?: unknown };
+    const label = typeof d.label === "string" ? d.label.trim().slice(0, 60).toLowerCase() : "";
     if (!label || seen.has(label)) continue;
     seen.add(label);
-    out.push({ label, what: typeof o.what === "string" ? o.what.trim().slice(0, 200) : "" });
+    out.push({ label, what: typeof d.what === "string" ? d.what.trim().slice(0, 200) : "" });
   }
   return out;
 }
 
-/** STAGE 1 of the loop: the reviewing agent reads the finished turn and lists EACH distinct deliverable it
- *  produced with its reusable label — UNANCHORED (no skill master/priors), so it can never be biased into
- *  mislabeling a review of a story as "short story" (the anchoring failure proven 2026-06-29). A turn that
- *  writes a story AND reviews it yields two deliverables; most yield one; a non-task yields none. No tools. */
+/** STAGE 1 of the loop: the reviewing agent reads the finished turn and SUBMITS each distinct deliverable it
+ *  produced with its reusable label via the skill_segment tool — UNANCHORED (no skill master/priors, and only
+ *  the skill_segment tool, never brain_search), so it can never be biased into mislabeling a review of a story
+ *  as "short story" (the anchoring failure proven 2026-06-29). A turn that writes a story AND reviews it
+ *  submits two deliverables; most submit one; a non-task submits an empty list. We read the STRUCTURED tool
+ *  capture (CAIRN_SKILL_SEGMENT_PATH) instead of regex-parsing free text. Never throws. */
 export interface SegmentResult { deliverables: Deliverable[]; failed: boolean; error?: string }
 export async function segmentRun(request: string, output: string, transcript: string, existing: string[], timeoutMs?: number): Promise<SegmentResult> {
+  const outPath = join(tmpdir(), `cairn-segment-${randomUUID()}.json`);
   const r = await runLearner(classifyUserPrompt(request, output, transcript, existing), {
     system: CLASSIFY_SYSTEM,
+    mcpConfigPath: cairnMcpConfigPath(),
+    allowedTools: ["mcp__cairn__skill_segment"], // ONLY segment: no brain_search, so it stays unanchored
+    env: { CAIRN_SKILL_SEGMENT_PATH: outPath },
     timeoutMs: timeoutMs ?? 90_000,
     model: process.env.CAIRN_CLASSIFY_MODEL || process.env.CAIRN_LEARN_MODEL || undefined,
   });
-  if (!r.ok) return { deliverables: [], failed: true, error: r.error || "segment call failed" };
-  return { deliverables: parseDeliverables(r.text), failed: false };
+  let captured: Deliverable[] | null = null;
+  try { if (existsSync(outPath)) captured = readSegment(readFileSync(outPath, "utf8")); } catch { /* handled below */ }
+  try { if (existsSync(outPath)) rmSync(outPath); } catch { /* ignore */ }
+  if (captured) return { deliverables: captured, failed: false };  // the segmenter submitted (possibly empty = non-task)
+  const reason = r.ok ? "the segmenter finished without submitting skill_segment" : (r.error || "segment call failed");
+  return { deliverables: [], failed: true, error: reason };
 }
 
 /** In one cairn-connected call, the learner reasons out loud to assign the label for `request`, grade
  *  `output` (with the raw run `transcript` as process context), and rewrite the master, then submits the
  *  result via the skill_output tool. We read that structured submission (captured to a temp file via
- *  CAIRN_SKILL_OUTPUT_PATH). Falls back to parsing the legacy ===MASTER=== text if the tool was not called.
+ *  CAIRN_SKILL_OUTPUT_PATH); if it never submits a valid one, we fail loudly with the real reason.
  *  Returns {label, review, master}; never throws. */
 export async function reviewAndLearn(request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster = "", priorExplanation = "", timeoutMs?: number, forcedLabel?: string, focus = ""): Promise<LearnResult> {
   // Labeling is the loop's job, never the learner's: the label was decided in STAGE 1 and is handed to the

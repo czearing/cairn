@@ -73,33 +73,50 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   return "added";
 }
 
-// Two events — the ones Copilot CLI actually injects: sessionStart (the full brain workflow, once
-// per session) and postToolUse (per-tool reminders after a brain_* call). hook.ts picks the mode
-// from its argv. userPromptSubmitted and a Stop loop are intentionally absent — Copilot ignores the
-// former's output and has no stop event.
+// Six events — the full set Copilot CLI (v1.0.66+) honors for Cairn's brain workflow:
+//   sessionStart        → a baseline workflow copy, once per session.
+//   userPromptSubmitted → the full workflow at TURN START, on every prompt (Claude UserPromptSubmit parity).
+//                         NOTE: the published hooks reference says this event's output is "not processed",
+//                         but a live marker test on v1.0.66 proved additionalContext here DOES reach the
+//                         model. sessionStart stays as a fallback in case a future version regresses.
+//   preToolUse          → gate a brain_create (deny closed-question / root-only-branch); matcher-scoped
+//                         to brain_create so it never fires on ordinary tools.
+//   postToolUse         → entry-format/orchestrate + per-tool reminders after a brain_* or Task call.
+//   agentStop           → the Stop equivalent: decision:"block" re-runs the turn (turn-reminder/split-leaves).
+//   subagentStart       → additionalContext prepended to a spawned subagent's own prompt.
+// hook.ts picks the mode from its argv.
 function hookConfig(): object {
   const win = (p: string) => p.replace(/\//g, "\\");
   const nix = (p: string) => p.replace(/\\/g, "/");
   const bun = bunExe();
-  const cmd = (mode: string) => ({
-    type: "command",
-    powershell: `& '${win(bun)}' '${win(HOOK)}' ${mode}`,
-    bash: `'${nix(bun)}' '${nix(HOOK)}' ${mode}`,
-  });
+  const cmd = (mode: string, matcher?: string) => {
+    const entry: Record<string, unknown> = {
+      type: "command",
+      powershell: `& '${win(bun)}' '${win(HOOK)}' ${mode}`,
+      bash: `'${nix(bun)}' '${nix(HOOK)}' ${mode}`,
+    };
+    if (matcher) entry.matcher = matcher; // regex on toolName, anchored ^(?:…)$ by Copilot CLI
+    return entry;
+  };
   return {
     version: 1,
     hooks: {
       sessionStart: [cmd("session-start")],
+      userPromptSubmitted: [cmd("user-prompt")],
+      preToolUse: [cmd("pre-tool", ".*brain_create")],
       postToolUse: [cmd("post-tool")],
+      agentStop: [cmd("agent-stop")],
+      subagentStart: [cmd("subagent-start")],
     },
   };
 }
 
 // Write the cairn hook file (its own file, so it never collides with the user's other hooks). The
-// idempotency marker is "post-tool": an older single-event file lacks it and gets upgraded in place.
+// idempotency marker is "agent-stop": an older file written before the parity events were added lacks
+// it (it only had session-start/post-tool) and is upgraded in place.
 export async function installCopilotHook(dryRun: boolean): Promise<Result> {
   const path = copilotHookPath();
-  if (existsSync(path) && (await readFile(path, "utf8")).includes("post-tool")) return "already";
+  if (existsSync(path) && (await readFile(path, "utf8")).includes("agent-stop")) return "already";
   if (dryRun) return "would-add";
   mkdirSync(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(hookConfig(), null, 2)}\n`, "utf8");

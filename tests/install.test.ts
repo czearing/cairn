@@ -94,11 +94,20 @@ test("install registers cairn in the Copilot mcp-config and writes the sessionSt
   expect(JSON.stringify(mcp.mcpServers.cairn.args)).toContain("server.ts");
   const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
   expect(hook.hooks.sessionStart[0].type).toBe("command"); // workflow injected once per session
-  expect(hook.hooks.postToolUse[0].type).toBe("command"); // per-tool reminders after brain_* calls
+  expect(hook.hooks.userPromptSubmitted[0].type).toBe("command"); // per-turn latch reset
+  expect(hook.hooks.preToolUse[0].type).toBe("command"); // brain_create deny gate
+  expect(hook.hooks.preToolUse[0].matcher).toContain("brain_create"); // scoped so it never fires on ordinary tools
+  expect(hook.hooks.postToolUse[0].type).toBe("command"); // per-tool reminders after brain_* / Task calls
+  expect(hook.hooks.agentStop[0].type).toBe("command"); // Stop equivalent: forces a turn
+  expect(hook.hooks.subagentStart[0].type).toBe("command"); // subagent-window injection
   const blob = JSON.stringify(hook);
   expect(blob).toContain("hook.ts");
   expect(blob).toContain("session-start"); // sessionStart entry carries the session-start mode arg
+  expect(blob).toContain("user-prompt"); // userPromptSubmitted entry carries the user-prompt mode arg
+  expect(blob).toContain("pre-tool"); // preToolUse entry carries the pre-tool mode arg
   expect(blob).toContain("post-tool"); // postToolUse entry carries the post-tool mode arg
+  expect(blob).toContain("agent-stop"); // agentStop entry carries the agent-stop mode arg
+  expect(blob).toContain("subagent-start"); // subagentStart entry carries the subagent-start mode arg
 });
 
 test("install Copilot setup is idempotent and preserves other MCP servers", async () => {

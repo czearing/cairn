@@ -207,7 +207,7 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   else if (agent === "would-write") step(`${sym.dot} Would install the cairn subagent at ~/.claude/agents/cairn.md.`);
   else step(`${sym.dot} cairn subagent already installed. No change.`);
 
-  // ── Phase 4: GitHub Copilot CLI (MCP tools + sessionStart injection hook) ─────────────────────
+  // ── Phase 4: GitHub Copilot CLI (MCP tools + full injection hook set) ─────────────────────────
   line(c.dim("\n4/7  GitHub Copilot CLI"));
   if (!copilotTargeted()) {
     step(
@@ -224,8 +224,8 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
     );
     const chook = await installCopilotHook(dryRun);
     step(
-      chook === "added" ? `${sym.ok} Installed the sessionStart + postToolUse hooks ${c.dim("(workflow each session, per-tool reminders)")}.`
-        : chook === "would-add" ? `${sym.dot} Would install the sessionStart + postToolUse hooks.`
+      chook === "added" ? `${sym.ok} Installed the injection hooks ${c.dim("(sessionStart, userPromptSubmitted, preToolUse, postToolUse, agentStop, subagentStart)")}.`
+        : chook === "would-add" ? `${sym.dot} Would install the injection hooks (sessionStart, userPromptSubmitted, preToolUse, postToolUse, agentStop, subagentStart).`
           : `${sym.dot} Injection hooks already installed. No change.`
     );
   }

@@ -1,14 +1,29 @@
 #!/usr/bin/env bun
-// GitHub Copilot CLI hooks for Cairn — two modes, selected by argv[2]:
-//   session-start : inject the full brain workflow (prompts/user-message.md) ONCE per session.
-//   post-tool     : after a brain tool runs, inject the matching reminder prompt (search-results /
-//                   node-created / node-modified / answer-check), mirroring Claude Code's PostToolUse.
+// GitHub Copilot CLI hooks for Cairn. argv[2] selects the mode, one per hook event registered by
+// setup.ts. As of Copilot CLI v1.0.66 the hook surface is much wider than the original two events,
+// so Cairn now reaches near-parity with Claude Code (see docs.github.com/.../hooks-reference):
 //
-// Both emit {"additionalContext": "..."}, the channel Copilot CLI actually injects (sessionStart
-// since v1.0.12, postToolUse since v1.0.5). It does NOT use userPromptSubmitted (its output is
-// ignored), and Copilot has no Stop event — so the per-PROMPT cadence and the split-enforcement loop
-// of Claude Code cannot be matched; this is the closest reachable parity.
+//   session-start  (sessionStart)        : inject the full brain workflow (user-message.md) once per session.
+//   user-prompt    (userPromptSubmitted) : output is IGNORED by Copilot, so we cannot inject per prompt —
+//                                          but the hook still RUNS, so we use it to RESET the per-turn latch.
+//   pre-tool       (preToolUse)          : gate a brain_create (deny closed-question / root-only-branch).
+//                                          preToolUse has no additionalContext channel, so entry-format.md /
+//                                          orchestrate.md cannot be injected here — only allow/deny/modify.
+//   post-tool      (postToolUse)         : after a brain_* or Task tool, inject the matching reminder, and
+//                                          record brain usage for this turn (drives the agentStop gate).
+//   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn. Used
+//                                          for turn-reminder.md (brain unused) and split-leaves.md (unsplit
+//                                          answered leaves). Loop-bounded (max 2 nudges/turn) and resettable.
+//   subagent-start (subagentStart)       : additionalContext is PREPENDED to the subagent's own prompt —
+//                                          the one channel that reaches a subagent's window (subagent-protocol.md).
+//
+// The only Claude behavior still unreachable on Copilot: per-PROMPT brain RECALL (userPromptSubmitted output
+// is dropped). Per-event context that lives on PreToolUse (entry-format/orchestrate) is also context-unreachable;
+// the brain_create gate enforces the format intent instead.
 import { readFile } from "node:fs/promises";
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 const emit = (obj: object) => process.stdout.write(JSON.stringify(obj));
@@ -19,41 +34,231 @@ const promptText = async (file: string): Promise<string> => {
     return "";
   }
 };
-// MCP tools may arrive bare ("brain_search") or namespaced ("mcp__cairn__brain_search" / "cairn-…").
-const isTool = (name: string, want: string) => name === want || name.endsWith(want) || name.includes(want);
 
-const mode = process.argv[2];
+// MCP tools arrive server-prefixed ("cairn-brain_search") or bare/namespaced ("brain_search" /
+// "mcp__cairn__brain_search"); accept any of those forms.
+export const isTool = (name: string, want: string): boolean =>
+  name === want || name.endsWith(want) || name.includes(want);
+const isTask = (name: string): boolean => /^(task|agent)$/i.test(name) || name === "Task" || name === "Agent";
 
-if (mode === "session-start") {
-  const text = await promptText("user-message.md");
-  emit(text ? { additionalContext: text } : {});
-} else if (mode === "post-tool") {
-  const raw = await Bun.stdin.text();
-  if (process.env.CAIRN_HOOK_DEBUG) {
-    try {
-      const { appendFileSync } = await import("node:fs");
-      const { join } = await import("node:path");
-      const { tmpdir } = await import("node:os");
-      appendFileSync(join(tmpdir(), "cairn-copilot-hook.log"), `[post-tool] ${raw.slice(0, 300)}\n`);
-    } catch {}
-  }
-  let toolName = "";
-  let answer = "";
+// ── Pure decision helpers (exported for unit tests) ────────────────────────────────────────────
+
+// Which prompt files a COMPLETED tool earns, in delivery order. Mirrors Claude EXACTLY: Claude hooks
+// entry-format on PreToolUse (before a brain write) and orchestrate on PreToolUse (before a Task spawn),
+// but Claude delivers that PreToolUse additionalContext to the model AFTER the tool returns — the same
+// moment as its PostToolUse reminder. Copilot's preToolUse has no additionalContext channel, so we
+// deliver BOTH files here at postToolUse to land the identical text at the identical point. The empty
+// node-modified.md is dropped by the caller (it injects nothing on Claude either).
+export function postToolFiles(toolName: string, answer: string): string[] {
+  if (isTool(toolName, "brain_search")) return ["search-results.md"];
+  if (isTool(toolName, "brain_create")) return ["entry-format.md", "node-created.md"];
+  if (isTool(toolName, "brain_mutate")) return ["entry-format.md", answer.trim() ? "answer-check.md" : "node-modified.md"];
+  if (isTask(toolName)) return ["orchestrate.md", "subtask-spawned.md"];
+  return [];
+}
+
+// Whether agentStop should force another turn, and with which prompt. Bounded to STOP_CAP nudges per
+// turn so a stubborn agent can never be looped forever (Copilot sends no stop_hook_active flag).
+export const STOP_CAP = 2;
+export function stopDecision(s: { brainUsed: boolean; unsplitCount: number; stopNudges: number }): {
+  file: string;
+} {
+  if (s.stopNudges >= STOP_CAP) return { file: "" };
+  if (!s.brainUsed) return { file: "turn-reminder.md" };
+  if (s.unsplitCount > 0) return { file: "split-leaves.md" };
+  return { file: "" };
+}
+
+// Whether a pending brain_create must be denied (preToolUse). Mirrors the Claude dispatch gate: a
+// closed (yes/no) question, or a node linked ONLY to the root while open branches remain, is rejected.
+// Dependencies are injected so this is pure and DB-free in tests.
+export function gateDecision(
+  toolName: string,
+  args: Record<string, unknown>,
+  ctx: { rootId: string | null; openBranch: boolean; isClosed: (t: string) => boolean }
+): { deny: boolean; reason?: string } {
+  if (!isTool(toolName, "brain_create")) return { deny: false };
+  const text = typeof args.text === "string" ? args.text : "";
+  if (ctx.isClosed(text))
+    return {
+      deny: true,
+      reason:
+        "That is a yes/no question. It presumes its answer and cannot be split. Re-ask it as a how or why question, then create it.",
+    };
+  const edges = Array.isArray(args.edges) ? (args.edges as string[]) : [];
+  if (ctx.rootId && edges.length > 0 && edges.every((e) => e === ctx.rootId) && ctx.openBranch)
+    return {
+      deny: true,
+      reason:
+        "The root already has open branches. Link this under one of them and go deeper, or finish an open branch first. Do not add another node straight off the root.",
+    };
+  return { deny: false };
+}
+
+// ── Per-turn state (drives the agentStop gate without parsing Copilot's transcript) ─────────────
+// A turn runs from userPromptSubmitted to agentStop. We record whether the brain was used and which
+// nodes were mutated, keyed by sessionId, so agentStop can scope its gate to THIS turn.
+interface TurnState {
+  brainUsed: boolean;
+  answered: string[];
+  stopNudges: number;
+}
+const freshTurn = (): TurnState => ({ brainUsed: false, answered: [], stopNudges: 0 });
+const turnDir = () => join(homedir(), ".cairn", "copilot-turn");
+const turnPath = (sid: string) =>
+  join(turnDir(), `${(sid || "default").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128)}.json`);
+function readTurn(sid: string): TurnState {
   try {
-    const j = JSON.parse(raw) as { toolName?: string; toolArgs?: unknown };
-    toolName = j.toolName ?? "";
-    // toolArgs arrives as a JSON-encoded string (Copilot CLI), occasionally already an object.
-    const args = (typeof j.toolArgs === "string" ? JSON.parse(j.toolArgs) : j.toolArgs) as
-      | { answer?: unknown }
-      | undefined;
-    answer = typeof args?.answer === "string" ? args.answer : "";
-  } catch {}
-  let file = "";
-  if (isTool(toolName, "brain_search")) file = "search-results.md";
-  else if (isTool(toolName, "brain_create")) file = "node-created.md";
-  else if (isTool(toolName, "brain_mutate")) file = answer.trim() ? "answer-check.md" : "node-modified.md";
-  const text = file ? await promptText(file) : "";
-  emit(text ? { additionalContext: text } : {});
-} else {
+    return { ...freshTurn(), ...(JSON.parse(readFileSync(turnPath(sid), "utf8")) as Partial<TurnState>) };
+  } catch {
+    return freshTurn();
+  }
+}
+function writeTurn(sid: string, s: TurnState): void {
+  try {
+    mkdirSync(turnDir(), { recursive: true });
+    writeFileSync(turnPath(sid), JSON.stringify(s));
+  } catch {
+    /* state is best-effort: a miss only weakens a nudge, never breaks the turn */
+  }
+}
+
+// ── stdin payload parsing (camelCase config ⇒ camelCase payloads; snake_case tolerated) ─────────
+const safeJson = (s: string): unknown => {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return undefined;
+  }
+};
+interface Payload {
+  sessionId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+}
+function parsePayload(raw: string): Payload {
+  try {
+    const j = JSON.parse(raw) as Record<string, unknown>;
+    const rawArgs = j.toolArgs ?? j.tool_input;
+    const args = (typeof rawArgs === "string" ? safeJson(rawArgs) : rawArgs) as Record<string, unknown> | undefined;
+    return {
+      sessionId: (j.sessionId as string) ?? (j.session_id as string) ?? "",
+      toolName: (j.toolName as string) ?? (j.tool_name as string) ?? "",
+      args: args ?? {},
+    };
+  } catch {
+    return { sessionId: "", toolName: "", args: {} };
+  }
+}
+
+function debugLog(mode: string, raw: string): void {
+  if (!process.env.CAIRN_HOOK_DEBUG) return;
+  try {
+    appendFileSync(join(tmpdir(), "cairn-copilot-hook.log"), `[${mode}] ${raw.slice(0, 300)}\n`);
+  } catch {
+    /* debug only */
+  }
+}
+
+// ── Mode dispatch (only runs when executed directly, so tests can import the helpers above) ─────
+async function main(): Promise<void> {
+  // Hooks only ever READ the brain (gate + audit); open it read-only so a short-lived fire never
+  // contends with the long-lived MCP server's writer. Set here (not at module scope) so importing the
+  // pure helpers above for tests never flips a shared process's DB to read-only.
+  process.env.CAIRN_READONLY = "1";
+  const mode = process.argv[2];
+
+  if (mode === "session-start") {
+    const text = await promptText("user-message.md");
+    emit(text ? { additionalContext: text } : {});
+    return;
+  }
+  if (mode === "subagent-start") {
+    const text = await promptText("subagent-protocol.md");
+    emit(text ? { additionalContext: text } : {});
+    return;
+  }
+
+  const raw = await Bun.stdin.text();
+  debugLog(mode ?? "", raw);
+  const { sessionId, toolName, args } = parsePayload(raw);
+
+  if (mode === "user-prompt") {
+    // TURN-START injection, exactly like Claude Code's UserPromptSubmit: emit the full workflow so it is
+    // in front of the model BEFORE it acts, on EVERY prompt — this is what keeps it from decaying or being
+    // dropped on compaction. Empirically verified on Copilot CLI v1.0.66: userPromptSubmitted additionalContext
+    // IS delivered to the model (the published hooks reference says "Output processed: No", but a live marker
+    // test proved otherwise; sessionStart still injects a baseline copy in case a future version regresses).
+    // Also reset the per-turn latch so the agentStop gate is scoped to this turn.
+    writeTurn(sessionId, freshTurn());
+    const wf = await promptText("user-message.md");
+    emit(wf ? { additionalContext: wf } : {});
+    return;
+  }
+
+  if (mode === "pre-tool") {
+    // preToolUse command hooks are FAIL-CLOSED (a crash denies the tool), so default to allow and only
+    // ever deny on an explicit gate match.
+    if (process.env.CAIRN_COPILOT_NO_GATE) return void emit({});
+    let decision: { deny: boolean; reason?: string } = { deny: false };
+    try {
+      if (isTool(toolName, "brain_create")) {
+        const { rootId, openBranchExists, isClosedQuestion } = await import("../../core/audit");
+        decision = gateDecision(toolName, args, {
+          rootId: rootId(),
+          openBranch: openBranchExists(),
+          isClosed: isClosedQuestion,
+        });
+      }
+    } catch {
+      decision = { deny: false };
+    }
+    emit(decision.deny ? { permissionDecision: "deny", permissionDecisionReason: decision.reason } : {});
+    return;
+  }
+
+  if (mode === "post-tool") {
+    // Record brain usage for the turn-end gate. Counting matches Claude: brain_search/brain_mutate mark
+    // the turn as "used the brain"; every brain_mutate id is a candidate answered leaf for the split-check.
+    const st = readTurn(sessionId);
+    if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) st.brainUsed = true;
+    if (isTool(toolName, "brain_mutate") && typeof args.id === "string")
+      st.answered = [...new Set([...st.answered, args.id])];
+
+    const answer = typeof args.answer === "string" ? args.answer : "";
+    const blocks = (await Promise.all(postToolFiles(toolName, answer).map(promptText))).filter((t) => t.length > 0);
+    writeTurn(sessionId, st);
+
+    const text = blocks.join("\n\n");
+    emit(text ? { additionalContext: text } : {});
+    return;
+  }
+
+  if (mode === "agent-stop") {
+    if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
+    const st = readTurn(sessionId);
+    let unsplitCount = 0;
+    if (st.brainUsed && st.answered.length) {
+      try {
+        const { unsplitLeaves } = await import("../../core/audit");
+        const answered = new Set(st.answered);
+        unsplitCount = unsplitLeaves().filter((n) => answered.has(n.id)).length;
+      } catch {
+        unsplitCount = 0;
+      }
+    }
+    const { file } = stopDecision({ brainUsed: st.brainUsed, unsplitCount, stopNudges: st.stopNudges });
+    const text = file ? await promptText(file) : "";
+    if (text) {
+      writeTurn(sessionId, { ...st, stopNudges: st.stopNudges + 1 });
+      emit({ decision: "block", reason: text });
+    } else {
+      emit({});
+    }
+    return;
+  }
+
   emit({});
 }
+
+if (import.meta.main) await main();

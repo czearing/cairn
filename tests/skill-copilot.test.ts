@@ -143,3 +143,25 @@ test("extractRunCopilot returns null when there is no deliverable", () => {
 test("extractRunCopilot returns null on a missing file", () => {
   expect(extractRunCopilot("C:/nope/does-not-exist.jsonl")).toBeNull();
 });
+
+test("extractRunCopilot ignores a host system-envelope user message so a notification never becomes the task", () => {
+  // A genuine task, then a background-task completion notification arrives as a user.message. The notification
+  // must NOT anchor a new turn or pollute the request — otherwise the loop grades it and mints a junk skill.
+  const p = events([
+    userMsg("ship the feature PR"),
+    asstMsg("Pushed and opened PR #42."),
+    userMsg("<task-notification> <task-id>bzemxe7vb</task-id> <tool-use-id>toolu_01</tool-use-id> done"),
+    asstMsg("Acknowledged."),
+  ]);
+  const run = extractRunCopilot(p);
+  expect(run?.request).toBe("ship the feature PR");        // anchored on the genuine prompt, not the notification
+  expect(run?.request).not.toContain("task-notification");
+});
+
+test("extractRunCopilot returns null when the only user message is a system envelope (no human task)", () => {
+  const p = events([
+    userMsg("<task-notification> <task-id>bly967nd5</task-id> background job finished"),
+    asstMsg("I noticed the job finished."),
+  ]);
+  expect(extractRunCopilot(p)).toBeNull();                  // nothing the human actually asked for: skip learning
+});

@@ -1,5 +1,6 @@
 import { test, expect, beforeEach } from "bun:test";
 import { readSegment } from "../src/skill/reviewer";
+import { isSystemEnvelope } from "../src/skill/noise";
 import { normalizeLabel, categorize } from "../src/skill/match";
 import { putSkill } from "../src/skill/store";
 import { db } from "../src/core/db";
@@ -7,6 +8,16 @@ import { db } from "../src/core/db";
 beforeEach(() => {
   try { db().run("DELETE FROM skills"); } catch { /* not created */ }
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created */ }
+});
+
+test("isSystemEnvelope flags host/system wrapper messages, not genuine prompts", () => {
+  expect(isSystemEnvelope("<task-notification> <task-id>b1</task-id> done")).toBe(true);
+  expect(isSystemEnvelope("  <system_reminder> use AGENTS.md")).toBe(true);   // leading whitespace tolerated
+  expect(isSystemEnvelope("<skill-context name=\"playwright-cli\">")).toBe(true);
+  expect(isSystemEnvelope("<command-message>code</command-message>")).toBe(true);
+  expect(isSystemEnvelope("write me a short story about a lighthouse")).toBe(false);
+  expect(isSystemEnvelope("why do we have labels?")).toBe(false);             // meta/complaint is the segmenter's job, not this
+  expect(isSystemEnvelope("")).toBe(false);
 });
 
 // ---- reader hostility: a malformed/empty capture must yield null (not submitted) or a clean list ----

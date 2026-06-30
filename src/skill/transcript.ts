@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { RunInput } from "./pipeline";
+import { isSystemEnvelope } from "./noise";
 
 // Extract a RunInput for the CURRENT turn from a Claude Code transcript (JSONL, one message object per line).
 // A session can hold many unrelated tasks (a poem, then a haiku); reviewing the whole session mis-attributes
@@ -52,15 +53,19 @@ export function extractRun(path: string): RunInput | null {
 
   // Scope to the current turn: everything after the LAST assistant->user boundary. An earlier task in the same
   // session (the poem before the haiku) is excluded. A tool-only assistant frame is role=assistant, so it never
-  // creates a false boundary; only a real user prompt does. With no boundary this keeps the whole thing.
+  // creates a false boundary; only a real user prompt does. A host system-envelope user message (a
+  // <task-notification>, a <system_reminder>, a skill-context/slash-command frame) is the harness talking, not
+  // the user, so it likewise never opens a turn — the loop must not grade a notification as the task. With no
+  // boundary this keeps the whole thing.
   let start = 0;
-  for (let i = 0; i < events.length - 1; i++) if (events[i]!.role === "assistant" && events[i + 1]!.role === "user") start = i + 1;
+  for (let i = 0; i < events.length - 1; i++) if (events[i]!.role === "assistant" && events[i + 1]!.role === "user" && !isSystemEnvelope(events[i + 1]!.text)) start = i + 1;
   const turn = events.slice(start);
 
-  // Request = the user prompt(s) that opened this turn (successive messages batched). Deliverable = ALL of the
-  // agent's text this turn joined, so a story written before end-of-turn bookkeeping is graded, not the last
-  // line. The learner (the intelligent layer) picks out the actual deliverable; we never drop it in code.
-  const request = turn.filter((e) => e.role === "user" && e.text).map((e) => e.text).join("\n").trim();
+  // Request = the user prompt(s) that opened this turn (successive messages batched), EXCLUDING any host
+  // system-envelope frames so a notification can never become the task. Deliverable = ALL of the agent's text
+  // this turn joined, so a story written before end-of-turn bookkeeping is graded, not the last line. The
+  // learner (the intelligent layer) picks out the actual deliverable; we never drop it in code.
+  const request = turn.filter((e) => e.role === "user" && e.text && !isSystemEnvelope(e.text)).map((e) => e.text).join("\n").trim();
   const output = turn.filter((e) => e.role === "assistant" && e.text).map((e) => e.text).join("\n\n").trim();
   if (!request || !output) return null;
   // Process = the whole turn with timestamps and tool calls, in order, so the learner sees what actually

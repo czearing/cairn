@@ -106,6 +106,33 @@ test("extractRun returns null on an unreadable path", () => {
   expect(extractRun(join(tmpdir(), "does-not-exist-cairn.jsonl"))).toBeNull();
 });
 
+test("extractRun ignores a host system-envelope user message so a notification never becomes the task", () => {
+  // Genuine task, then a <task-notification> arrives as a user message. It must not open a new turn or pollute
+  // the request, so the loop never grades a notification and mints a junk skill from it.
+  const p = join(tmpdir(), `cairn-env-${process.pid}.jsonl`);
+  writeFileSync(p, [
+    JSON.stringify({ type: "user", message: { content: "ship the feature PR" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Pushed PR #42" }] } }),
+    JSON.stringify({ type: "user", message: { content: "<task-notification> <task-id>b1</task-id> background job done" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Acknowledged" }] } }),
+  ].join("\n"));
+  const run = extractRun(p);
+  rmSync(p, { force: true });
+  expect(run!.request).toBe("ship the feature PR");        // anchored on the genuine prompt, not the notification
+  expect(run!.request).not.toContain("task-notification");
+});
+
+test("extractRun returns null when the only user message is a system envelope (no human task)", () => {
+  const p = join(tmpdir(), `cairn-env2-${process.pid}.jsonl`);
+  writeFileSync(p, [
+    JSON.stringify({ type: "user", message: { content: "<system_reminder> Custom instructions from AGENTS.md" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Noted." }] } }),
+  ].join("\n"));
+  const run = extractRun(p);
+  rmSync(p, { force: true });
+  expect(run).toBeNull();                                   // nothing the human asked for: skip learning
+});
+
 test("extractRun does not treat a tool-only assistant message as the output", () => {
   const p = join(tmpdir(), `cairn-toolonly-${process.pid}.jsonl`);
   writeFileSync(p, [

@@ -208,9 +208,10 @@ async function main(): Promise<void> {
   const { sessionId, toolName, args, transcriptPath } = parsePayload(raw);
 
   if (mode === "subagent-stop") {
-    // A subagent finished — learn its OWN run as a distinct skill (mirrors Claude Code's SubagentStop). No
-    // enforcement here; that governs the main agent's reasoning, not a tool subagent.
-    await fireLearner(transcriptPath);
+    // No learning here. On Copilot a subagent's activity is interleaved in the PARENT session transcript (its
+    // subagentStop transcriptPath is the parent, not an isolated subagent log), so firing the learner here
+    // re-graded the parent turn and produced a duplicate run. Instead the agentStop learner segments the whole
+    // turn and the reviewing agent splits out the subagent's deliverable (e.g. a story review) itself.
     emit({});
     return;
   }
@@ -267,9 +268,10 @@ async function main(): Promise<void> {
   }
 
   if (mode === "agent-stop") {
-    // Turn end: (1) learn this turn as a skill in the background, then (2) the split/brain enforcement.
-    await fireLearner(transcriptPath);
-    if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
+    // The learner must run ONCE per logical turn, at the turn's TRUE end. agentStop can fire several times for
+    // one turn (each forced-continuation block ends in another agentStop), so we only learn on the agentStop
+    // that ALLOWS (no block) — otherwise we'd grade an unfinished turn and create duplicate runs.
+    if (process.env.CAIRN_COPILOT_NO_STOP) { await fireLearner(transcriptPath); return void emit({}); }
     const st = readTurn(sessionId);
     let unsplitCount = 0;
     if (st.brainUsed && st.answered.length) {
@@ -285,10 +287,11 @@ async function main(): Promise<void> {
     const text = file ? await promptText(file) : "";
     if (text) {
       writeTurn(sessionId, { ...st, stopNudges: st.stopNudges + 1 });
-      emit({ decision: "block", reason: text });
-    } else {
-      emit({});
+      emit({ decision: "block", reason: text }); // turn not done yet — don't learn an unfinished turn
+      return;
     }
+    await fireLearner(transcriptPath); // turn truly ends here: learn it once
+    emit({});
     return;
   }
 

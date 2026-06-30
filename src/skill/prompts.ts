@@ -35,10 +35,16 @@ const LEARN_USER = load("learn-user.md");
 // The request to label, the deliverable to grade, the raw run transcript (the process, so the learner can
 // see where the agent struggled or was corrected), the existing labels (for reuse), and the prior runs.
 // The single learner call assigns the label, grades, and rewrites the master, submitting via skill_output.
-export function learnUserPrompt(request: string, output: string, transcript: string, existing: string[], priors: { quality: number; review: string }[], priorMaster = "", priorExplanation = ""): string {
+export function learnUserPrompt(request: string, output: string, transcript: string, existing: string[], priors: { quality: number; review: string }[], priorMaster = "", priorExplanation = "", focus = ""): string {
   // Cap each prior so the prompt can never balloon (the learner only needs the gist of each past run).
   const priorsText = priors.length ? priors.map((r) => `- q=${r.quality.toFixed(2)} ${r.review.slice(0, 500)}`).join("\n") : "(none yet)";
+  // When the turn produced several deliverables (e.g. a story AND its review), the loop grades them one at a
+  // time and names which one HERE, so the learner scores exactly that deliverable, not the whole turn.
+  const focusText = focus.trim()
+    ? `GRADE ONLY THIS DELIVERABLE from the turn, ignoring any others it produced (e.g. grade the review, not the story it reviews): ${focus.trim()}\n`
+    : "";
   return fill(LEARN_USER, {
+    focus: focusText,
     existing: existing.length ? existing.join(", ") : "(none yet)",
     request, priors: priorsText, transcript: transcript.trim() || "(not recorded)", output,
     currentMaster: priorMaster.trim() || "(none yet, this is the first version)",

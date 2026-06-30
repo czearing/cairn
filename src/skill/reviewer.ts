@@ -70,28 +70,44 @@ export function fromCapture(raw: string | null | undefined, forcedLabel?: string
   return { label, review, master, explanation };
 }
 
-// Pure: read the label printed after the final ===LABEL=== delimiter. Empty/missing -> "" (a non-task).
-export function parseClassifyLabel(raw: string | null | undefined): string {
-  if (!raw) return "";
-  const sep = "===LABEL===";
+// Pure: read the deliverables JSON array printed after the final ===DELIVERABLES=== delimiter. Each is a
+// {label, what}; dedup by label so one turn never makes two runs of the same skill. Empty/garbage -> [].
+export interface Deliverable { label: string; what: string }
+export function parseDeliverables(raw: string | null | undefined): Deliverable[] {
+  if (!raw) return [];
+  const sep = "===DELIVERABLES===";
   const i = raw.lastIndexOf(sep);
-  const tail = i >= 0 ? raw.slice(i + sep.length) : raw;
-  return tail.split("\n").map((l) => l.trim()).find((l) => l.length > 0)?.slice(0, 60).toLowerCase() ?? "";
+  const tail = (i >= 0 ? raw.slice(i + sep.length) : raw).trim();
+  const m = tail.match(/\[[\s\S]*\]/);
+  if (!m) return [];
+  let arr: unknown;
+  try { arr = JSON.parse(m[0]); } catch { return []; }
+  if (!Array.isArray(arr)) return [];
+  const out: Deliverable[] = [];
+  const seen = new Set<string>();
+  for (const it of arr) {
+    const o = (it ?? {}) as { label?: unknown; what?: unknown };
+    const label = typeof o.label === "string" ? o.label.trim().slice(0, 60).toLowerCase() : "";
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    out.push({ label, what: typeof o.what === "string" ? o.what.trim().slice(0, 200) : "" });
+  }
+  return out;
 }
 
-/** STAGE 1 of the loop: decide the reusable label from the DELIVERABLE alone, with NO skill master or priors
- *  as context. Anchoring the classifier to an embedding-matched skill's master made it mislabel a review of a
- *  story as "short story" (proven 2026-06-29); classifying unanchored fixes that at the root. Returns the
- *  label, or "" for a non-task or on failure (the caller treats "" as skip). No tools, short timeout. */
-export interface ClassifyResult { label: string; failed: boolean; error?: string }
-export async function classifyLabel(request: string, output: string, transcript: string, existing: string[], timeoutMs?: number): Promise<ClassifyResult> {
+/** STAGE 1 of the loop: the reviewing agent reads the finished turn and lists EACH distinct deliverable it
+ *  produced with its reusable label — UNANCHORED (no skill master/priors), so it can never be biased into
+ *  mislabeling a review of a story as "short story" (the anchoring failure proven 2026-06-29). A turn that
+ *  writes a story AND reviews it yields two deliverables; most yield one; a non-task yields none. No tools. */
+export interface SegmentResult { deliverables: Deliverable[]; failed: boolean; error?: string }
+export async function segmentRun(request: string, output: string, transcript: string, existing: string[], timeoutMs?: number): Promise<SegmentResult> {
   const r = await runLearner(classifyUserPrompt(request, output, transcript, existing), {
     system: CLASSIFY_SYSTEM,
     timeoutMs: timeoutMs ?? 90_000,
     model: process.env.CAIRN_CLASSIFY_MODEL || process.env.CAIRN_LEARN_MODEL || undefined,
   });
-  if (!r.ok) return { label: "", failed: true, error: r.error || "classify call failed" };
-  return { label: parseClassifyLabel(r.text), failed: false };
+  if (!r.ok) return { deliverables: [], failed: true, error: r.error || "segment call failed" };
+  return { deliverables: parseDeliverables(r.text), failed: false };
 }
 
 /** In one cairn-connected call, the learner reasons out loud to assign the label for `request`, grade
@@ -99,11 +115,12 @@ export async function classifyLabel(request: string, output: string, transcript:
  *  result via the skill_output tool. We read that structured submission (captured to a temp file via
  *  CAIRN_SKILL_OUTPUT_PATH). Falls back to parsing the legacy ===MASTER=== text if the tool was not called.
  *  Returns {label, review, master}; never throws. */
-export async function reviewAndLearn(request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster = "", priorExplanation = "", timeoutMs?: number, forcedLabel?: string): Promise<LearnResult> {
+export async function reviewAndLearn(request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster = "", priorExplanation = "", timeoutMs?: number, forcedLabel?: string, focus = ""): Promise<LearnResult> {
   // Labeling is the loop's job, never the learner's: the label was decided in STAGE 1 and is handed to the
   // skill_output tool via the CAIRN_SKILL_FORCED_LABEL env below. The learner only grades and rewrites the
-  // master, so it never sees, echoes, or can corrupt a label.
-  const user = learnUserPrompt(request, output, transcript, existing, priors, priorMaster, priorExplanation);
+  // master, so it never sees, echoes, or can corrupt a label. `focus` names which of the turn's deliverables
+  // to grade when the turn produced more than one (e.g. the review, not the story it reviews).
+  const user = learnUserPrompt(request, output, transcript, existing, priors, priorMaster, priorExplanation, focus);
   const outPath = join(tmpdir(), `cairn-learn-${randomUUID()}.json`);
   const r = await runLearner(user, {
     system: LEARN_SYSTEM,
@@ -129,13 +146,13 @@ export async function reviewAndLearn(request: string, output: string, transcript
 /** Review SEVERAL concurrent attempts at the same task in ONE call and update the master from all of them (the
  *  coalesce path). One run delegates to reviewAndLearn; many are folded into one learner call whose output
  *  field carries every attempt, so the rewritten master reflects what the learner sees across the whole set. */
-export async function reviewAndLearnMany(request: string, runs: { output: string; transcript: string }[], existing: string[], priors: SkillRun[], priorMaster = "", priorExplanation = "", timeoutMs?: number, forcedLabel?: string): Promise<LearnResult> {
+export async function reviewAndLearnMany(request: string, runs: { output: string; transcript: string }[], existing: string[], priors: SkillRun[], priorMaster = "", priorExplanation = "", timeoutMs?: number, forcedLabel?: string, focus = ""): Promise<LearnResult> {
   if (runs.length <= 1) {
     const r = runs[0];
-    return reviewAndLearn(request, r?.output ?? "", r?.transcript ?? "", existing, priors, priorMaster, priorExplanation, timeoutMs, forcedLabel);
+    return reviewAndLearn(request, r?.output ?? "", r?.transcript ?? "", existing, priors, priorMaster, priorExplanation, timeoutMs, forcedLabel, focus);
   }
   const output = runs.map((r, i) => `=== Attempt ${i + 1} ===\n${r.output}`).join("\n\n");
   const transcript = runs.map((r, i) => `=== Attempt ${i + 1} ===\n${r.transcript}`).join("\n\n");
   const req = `${request}\n\n(These are ${runs.length} concurrent attempts at this same task from different sessions. Grade them together and update the master so it fixes what you see across all of them.)`;
-  return reviewAndLearn(req, output, transcript, existing, priors, priorMaster, priorExplanation, timeoutMs, forcedLabel);
+  return reviewAndLearn(req, output, transcript, existing, priors, priorMaster, priorExplanation, timeoutMs, forcedLabel, focus);
 }

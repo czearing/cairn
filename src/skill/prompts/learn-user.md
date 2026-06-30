@@ -1,5 +1,6 @@
 Grade the OUTPUT, then rewrite the skill's master prompt from everything you have reviewed (best runs first).
 
+{{focus}}
 REQUEST: {{request}}
 
 CURRENT MASTER (the instructions a doer loads now; refine these, do not rewrite blind):

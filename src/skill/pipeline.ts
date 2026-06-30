@@ -1,5 +1,5 @@
 import { categorize, reindexSkill } from "./match";
-import { reviewAndLearn, reviewAndLearnMany, classifyLabel, type LearnResult, type ClassifyResult } from "./reviewer";
+import { reviewAndLearn, reviewAndLearnMany, segmentRun, type LearnResult, type SegmentResult, type Deliverable } from "./reviewer";
 import { addRun, addVersion, setMasterPrompt, skillLabels, skillCatalog, topRuns, skillByLabel, normalizeLabel } from "./store";
 import { recordActivity } from "./activity";
 import { sessionSkill, type ReadyRun } from "./coordinate";
@@ -7,53 +7,38 @@ import { coordinatedReview } from "./coordinator";
 import type { SkillRun } from "./types";
 
 // End-to-end skill loop for one finished request, in TWO stages:
-//  STAGE 1 (classify): decide the reusable label from the DELIVERABLE alone, with NO skill master or priors
-//    as context. Anchoring the classifier to an embedding-matched skill made it mislabel a review of a story
-//    as "short story" (proven 2026-06-29). Classifying unanchored fixes that at the root.
-//  STAGE 2 (learn): grade the output and rewrite the master, now anchored to the skill the label ACTUALLY
-//    resolves to, so the anchor always matches the decided label and can never flip it.
-// Then the decided label picks/creates the skill (categorize, with the purpose guard) and the master is
-// stored. A non-task yields an empty label and no skill. Each step is best-effort; the LLM steps are
-// injectable for deterministic tests.
+//  STAGE 1 (segment): the reviewing agent reads the DELIVERABLE(s) — unanchored, with NO skill master or
+//    priors — and lists each distinct deliverable the turn produced with its label. A turn that writes a
+//    story AND reviews it yields TWO deliverables (the model does the splitting, no transcript-slicing code).
+//    Anchoring the labeler to a skill made it mislabel a review of a story as "short story" (proven
+//    2026-06-29), so segmentation stays unanchored.
+//  STAGE 2 (learn): grade EACH deliverable and rewrite its skill's master, anchored to the skill its label
+//    resolves to, with `focus` naming which deliverable to grade so a story and its review never blur.
+// A non-task yields no deliverables and no skill. Each step is best-effort; the LLM steps are injectable.
 
 export interface RunInput { request: string; transcript: string; output: string }
 export interface SkillResult { skillId: string; task: string; score: number; created: boolean }
 
 export interface PipelineDeps {
-  classify?: (request: string, output: string, transcript: string, existing: string[]) => Promise<ClassifyResult>;
-  learn?: (request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster: string, priorExplanation: string, forcedLabel: string) => Promise<LearnResult>;
+  segment?: (request: string, output: string, transcript: string, existing: string[]) => Promise<SegmentResult>;
+  learn?: (request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster: string, priorExplanation: string, forcedLabel: string, focus: string) => Promise<LearnResult>;
 }
 
-export async function processRun(input: RunInput, now: number, deps: PipelineDeps = {}): Promise<SkillResult[]> {
-  const classify = deps.classify ?? ((req, out, tx, ex) => classifyLabel(req, out, tx, ex));
-  const learn = deps.learn ?? ((req, out, tx, ex, pr, pm, pe, fl) => reviewAndLearn(req, out, tx, ex, pr, pm, pe, undefined, fl));
+type LearnFn = NonNullable<PipelineDeps["learn"]>;
 
-  recordActivity({ ts: now, phase: "start", request: input.request });
-  const labels = skillLabels();
-
-  // STAGE 1: get the label. Labeling is entirely the loop's job, never the doer's: classify the deliverable,
-  // unanchored, shown the existing skills, so the agent never has to think about labels.
-  const cls = await classify(input.request, input.output, input.transcript, skillCatalog());
-  if (cls.failed) { recordActivity({ ts: now, phase: "failed", request: input.request, error: cls.error }); return []; }
-  const label = cls.label;
-  if (!label) { recordActivity({ ts: now, phase: "skipped", request: input.request }); return []; } // genuine non-task
-
-  // STAGE 2: grade + rewrite, anchored to the skill THIS label resolves to (its current master + priors).
-  const anchor = skillByLabel(normalizeLabel(label));
+// Grade ONE segmented deliverable (named by `focus`) and store it under its own skill. Returns the result,
+// or null when the learner failed or produced nothing usable. Anchored to the skill the label resolves to,
+// so a story and a review of that story land in their OWN skills with their OWN masters.
+async function gradeAndStore(input: RunInput, d: Deliverable, labels: string[], now: number, learn: LearnFn): Promise<SkillResult | null> {
+  const anchor = skillByLabel(normalizeLabel(d.label));
   const anchorPriors = anchor ? topRuns(anchor.id, 10) : [];
-  const result = await learn(input.request, input.output, input.transcript, labels, anchorPriors, anchor?.masterPrompt ?? "", anchor?.explanation ?? "", label);
+  const result = await learn(input.request, input.output, input.transcript, labels, anchorPriors, anchor?.masterPrompt ?? "", anchor?.explanation ?? "", d.label, d.what);
   const { review, master, explanation } = result;
-  // The learner CLI call FAILED (record "failed" with the real reason) vs a clean run that still produced no
-  // usable label (record "skipped"). Keeping them distinct stops a failed call from reading as "not a task".
-  if (result.failed || !result.label) { recordActivity({ ts: now, phase: result.failed ? "failed" : "skipped", request: input.request, error: result.error }); return []; }
-
-  // Write target = the EXACT skill for the decided label (reuse or create). No cosine: the classifier already
-  // decided reuse-vs-new from the listed skills.
-  const { skill, created } = await categorize(label, now);
+  if (result.failed || !result.label) { recordActivity({ ts: now, phase: result.failed ? "failed" : "skipped", request: input.request, error: result.error }); return null; }
+  const { skill, created } = await categorize(d.label, now);
   const score = review?.score ?? 0;
-  // Store the raw transcript as the run's process record, and a CONCISE review (right/wrong/improve only).
-  // Never store review.raw: it holds the full learner response incl. the whole master, and the priors are
-  // fed back into the next learner call, so storing raw made every prompt balloon (~9KB per prior).
+  // Store the raw transcript as the run's process record + a CONCISE review (never review.raw: it holds the
+  // whole master and the priors feed the next learner call, which ballooned every prompt).
   const conciseReview = review ? JSON.stringify({ right: review.right, wrong: review.wrong, improve: review.improve }) : "";
   addRun({ skillId: skill.id, recipe: input.transcript, quality: score, review: conciseReview, ts: now });
   if (master) {
@@ -66,14 +51,33 @@ export async function processRun(input: RunInput, now: number, deps: PipelineDep
     review: review ? { right: review.right, wrong: review.wrong, improve: review.improve } : undefined,
     output: input.output.slice(0, 400), // a short preview of what the agent delivered, for the feed
   });
-  return [{ skillId: skill.id, task: skill.task, score, created }];
+  return { skillId: skill.id, task: skill.task, score, created };
+}
+
+export async function processRun(input: RunInput, now: number, deps: PipelineDeps = {}): Promise<SkillResult[]> {
+  const segment = deps.segment ?? ((req, out, tx, ex) => segmentRun(req, out, tx, ex));
+  const learn: LearnFn = deps.learn ?? ((req, out, tx, ex, pr, pm, pe, fl, fo) => reviewAndLearn(req, out, tx, ex, pr, pm, pe, undefined, fl, fo));
+
+  recordActivity({ ts: now, phase: "start", request: input.request });
+  const labels = skillLabels();
+
+  // STAGE 1: the reviewing agent lists EVERY distinct deliverable the turn produced, unanchored (no master),
+  // so a story-writing turn that also reviews the story yields both "short story" and "short story review".
+  const seg = await segment(input.request, input.output, input.transcript, skillCatalog());
+  if (seg.failed) { recordActivity({ ts: now, phase: "failed", request: input.request, error: seg.error }); return []; }
+  if (!seg.deliverables.length) { recordActivity({ ts: now, phase: "skipped", request: input.request }); return []; } // non-task
+
+  // STAGE 2: grade + store EACH deliverable under its own skill, anchored to that skill's master + priors.
+  const results: SkillResult[] = [];
+  for (const d of seg.deliverables) { const r = await gradeAndStore(input, d, labels, now, learn); if (r) results.push(r); }
+  return results;
 }
 
 export interface CoordPipelineDeps {
-  // Inject for tests: the coordination orchestrator, the unanchored classifier, and the multi-run reviewer.
+  // Inject for tests: the coordination orchestrator, the unanchored segmenter, and the multi-run reviewer.
   coordinate?: typeof coordinatedReview;
-  classify?: (request: string, output: string, transcript: string, existing: string[]) => Promise<ClassifyResult>;
-  reviewMany?: (request: string, runs: { output: string; transcript: string }[], existing: string[], priors: SkillRun[], priorMaster: string, priorExplanation: string, forcedLabel: string) => Promise<LearnResult>;
+  segment?: (request: string, output: string, transcript: string, existing: string[]) => Promise<SegmentResult>;
+  reviewMany?: (request: string, runs: { output: string; transcript: string }[], existing: string[], priors: SkillRun[], priorMaster: string, priorExplanation: string, forcedLabel: string, focus: string) => Promise<LearnResult>;
 }
 
 // Concurrency-aware entry point. If this session had a skill injected (it is refining a known skill), route
@@ -84,46 +88,48 @@ export interface CoordPipelineDeps {
 export async function processRunCoordinated(input: RunInput, session: string, now: number, deps: CoordPipelineDeps = {}): Promise<SkillResult[]> {
   const skill = sessionSkill(session);
   if (!skill) return processRun(input, now);                       // cold/new task: no peers to coalesce with
-  const classify = deps.classify ?? ((req, out, tx, ex) => classifyLabel(req, out, tx, ex));
-  const reviewMany = deps.reviewMany ?? ((req, runs, ex, pr, pm, pe, fl) => reviewAndLearnMany(req, runs, ex, pr, pm, pe, undefined, fl));
+  const segment = deps.segment ?? ((req, out, tx, ex) => segmentRun(req, out, tx, ex));
+  const reviewMany = deps.reviewMany ?? ((req, runs, ex, pr, pm, pe, fl, fo) => reviewAndLearnMany(req, runs, ex, pr, pm, pe, undefined, fl, fo));
   const coordinate = deps.coordinate ?? coordinatedReview;
 
-  let out: SkillResult[] = [];
+  const out: SkillResult[] = [];
   await coordinate(session, skill, input.output, input.transcript, {
     review: async (runs: ReadyRun[]) => {
       recordActivity({ ts: now, phase: "start", request: input.request });
       const labels = skillLabels();
-      // STAGE 1: get the label. Labeling is the loop's job: classify unanchored from the representative
-      // deliverable, shown the existing skills. The injected skill does NOT decide the label.
-      const cls = await classify(input.request, input.output, input.transcript, skillCatalog());
-      if (cls.failed) { recordActivity({ ts: now, phase: "failed", request: input.request, error: cls.error }); return; }
-      const label = cls.label;
-      if (!label) { recordActivity({ ts: now, phase: "skipped", request: input.request }); return; }
+      // STAGE 1: segment the representative run, unanchored. The injected skill does NOT decide the labels.
+      const seg = await segment(input.request, input.output, input.transcript, skillCatalog());
+      if (seg.failed) { recordActivity({ ts: now, phase: "failed", request: input.request, error: seg.error }); return; }
+      if (!seg.deliverables.length) { recordActivity({ ts: now, phase: "skipped", request: input.request }); return; }
 
-      // STAGE 2: anchor to the skill THIS label resolves to, then review all coalesced runs together.
-      const anchor = skillByLabel(normalizeLabel(label));
-      const priors = anchor ? topRuns(anchor.id, 10) : [];
-      const result = await reviewMany(input.request, runs.map((r) => ({ output: r.output, transcript: r.transcript })), labels, priors, anchor?.masterPrompt ?? "", anchor?.explanation ?? "", label);
-      const { review, master, explanation } = result;
-      if (result.failed || !review || !result.label) {
-        recordActivity({ ts: now, phase: result.failed ? "failed" : "skipped", request: input.request, error: result.error });
-        return;
+      // STAGE 2: grade + store EACH deliverable. The deliverable that IS the coalesced session skill grades all
+      // concurrent attempts together (the coordinator's win); any extra deliverable (e.g. the review the writer
+      // spawned) grades just this representative run.
+      const sessionNorm = normalizeLabel(skill);
+      for (const d of seg.deliverables) {
+        const anchor = skillByLabel(normalizeLabel(d.label));
+        const priors = anchor ? topRuns(anchor.id, 10) : [];
+        const isSession = normalizeLabel(d.label) === sessionNorm;
+        const attempts = isSession ? runs.map((r) => ({ output: r.output, transcript: r.transcript })) : [{ output: input.output, transcript: input.transcript }];
+        const result = await reviewMany(input.request, attempts, labels, priors, anchor?.masterPrompt ?? "", anchor?.explanation ?? "", d.label, d.what);
+        const { review, master, explanation } = result;
+        if (result.failed || !review || !result.label) { recordActivity({ ts: now, phase: result.failed ? "failed" : "skipped", request: input.request, error: result.error }); continue; }
+        const { skill: target, created } = await categorize(d.label, now);
+        const conciseReview = JSON.stringify({ right: review.right, wrong: review.wrong, improve: review.improve });
+        const recipes = isSession ? runs.map((r) => r.transcript) : [input.transcript];
+        for (const recipe of recipes) addRun({ skillId: target.id, recipe, quality: review.score, review: conciseReview, ts: now });
+        if (master) {
+          setMasterPrompt(target.id, master, explanation ?? "");
+          addVersion(target.id, master, explanation ?? "", review.score, now); // append to the master-version timeline (if it changed)
+          await reindexSkill(target.id, target.task, master);
+        }
+        recordActivity({
+          ts: now, phase: "learned", request: input.request, label: target.task, score: review.score, created, master: Boolean(master),
+          review: { right: review.right, wrong: review.wrong, improve: review.improve },
+          output: (isSession && runs.length > 1 ? `${runs.length} concurrent run(s) merged: ` : "") + input.output.slice(0, 400),
+        });
+        out.push({ skillId: target.id, task: target.task, score: review.score, created });
       }
-      // Write target = the EXACT skill for the decided label (reuse or create). No cosine in the write path.
-      const { skill: target, created } = await categorize(label, now);
-      const conciseReview = JSON.stringify({ right: review.right, wrong: review.wrong, improve: review.improve });
-      for (const r of runs) addRun({ skillId: target.id, recipe: r.transcript, quality: review.score, review: conciseReview, ts: now });
-      if (master) {
-        setMasterPrompt(target.id, master, explanation ?? "");
-        addVersion(target.id, master, explanation ?? "", review.score, now); // append to the master-version timeline (if it changed)
-        await reindexSkill(target.id, target.task, master);
-      }
-      recordActivity({
-        ts: now, phase: "learned", request: input.request, label: target.task, score: review.score, created, master: Boolean(master),
-        review: { right: review.right, wrong: review.wrong, improve: review.improve },
-        output: `${runs.length} concurrent run(s) merged: ` + input.output.slice(0, 400),
-      });
-      out = [{ skillId: target.id, task: target.task, score: review.score, created }];
     },
   });
   return out;

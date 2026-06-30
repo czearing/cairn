@@ -1,14 +1,14 @@
-Classify this finished request into its reusable task label, by the DELIVERABLE it produced. Reuse an existing skill's label VERBATIM when the deliverable is the same type as that skill; otherwise give a new specific label; give the empty label for a non-task.
+List the distinct reusable DELIVERABLES this finished turn produced, each with its task label, by WHAT was produced (not by what the request talks about). A turn can produce more than one (e.g. a story AND a review of that story).
 
-EXISTING SKILLS (label: what it produces) — reuse one of these labels exactly if this turn produced the same type of thing, else coin a new label:
+EXISTING SKILLS (label: what it produces) — reuse one of these labels EXACTLY when a deliverable is the same type as that skill, else coin a new specific label:
 {{existing}}
 
 REQUEST: {{request}}
 
-WHAT THE AGENT ACTUALLY DELIVERED (classify by THIS, not by what the request talks about):
+WHAT THE AGENT DELIVERED (find each distinct deliverable in here and in the process below):
 {{output}}
 
-RUN PROCESS (for context on what the turn actually did):
+RUN PROCESS (ordered, with tool calls and any subagent activity — a reviewer subagent's critique counts as its OWN deliverable):
 {{transcript}}
 
-End with `===LABEL===` then the label on its own line (or an empty line for a non-task).
+End with `===DELIVERABLES===` then, on the next line, a single-line JSON array of {"label","what"} objects (or `[]` for a turn with no reusable deliverable).

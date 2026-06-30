@@ -11,8 +11,8 @@ CURRENT EXPLANATION (the prior reviewer's rationale, written for you to referenc
 PRIOR RUNS (best first):
 {{priors}}
 
-RUN PROCESS (what actually happened this run, in order; use it to see where the agent struggled, was corrected, or went back and forth, and fold any revealed gap into the master):
+RUN PROCESS (what actually happened this run, in order, with timestamps and the tool calls it made; use it to see where the agent struggled, was corrected, went back and forth, or never finished, and fold any revealed gap into the master):
 {{transcript}}
 
-NEW OUTPUT (the final deliverable to grade):
+NEW OUTPUT (everything the agent produced this turn; grade the actual deliverable within it and ignore process/bookkeeping chatter. If the agent never produced the deliverable the request asked for, that is a core-constraint failure):
 {{output}}

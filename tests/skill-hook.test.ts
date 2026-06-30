@@ -70,7 +70,36 @@ test("extractRun does not split a turn on a tool-result user message", () => {
   const run = extractRun(p);
   rmSync(p, { force: true });
   expect(run!.request).toBe("fix the bug");                          // tool result is not a new turn
-  expect(run!.output).toBe("fixed it");
+  expect(run!.output).toContain("fixed it");                         // deliverable = all assistant text of the turn
+  expect(run!.output).toContain("let me look");                      // every assistant message, not just the last
+});
+
+test("extractRun keeps a mid-turn deliverable that is followed by end-of-turn bookkeeping", () => {
+  // Regression: the short-story 0.10 bug. The agent wrote the story, then ended on brain bookkeeping, so the
+  // last assistant message was bookkeeping. The graded output must still contain the story.
+  const p = join(tmpdir(), `cairn-buried-${process.pid}.jsonl`);
+  writeFileSync(p, [
+    JSON.stringify({ type: "user", message: { content: "write me a short story" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "THE_POCKET_STORY: two laps in I have the pace exact" }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Research graph bookkeeping: node c0f4e47f answered. The blocking reviewer is running." }] } }),
+  ].join("\n"));
+  const run = extractRun(p);
+  rmSync(p, { force: true });
+  expect(run!.output).toContain("THE_POCKET_STORY");                 // the story is graded, not lost behind bookkeeping
+});
+
+test("extractRun records timestamps and tool calls in the process transcript", () => {
+  const p = join(tmpdir(), `cairn-ts-${process.pid}.jsonl`);
+  writeFileSync(p, [
+    JSON.stringify({ type: "user", timestamp: "2026-06-29T14:03:09.000Z", message: { content: "write me a haiku" } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-06-29T14:03:12.500Z", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_search", input: { task: "haiku" } }] } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-06-29T14:03:40.000Z", message: { content: [{ type: "text", text: "first frost on the gate" }] } }),
+  ].join("\n"));
+  const run = extractRun(p);
+  rmSync(p, { force: true });
+  expect(run!.transcript).toContain("14:03:09");                     // message timestamps are captured (HH:MM:SS)
+  expect(run!.transcript).toContain("skill_search");                 // tool calls are captured, not stripped
+  expect(run!.output).toBe("first frost on the gate");               // tool-only frame has no text, so output is the story
 });
 
 test("extractRun returns null on an unreadable path", () => {

@@ -106,17 +106,18 @@ function hookConfig(): object {
       preToolUse: [cmd("pre-tool", ".*brain_create")],
       postToolUse: [cmd("post-tool")],
       agentStop: [cmd("agent-stop")],
+      subagentStop: [cmd("subagent-stop")],
       subagentStart: [cmd("subagent-start")],
     },
   };
 }
 
 // Write the cairn hook file (its own file, so it never collides with the user's other hooks). The
-// idempotency marker is "agent-stop": an older file written before the parity events were added lacks
-// it (it only had session-start/post-tool) and is upgraded in place.
+// idempotency marker is "subagent-stop": a file written before the skill-learning events were added lacks
+// it and is upgraded in place.
 export async function installCopilotHook(dryRun: boolean): Promise<Result> {
   const path = copilotHookPath();
-  if (existsSync(path) && (await readFile(path, "utf8")).includes("agent-stop")) return "already";
+  if (existsSync(path) && (await readFile(path, "utf8")).includes("subagent-stop")) return "already";
   if (dryRun) return "would-add";
   mkdirSync(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(hookConfig(), null, 2)}\n`, "utf8");

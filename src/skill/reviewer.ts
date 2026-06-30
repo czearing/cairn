@@ -2,7 +2,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { runClaude } from "./claude";
+import { runLearner } from "./runner";
 import { cairnMcpConfigPath } from "./cairn-mcp";
 import { LEARN_SYSTEM, learnUserPrompt, CLASSIFY_SYSTEM, classifyUserPrompt } from "./prompts";
 import type { Review, SkillRun } from "./types";
@@ -85,7 +85,7 @@ export function parseClassifyLabel(raw: string | null | undefined): string {
  *  label, or "" for a non-task or on failure (the caller treats "" as skip). No tools, short timeout. */
 export interface ClassifyResult { label: string; failed: boolean; error?: string }
 export async function classifyLabel(request: string, output: string, transcript: string, existing: string[], timeoutMs?: number): Promise<ClassifyResult> {
-  const r = await runClaude(classifyUserPrompt(request, output, transcript, existing), {
+  const r = await runLearner(classifyUserPrompt(request, output, transcript, existing), {
     system: CLASSIFY_SYSTEM,
     timeoutMs: timeoutMs ?? 90_000,
     model: process.env.CAIRN_CLASSIFY_MODEL || process.env.CAIRN_LEARN_MODEL || undefined,
@@ -105,7 +105,7 @@ export async function reviewAndLearn(request: string, output: string, transcript
   // master, so it never sees, echoes, or can corrupt a label.
   const user = learnUserPrompt(request, output, transcript, existing, priors, priorMaster, priorExplanation);
   const outPath = join(tmpdir(), `cairn-learn-${randomUUID()}.json`);
-  const r = await runClaude(user, {
+  const r = await runLearner(user, {
     system: LEARN_SYSTEM,
     mcpConfigPath: cairnMcpConfigPath(),
     allowedTools: ["mcp__cairn__brain_search", "mcp__cairn__skill_output"],

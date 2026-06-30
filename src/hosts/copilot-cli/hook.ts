@@ -135,6 +135,7 @@ interface Payload {
   sessionId: string;
   toolName: string;
   args: Record<string, unknown>;
+  transcriptPath: string;
 }
 function parsePayload(raw: string): Payload {
   try {
@@ -145,9 +146,26 @@ function parsePayload(raw: string): Payload {
       sessionId: (j.sessionId as string) ?? (j.session_id as string) ?? "",
       toolName: (j.toolName as string) ?? (j.tool_name as string) ?? "",
       args: args ?? {},
+      transcriptPath: (j.transcriptPath as string) ?? (j.transcript_path as string) ?? "",
     };
   } catch {
-    return { sessionId: "", toolName: "", args: {} };
+    return { sessionId: "", toolName: "", args: {}, transcriptPath: "" };
+  }
+}
+
+// Fire the background skill learner over a finished turn's transcript, best-effort. Tags the spawned worker
+// with CAIRN_LEARN_BACKEND=copilot so it parses Copilot's events.jsonl and grades via `copilot -p`. No-op
+// when the skill layer is off (the default) or there is no transcript; never throws or blocks the hook.
+async function fireLearner(transcriptPath: string): Promise<void> {
+  if (!transcriptPath) return;
+  try {
+    const { skillsEnabled } = await import("../../core/config");
+    if (!skillsEnabled()) return;
+    process.env.CAIRN_LEARN_BACKEND = "copilot"; // the worker inherits this and picks the Copilot path
+    const { learnFromTranscript } = await import("../../skill/learn");
+    learnFromTranscript(transcriptPath);
+  } catch {
+    /* skills are best-effort */
   }
 }
 
@@ -162,6 +180,12 @@ function debugLog(mode: string, raw: string): void {
 
 // ── Mode dispatch (only runs when executed directly, so tests can import the helpers above) ─────
 async function main(): Promise<void> {
+  // The skill learner runs the brain's own CLI headlessly (`copilot -p` / `claude -p`). When THAT is a
+  // copilot subprocess it re-fires these hooks — which would inject the workflow into the learner and, worse,
+  // let the learner's own agentStop kick off another learner (infinite recursion). The learner sets
+  // CAIRN_SKILL_WORKER=1, which copilot passes down to its hook processes, so we short-circuit every mode to a
+  // no-op here. This mirrors the Claude path's `claude -p --setting-sources project` isolation.
+  if (process.env.CAIRN_SKILL_WORKER === "1") return void emit({});
   // Hooks only ever READ the brain (gate + audit); open it read-only so a short-lived fire never
   // contends with the long-lived MCP server's writer. Set here (not at module scope) so importing the
   // pure helpers above for tests never flips a shared process's DB to read-only.
@@ -181,7 +205,15 @@ async function main(): Promise<void> {
 
   const raw = await Bun.stdin.text();
   debugLog(mode ?? "", raw);
-  const { sessionId, toolName, args } = parsePayload(raw);
+  const { sessionId, toolName, args, transcriptPath } = parsePayload(raw);
+
+  if (mode === "subagent-stop") {
+    // A subagent finished — learn its OWN run as a distinct skill (mirrors Claude Code's SubagentStop). No
+    // enforcement here; that governs the main agent's reasoning, not a tool subagent.
+    await fireLearner(transcriptPath);
+    emit({});
+    return;
+  }
 
   if (mode === "user-prompt") {
     // TURN-START injection, exactly like Claude Code's UserPromptSubmit: emit the full workflow so it is
@@ -235,6 +267,8 @@ async function main(): Promise<void> {
   }
 
   if (mode === "agent-stop") {
+    // Turn end: (1) learn this turn as a skill in the background, then (2) the split/brain enforcement.
+    await fireLearner(transcriptPath);
     if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
     const st = readTurn(sessionId);
     let unsplitCount = 0;

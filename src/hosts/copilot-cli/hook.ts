@@ -12,8 +12,8 @@
 //   post-tool      (postToolUse)         : after a brain_* or Task tool, inject the matching reminder, and
 //                                          record brain usage for this turn (drives the agentStop gate).
 //   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn. Used
-//                                          for turn-reminder.md (brain unused) and split-leaves.md (unsplit
-//                                          answered leaves). Loop-bounded (max 2 nudges/turn) and resettable.
+//                                          for turn-reminder.md (brain unused this turn). Loop-bounded
+//                                          (max 2 nudges/turn) and resettable.
 //   subagent-start (subagentStart)       : additionalContext is PREPENDED to the subagent's own prompt —
 //                                          the one channel that reaches a subagent's window (subagent-protocol.md).
 //
@@ -60,31 +60,23 @@ export function postToolFiles(toolName: string, answer: string): string[] {
 // Whether agentStop should force another turn, and with which prompt. Bounded to STOP_CAP nudges per
 // turn so a stubborn agent can never be looped forever (Copilot sends no stop_hook_active flag).
 export const STOP_CAP = 2;
-export function stopDecision(s: { brainUsed: boolean; unsplitCount: number; stopNudges: number }): {
+export function stopDecision(s: { brainUsed: boolean; stopNudges: number }): {
   file: string;
 } {
   if (s.stopNudges >= STOP_CAP) return { file: "" };
   if (!s.brainUsed) return { file: "turn-reminder.md" };
-  if (s.unsplitCount > 0) return { file: "split-leaves.md" };
   return { file: "" };
 }
 
-// Whether a pending brain_create must be denied (preToolUse). Mirrors the Claude dispatch gate: a
-// closed (yes/no) question, or a node linked ONLY to the root while open branches remain, is rejected.
-// Dependencies are injected so this is pure and DB-free in tests.
+// Whether a pending brain_create must be denied (preToolUse). Mirrors the Claude dispatch gate: a node
+// linked ONLY to the root while open branches remain is rejected (a structural graph fact, not a content
+// judgment). Dependencies are injected so this is pure and DB-free in tests.
 export function gateDecision(
   toolName: string,
   args: Record<string, unknown>,
-  ctx: { rootId: string | null; openBranch: boolean; isClosed: (t: string) => boolean }
+  ctx: { rootId: string | null; openBranch: boolean }
 ): { deny: boolean; reason?: string } {
   if (!isTool(toolName, "brain_create")) return { deny: false };
-  const text = typeof args.text === "string" ? args.text : "";
-  if (ctx.isClosed(text))
-    return {
-      deny: true,
-      reason:
-        "That is a yes/no question. It presumes its answer and cannot be split. Re-ask it as a how or why question, then create it.",
-    };
   const edges = Array.isArray(args.edges) ? (args.edges as string[]) : [];
   if (ctx.rootId && edges.length > 0 && edges.every((e) => e === ctx.rootId) && ctx.openBranch)
     return {
@@ -96,14 +88,13 @@ export function gateDecision(
 }
 
 // ── Per-turn state (drives the agentStop gate without parsing Copilot's transcript) ─────────────
-// A turn runs from userPromptSubmitted to agentStop. We record whether the brain was used and which
-// nodes were mutated, keyed by sessionId, so agentStop can scope its gate to THIS turn.
+// A turn runs from userPromptSubmitted to agentStop. We record whether the brain was used this turn,
+// keyed by sessionId, so agentStop can scope its turn-reminder gate to THIS turn.
 interface TurnState {
   brainUsed: boolean;
-  answered: string[];
   stopNudges: number;
 }
-const freshTurn = (): TurnState => ({ brainUsed: false, answered: [], stopNudges: 0 });
+const freshTurn = (): TurnState => ({ brainUsed: false, stopNudges: 0 });
 const turnDir = () => join(homedir(), ".cairn", "copilot-turn");
 const turnPath = (sid: string) =>
   join(turnDir(), `${(sid || "default").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128)}.json`);
@@ -236,11 +227,10 @@ async function main(): Promise<void> {
     let decision: { deny: boolean; reason?: string } = { deny: false };
     try {
       if (isTool(toolName, "brain_create")) {
-        const { rootId, openBranchExists, isClosedQuestion } = await import("../../core/audit");
+        const { rootId, openBranchExists } = await import("../../core/audit");
         decision = gateDecision(toolName, args, {
           rootId: rootId(),
           openBranch: openBranchExists(),
-          isClosed: isClosedQuestion,
         });
       }
     } catch {
@@ -251,12 +241,9 @@ async function main(): Promise<void> {
   }
 
   if (mode === "post-tool") {
-    // Record brain usage for the turn-end gate. Counting matches Claude: brain_search/brain_mutate mark
-    // the turn as "used the brain"; every brain_mutate id is a candidate answered leaf for the split-check.
+    // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const st = readTurn(sessionId);
     if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) st.brainUsed = true;
-    if (isTool(toolName, "brain_mutate") && typeof args.id === "string")
-      st.answered = [...new Set([...st.answered, args.id])];
 
     const answer = typeof args.answer === "string" ? args.answer : "";
     const blocks = (await Promise.all(postToolFiles(toolName, answer).map(promptText))).filter((t) => t.length > 0);
@@ -273,17 +260,7 @@ async function main(): Promise<void> {
     // that ALLOWS (no block) — otherwise we'd grade an unfinished turn and create duplicate runs.
     if (process.env.CAIRN_COPILOT_NO_STOP) { await fireLearner(transcriptPath); return void emit({}); }
     const st = readTurn(sessionId);
-    let unsplitCount = 0;
-    if (st.brainUsed && st.answered.length) {
-      try {
-        const { unsplitLeaves } = await import("../../core/audit");
-        const answered = new Set(st.answered);
-        unsplitCount = unsplitLeaves().filter((n) => answered.has(n.id)).length;
-      } catch {
-        unsplitCount = 0;
-      }
-    }
-    const { file } = stopDecision({ brainUsed: st.brainUsed, unsplitCount, stopNudges: st.stopNudges });
+    const { file } = stopDecision({ brainUsed: st.brainUsed, stopNudges: st.stopNudges });
     const text = file ? await promptText(file) : "";
     if (text) {
       writeTurn(sessionId, { ...st, stopNudges: st.stopNudges + 1 });

@@ -2,7 +2,6 @@ import { open, stat } from "node:fs/promises";
 
 const isBrainTool = (name: unknown): boolean =>
   typeof name === "string" && (name.includes("brain_search") || name.includes("brain_mutate"));
-const isBrainMutate = (name: unknown): boolean => typeof name === "string" && name.includes("brain_mutate");
 
 // The current turn always lives at the END of the transcript, so we read only the TAIL instead of the whole
 // file. This keeps the Stop-hook cost flat as a conversation grows: an 18MB session would otherwise be read
@@ -58,21 +57,3 @@ export async function brainUsedThisTurn(transcriptPath: string): Promise<boolean
   return false;
 }
 
-// Node ids the agent answered (via brain_mutate) during the current turn. The split-leaves gate is scoped to
-// these so it nags about the agent's OWN fresh syntheses, never the whole historical graph. Fail open (empty
-// set) on a read error so we never nag on uncertainty.
-export async function mutatedIdsThisTurn(transcriptPath: string): Promise<Set<string>> {
-  const ids = new Set<string>();
-  const lines = await currentTurnLines(transcriptPath);
-  if (lines === null) return ids;
-  for (const line of lines) {
-    try {
-      const content = JSON.parse(line).message?.content;
-      if (!Array.isArray(content)) continue;
-      for (const c of content) {
-        if (c?.type === "tool_use" && isBrainMutate(c.name) && typeof c.input?.id === "string") ids.add(c.input.id);
-      }
-    } catch { /* skip malformed line */ }
-  }
-  return ids;
-}

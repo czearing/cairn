@@ -27,50 +27,38 @@ test("postToolFiles is empty for unrelated tools", () => {
 // ── stopDecision: the agentStop gate, bounded so it can never loop forever ────────────────────────
 
 test("stopDecision nudges turn-reminder when the brain was not used this turn", () => {
-  expect(stopDecision({ brainUsed: false, unsplitCount: 0, stopNudges: 0 })).toEqual({ file: "turn-reminder.md" });
+  expect(stopDecision({ brainUsed: false, stopNudges: 0 })).toEqual({ file: "turn-reminder.md" });
 });
 
-test("stopDecision nudges split-leaves when the brain was used but answered leaves are unsplit", () => {
-  expect(stopDecision({ brainUsed: true, unsplitCount: 2, stopNudges: 0 })).toEqual({ file: "split-leaves.md" });
-});
-
-test("stopDecision allows the turn to end when the brain was used and nothing is unsplit", () => {
-  expect(stopDecision({ brainUsed: true, unsplitCount: 0, stopNudges: 0 })).toEqual({ file: "" });
+test("stopDecision allows the turn to end when the brain was used", () => {
+  expect(stopDecision({ brainUsed: true, stopNudges: 0 })).toEqual({ file: "" });
 });
 
 test("stopDecision stops nudging once the per-turn cap is reached (no infinite loop)", () => {
-  expect(stopDecision({ brainUsed: false, unsplitCount: 5, stopNudges: STOP_CAP })).toEqual({ file: "" });
+  expect(stopDecision({ brainUsed: false, stopNudges: STOP_CAP })).toEqual({ file: "" });
 });
 
 // ── gateDecision: the preToolUse brain_create gate (pure; deps injected) ──────────────────────────
 
-const isClosed = (t: string) => /^\s*(do|does|is|are|should|can|will)\b/i.test(t);
-
-test("gateDecision denies a closed (yes/no) brain_create question", () => {
-  const d = gateDecision("cairn-brain_create", { text: "Is X true?" }, { rootId: "r", openBranch: false, isClosed });
-  expect(d.deny).toBe(true);
-  expect(d.reason).toContain("yes/no question");
-});
-
 test("gateDecision denies a node linked only to the root while open branches remain", () => {
-  const d = gateDecision("cairn-brain_create", { text: "How does X work?", edges: ["r"] }, { rootId: "r", openBranch: true, isClosed });
+  const d = gateDecision("cairn-brain_create", { text: "How does X work?", edges: ["r"] }, { rootId: "r", openBranch: true });
   expect(d.deny).toBe(true);
   expect(d.reason).toContain("root already has open branches");
 });
 
 test("gateDecision allows a deeper node (linked under a non-root parent)", () => {
-  const d = gateDecision("cairn-brain_create", { text: "How does X work?", edges: ["child"] }, { rootId: "r", openBranch: true, isClosed });
+  const d = gateDecision("cairn-brain_create", { text: "How does X work?", edges: ["child"] }, { rootId: "r", openBranch: true });
   expect(d.deny).toBe(false);
 });
 
 test("gateDecision allows a root-child when no open branches remain", () => {
-  const d = gateDecision("cairn-brain_create", { text: "How does X work?", edges: ["r"] }, { rootId: "r", openBranch: false, isClosed });
+  const d = gateDecision("cairn-brain_create", { text: "How does X work?", edges: ["r"] }, { rootId: "r", openBranch: false });
   expect(d.deny).toBe(false);
 });
 
 test("gateDecision never gates a non-create tool", () => {
-  expect(gateDecision("cairn-brain_mutate", { text: "Is X?" }, { rootId: "r", openBranch: true, isClosed }).deny).toBe(false);
-  expect(gateDecision("cairn-brain_search", { text: "Is X?" }, { rootId: "r", openBranch: true, isClosed }).deny).toBe(false);
+  expect(gateDecision("cairn-brain_mutate", { text: "x" }, { rootId: "r", openBranch: true }).deny).toBe(false);
+  expect(gateDecision("cairn-brain_search", { text: "x" }, { rootId: "r", openBranch: true }).deny).toBe(false);
 });
 
 // ── isTool: accepts bare, hyphen-prefixed, and __-namespaced forms ────────────────────────────────

@@ -3,7 +3,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { writeFileSync } from "node:fs";
 import { z } from "zod";
 import { create, mutate, remove, refsByIds } from "../core/neurons";
-import { isClosedQuestion } from "../core/audit";
 import { search } from "../core/search";
 import { config } from "../core/config";
 import { neighborContext } from "./context";
@@ -62,14 +61,13 @@ server.tool(
 
 server.tool(
   "brain_create",
-  "Create a thought and return its id. The text MUST be an open question (what / how / why / which); yes/no questions are rejected. Keep it concise, bloated text pollutes search. Link related thoughts by id so future agents can build on them",
+  "Create a thought and return its id. Phrase it as an open question (what / how / why / which) — a yes/no question presumes its answer and cannot be split. Keep it concise, bloated text pollutes search. Link related thoughts by id so future agents can build on them",
   {
     text: z.string().describe("An open question starting with what / how / why / which. Never a yes/no question."),
     edges: z.array(z.string()).optional().describe("ids of related thoughts to link to."),
   },
   async ({ text, edges }) => {
     if (!text.trim()) return fail("text is required");
-    if (isClosedQuestion(text)) return fail("Rejected: that is a yes/no question and presumes its answer. Re-ask it as a how or why question, then create it.");
     return json(withUrl(await create(text, edges ?? [])));
   }
 );

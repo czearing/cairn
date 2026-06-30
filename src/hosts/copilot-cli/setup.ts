@@ -82,7 +82,7 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
 //   preToolUse          → gate a brain_create (deny closed-question / root-only-branch); matcher-scoped
 //                         to brain_create so it never fires on ordinary tools.
 //   postToolUse         → entry-format/orchestrate + per-tool reminders after a brain_* or Task call.
-//   agentStop           → the Stop equivalent: decision:"block" re-runs the turn (turn-reminder/split-leaves).
+//   agentStop           → the Stop equivalent: decision:"block" re-runs the turn (turn-reminder when brain unused).
 //   subagentStart       → additionalContext prepended to a spawned subagent's own prompt.
 // hook.ts picks the mode from its argv.
 function hookConfig(): object {

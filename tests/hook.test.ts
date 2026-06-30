@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { brainUsedThisTurn, mutatedIdsThisTurn } from "../src/hosts/claude-code/transcript";
+import { brainUsedThisTurn } from "../src/hosts/claude-code/transcript";
 import { matchEvent } from "../src/inject/matchers";
 import { normalizeClaudeCode } from "../src/hosts/claude-code/normalize";
 import { respond, modifyPreTool } from "../src/hosts/claude-code/respond";
@@ -41,40 +41,16 @@ test("missing transcript fails safe (no nag)", async () => {
   expect(await brainUsedThisTurn("C:/nope/does-not-exist.jsonl")).toBe(true);
 });
 
-const toolUseInput = (name: string, input: object) => ({
-  message: { role: "assistant", content: [{ type: "tool_use", name, input }] },
-});
-
-test("mutatedIdsThisTurn collects ids from this turn's brain_mutate calls only", async () => {
-  const p = transcript([
-    userMsg("first"),
-    toolUseInput("brain_mutate", { id: "old-id", answer: "a" }), // previous turn — excluded
-    userMsg("second"),
-    toolUseInput("mcp__cairn__brain_mutate", { id: "n1", answer: "x" }),
-    toolUseInput("brain_mutate", { id: "n2", citation: "https://e.x" }),
-    toolUse("brain_create"), // no id on input — ignored
-  ]);
-  const ids = await mutatedIdsThisTurn(p);
-  expect([...ids].sort()).toEqual(["n1", "n2"]);
-  expect(ids.has("old-id")).toBe(false);
-});
-
-test("mutatedIdsThisTurn fails open (empty set) on a missing transcript", async () => {
-  expect((await mutatedIdsThisTurn("C:/nope/does-not-exist.jsonl")).size).toBe(0);
-});
-
 test("tail-read still scopes to the current turn on a multi-megabyte transcript", async () => {
   // >1 MiB of earlier history so the whole file cannot fit the tail window; the current turn is at the end.
   const filler = Array.from({ length: 4000 }, (_, i) => asstText(`old line ${i} ` + "x".repeat(300)));
   const p = transcript([userMsg("first"), toolUse("brain_search"), ...filler, userMsg("second"), toolUse("brain_mutate")]);
   expect(await brainUsedThisTurn(p)).toBe(true);                 // finds this turn's brain_mutate via the tail
-  expect([...(await mutatedIdsThisTurn(transcript([userMsg("first"), ...filler, userMsg("second"), toolUseInput("brain_mutate", { id: "z9", answer: "a" })]))).values()]).toEqual(["z9"]);
 });
 
-test("turn_finished routing: unused brain, unsplit leaves, or done", () => {
-  expect(matchEvent({ kind: "turn_finished", usedBrain: false, unsplit: 0 })).toEqual({ promptFile: "turn-reminder.md" });
-  expect(matchEvent({ kind: "turn_finished", usedBrain: true, unsplit: 3 })).toEqual({ promptFile: "split-leaves.md" });
-  expect(matchEvent({ kind: "turn_finished", usedBrain: true, unsplit: 0 })).toBeNull();
+test("turn_finished routing: unused brain nags, otherwise done", () => {
+  expect(matchEvent({ kind: "turn_finished", usedBrain: false })).toEqual({ promptFile: "turn-reminder.md" });
+  expect(matchEvent({ kind: "turn_finished", usedBrain: true })).toBeNull();
 });
 
 // ── entry-format injection + timing ──────────────────────────────────────────────

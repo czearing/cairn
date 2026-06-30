@@ -47,11 +47,9 @@ test("PreToolUse DENIES a new root-only branch while an open branch exists", asy
   expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("deny");
 });
 
-test("PreToolUse DENIES a yes/no question title and asks for how/why", async () => {
+test("PreToolUse no longer judges question phrasing — a yes/no title is allowed (the model decides)", async () => {
   const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "Does compression distinguish great poems?" } });
-  const j = JSON.parse(out);
-  expect(j.hookSpecificOutput.permissionDecision).toBe("deny");
-  expect(j.hookSpecificOutput.permissionDecisionReason).toContain("how or why");
+  expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("allow");
 });
 
 test("PreToolUse ALLOWS an open how/why question", async () => {

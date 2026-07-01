@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { postToolFiles, stopDecision, gateDecision, isTool, STOP_CAP } from "../src/hosts/copilot-cli/hook";
+import { postToolFiles, stopDecision, gateDecision, isTool, STOP_CAP, turnStartContext } from "../src/hosts/copilot-cli/hook";
 
 // ── postToolFiles: which prompts a COMPLETED Copilot tool delivers, mirroring Claude's after-tool set ──
 
@@ -22,6 +22,17 @@ test("postToolFiles delivers orchestrate BEFORE subtask-spawned for a subagent s
 test("postToolFiles is empty for unrelated tools", () => {
   expect(postToolFiles("view", "")).toEqual([]);
   expect(postToolFiles("bash", "")).toEqual([]);
+});
+
+// ── turnStartContext: the brain workflow + the skill_review reminder (only when the skill layer is on) ──
+
+test("turnStartContext appends the skill_review reminder when the skill layer is on", () => {
+  expect(turnStartContext("WORKFLOW", "REVIEW")).toBe("WORKFLOW\n\nREVIEW");
+});
+
+test("turnStartContext is just the workflow when the skill layer is off (empty reminder)", () => {
+  expect(turnStartContext("WORKFLOW", "")).toBe("WORKFLOW");
+  expect(turnStartContext("WORKFLOW", "   ")).toBe("WORKFLOW"); // whitespace-only reminder is dropped
 });
 
 // ── stopDecision: the agentStop gate, bounded so it can never loop forever ────────────────────────

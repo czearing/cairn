@@ -5,7 +5,9 @@
 //
 //   session-start  (sessionStart)        : inject the full brain workflow (user-message.md) once per session.
 //   user-prompt    (userPromptSubmitted) : output is IGNORED by Copilot, so we cannot inject per prompt —
-//                                          but the hook still RUNS, so we use it to RESET the per-turn latch.
+//                                          but the hook still RUNS, so we use it to RESET the per-turn latch,
+//                                          re-inject the brain workflow at turn start, and (skill layer on)
+//                                          the skill_review reminder so a finished deliverable is submitted.
 //   pre-tool       (preToolUse)          : gate a brain_create (deny closed-question / root-only-branch).
 //                                          preToolUse has no additionalContext channel, so entry-format.md /
 //                                          orchestrate.md cannot be injected here — only allow/deny/modify.
@@ -59,6 +61,13 @@ export function postToolFiles(toolName: string, answer: string): string[] {
   if (isTool(toolName, "brain_mutate")) return ["entry-format.md", answer.trim() ? "answer-check.md" : "node-modified.md"];
   if (isTask(toolName)) return ["orchestrate.md", "subtask-spawned.md"];
   return [];
+}
+
+// Compose the turn-start additionalContext: the brain workflow, plus (only when the skill layer is ON) the
+// skill_review reminder, so an agent that just finished a deliverable is nudged to submit it for learning.
+// Pure/joins non-empty parts; the caller passes an empty skillReview when the skill layer is off.
+export function turnStartContext(workflow: string, skillReview: string): string {
+  return [workflow, skillReview].map((s) => s.trim()).filter((s) => s.length > 0).join("\n\n");
 }
 
 // Whether agentStop should force another turn, and with which prompt. Bounded to STOP_CAP nudges per
@@ -230,7 +239,15 @@ async function main(): Promise<void> {
     // Also reset the per-turn latch so the agentStop gate is scoped to this turn.
     writeTurn(sessionId, freshTurn());
     const wf = await promptText("user-message.md");
-    emit(wf ? { additionalContext: wf } : {});
+    // Reinforce skill_review at turn start (only when the skill layer is ON), so the agent submits a finished
+    // deliverable — its own or a subagent's — for learning instead of relying on the turn-end fallback scrape.
+    let skillReview = "";
+    try {
+      const { skillsEnabled } = await import("../../core/config");
+      if (skillsEnabled()) skillReview = await promptText("skill-review.md");
+    } catch { /* skills off / config unreadable: no reminder */ }
+    const text = turnStartContext(wf, skillReview);
+    emit(text ? { additionalContext: text } : {});
     return;
   }
 

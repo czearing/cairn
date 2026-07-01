@@ -18,7 +18,6 @@ interface Event { type: string; role: "user" | "assistant" | "other"; text: stri
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 const clock = (ts: number): string => (ts > 0 ? new Date(ts).toISOString().slice(11, 19) : "");
 const isReviewTool = (name: string): boolean => name.endsWith("skill_review") || name.includes("skill_review");
-const isSkillTool = (name: string): boolean => /skill_(search|create|review)/.test(name);
 // A tool's args arrive as a JSON string or object; pull a short human hint (the query/label) for the loaded list.
 function argHint(raw: unknown): string {
   let o: { task?: unknown; label?: unknown; query?: unknown; what?: unknown } = {};
@@ -70,41 +69,23 @@ export function extractRunCopilot(path: string): RunInput | null {
 
   const genuineUser = (e: Event) => e.role === "user" && e.text && !isSystemEnvelope(e.text);
   const request = cycle.filter(genuineUser).map((e) => e.text).join("\n").trim();
-  // Deliverable = the agent's VISIBLE output this cycle (main + subagent). Thinking is process, not the
-  // deliverable, so it is excluded here (it appears in the PROCESS section below instead).
+  // Deliverable = the agent's VISIBLE messages this cycle (main + subagent). Thinking is process, not the
+  // deliverable, so it is excluded here (it still appears in the transcript below).
   const output = cycle.filter((e) => e.role === "assistant" && e.text && !e.thinking).map((e) => e.text).join("\n\n").trim();
   if (!request || !output) return null;
 
-  // ── Context section 1: every user message in the WHOLE session, condensed to timestamp + text. Gives the
-  // reviewer the arc across cycles (earlier guidance, what was asked before) without the full earlier detail.
-  const sessionUsers = events
-    .filter(genuineUser)
-    .map((e) => `${clock(e.ts) ? `[${clock(e.ts)}] ` : ""}${e.text.replace(/\s+/g, " ")}`)
-    .join("\n");
-
-  // ── Context section 2: the skills the agent loaded/created/reviewed THIS cycle (which process it reused).
-  const skillsLoaded = cycle
-    .filter((e) => e.tool && isSkillTool(e.tool))
-    .map((e) => { const hint = argHint(e.toolArgs); const base = e.tool!.includes("__") ? e.tool!.slice(e.tool!.lastIndexOf("__") + 2) : e.tool!.replace(/^cairn-/, ""); return hint ? `${base} "${hint}"` : base; });
-
-  // ── Detailed process of THIS cycle, in order: the agent's THINKING, its messages, its tool calls, and
-  // subagent activity — with timestamps — so the reviewer sees exactly how the run reasoned and acted.
-  const process = cycle
-    .map((e) => {
-      const time = clock(e.ts) ? `[${clock(e.ts)}] ` : "";
-      if (e.marker) return `${time}${e.marker}`;
-      if (e.tool) return e.agent ? `${time}[subagent:${e.agent} tool] ${e.tool}` : `${time}[tool] ${e.tool}`;
-      const who = e.agent ? `subagent:${e.agent}` : e.role;
-      const tag = e.thinking ? `${who} thinking` : who;
-      return `${time}[${tag}] ${e.text}`;
-    })
-    .join("\n");
-
-  const transcript = [
-    `SESSION USER MESSAGES (oldest first):\n${sessionUsers}`,
-    `SKILLS USED THIS CYCLE:\n${skillsLoaded.length ? skillsLoaded.map((s) => `- ${s}`).join("\n") : "(none)"}`,
-    `PROCESS THIS CYCLE (since last review) — the agent's thinking, messages, and tool calls in order:\n${process}`,
-  ].join("\n\n");
+  // ONE chronological transcript of the review cycle: user messages, the agent's thinking, its messages, and
+  // its tool calls (skill label/query inline). One section, not dissected — simpler and clearer for the reviewer.
+  const toolName = (t: string) => (t.includes("__") ? t.slice(t.lastIndexOf("__") + 2) : t.replace(/^cairn-/, ""));
+  const rows = cycle.map((e) => {
+    const time = clock(e.ts) ? `[${clock(e.ts)}] ` : "";
+    if (e.marker) return `${time}${e.marker}`;
+    if (e.tool) { const hint = argHint(e.toolArgs); const sub = e.agent ? `SUBAGENT:${e.agent} ` : ""; return `${time}[${sub}TOOL] ${toolName(e.tool)}${hint ? ` "${hint}"` : ""}`; }
+    const base = e.agent ? `SUBAGENT:${e.agent}` : e.role === "user" ? "USER" : "ASSISTANT";
+    const tag = e.thinking ? `${base} THINKING` : base;
+    return `${time}[${tag}] ${e.text}`;
+  });
+  const transcript = `TRANSCRIPT (oldest first):\n${rows.join("\n")}`;
 
   return { request, transcript, output };
 }

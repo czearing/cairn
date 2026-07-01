@@ -1,8 +1,5 @@
 Grade the OUTPUT below, then rewrite the skill's master prompt (fold in the best prior runs and the gap this run exposed).
 {{focus}}
-REQUEST:
-{{request}}
-
 CURRENT MASTER (refine these steps, don't rewrite blind):
 {{currentMaster}}
 
@@ -14,5 +11,5 @@ PRIOR RUNS (best first):
 
 {{transcript}}
 
-OUTPUT TO GRADE (find the deliverable here; ignore process chatter. No deliverable = core-constraint failure):
+OUTPUT TO GRADE (the deliverable; the ask is in the user messages above. No deliverable = core-constraint failure):
 {{output}}

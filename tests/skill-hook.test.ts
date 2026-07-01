@@ -28,26 +28,37 @@ test("extractRun scopes the DETAIL to the current cycle (since the last skill_re
   rmSync(p, { force: true });
   expect(run!.request).toBe("make it sharper");                       // the CURRENT cycle's prompt
   expect(run!.output).toBe("the whole field holds still");
-  expect(run!.transcript).toContain("[user] make it sharper");
-  expect(run!.transcript).not.toContain("[user] write me a haiku about frost"); // earlier cycle's DETAIL excluded
-  expect(run!.transcript).toContain("SESSION USER MESSAGES");
-  expect(run!.transcript).toContain("write me a haiku about frost"); // ...but present in the session-user context
+  expect(run!.transcript).toContain("[USER] make it sharper");
+  expect(run!.transcript).not.toContain("write me a haiku about frost"); // earlier cycle excluded entirely
+  expect(run!.transcript).toContain("TRANSCRIPT (oldest first):");
 });
 
-test("extractRun lists the SKILLS USED THIS CYCLE and every session user message", () => {
+test("extractRun shows tool calls inline with their skill hint, timestamped (one transcript)", () => {
   const p = join(tmpdir(), `cairn-tx2-${process.pid}.jsonl`);
   writeFileSync(p, [
     JSON.stringify({ type: "user", timestamp: "2026-07-01T09:30:00.000Z", message: { content: "fix this PR description" } }),
-    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_search", input: { task: "pr description" } }] } }),
-    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_create", input: { label: "pr description" } }] } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T09:30:05.000Z", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_search", input: { task: "pr description" } }] } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T09:30:06.000Z", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_create", input: { label: "pr description" } }] } }),
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Rewrote the description." }] } }),
   ].join("\n"));
   const run = extractRun(p);
   rmSync(p, { force: true });
-  expect(run!.transcript).toContain("SKILLS USED THIS CYCLE");
-  expect(run!.transcript).toContain('skill_search "pr description"');
-  expect(run!.transcript).toContain('skill_create "pr description"');
-  expect(run!.transcript).toContain("[09:30:00] fix this PR description"); // session user message, timestamped
+  expect(run!.transcript).toContain('[TOOL] skill_search "pr description"');
+  expect(run!.transcript).toContain('[TOOL] skill_create "pr description"');
+  expect(run!.transcript).toContain("[09:30:00] [USER] fix this PR description"); // timestamped user line
+});
+
+test("extractRun captures the model's THINKING blocks in the transcript", () => {
+  const p = join(tmpdir(), `cairn-txt-${process.pid}.jsonl`);
+  writeFileSync(p, [
+    JSON.stringify({ type: "user", message: { content: "write me a haiku" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "thinking", thinking: "Ground it in a concrete winter image, avoid cliche." }, { type: "text", text: "first frost on the gate" }] } }),
+  ].join("\n"));
+  const run = extractRun(p);
+  rmSync(p, { force: true });
+  expect(run!.transcript).toContain("[ASSISTANT THINKING] Ground it in a concrete"); // thoughts captured
+  expect(run!.transcript).toContain("[ASSISTANT] first frost on the gate");
+  expect(run!.output).not.toContain("Ground it in a concrete"); // thinking is not the deliverable
 });
 
 test("extractRun batches successive user messages sent before a reply", () => {

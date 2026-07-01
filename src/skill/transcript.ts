@@ -48,7 +48,6 @@ function isToolResult(content: unknown): boolean {
 // HH:MM:SS from an ISO timestamp ("2026-06-24T19:45:35.130Z"), or "" when the line has no timestamp.
 function clock(ts: unknown): string { return typeof ts === "string" && ts.length >= 19 && ts[10] === "T" ? ts.slice(11, 19) : ""; }
 
-const isSkillTool = (name: string): boolean => /skill_(search|create|review)/.test(name);
 const isReviewTool = (name: string): boolean => name === "skill_review" || name.endsWith("skill_review");
 
 interface Event { role: "user" | "assistant"; text: string; thinking: string; tools: Tool[]; ts: string }
@@ -78,32 +77,21 @@ export function extractRun(path: string): RunInput | null {
 
   const genuineUser = (e: Event) => e.role === "user" && e.text && !isSystemEnvelope(e.text);
   const request = cycle.filter(genuineUser).map((e) => e.text).join("\n").trim();
-  // Deliverable = the agent's visible text (thinking is process, shown below, not the deliverable).
+  // Deliverable = the agent's visible messages (thinking is process, shown in the transcript, not the deliverable).
   const output = cycle.filter((e) => e.role === "assistant" && e.text).map((e) => e.text).join("\n\n").trim();
   if (!request || !output) return null;
 
-  // Context 1: every user message in the WHOLE session, condensed to timestamp + text (the arc across cycles).
-  const sessionUsers = events.filter(genuineUser).map((e) => `${e.ts ? `[${e.ts}] ` : ""}${e.text.replace(/\s+/g, " ")}`).join("\n");
-  // Context 2: the skills the agent loaded/created/reviewed THIS cycle.
-  const skillsLoaded: string[] = [];
-  for (const e of cycle) for (const t of e.tools) if (isSkillTool(t.name)) skillsLoaded.push(t.hint ? `${t.name} "${t.hint}"` : t.name);
-  // Detailed process of THIS cycle, in order: the agent's THINKING, its message, and its tool calls, timestamped.
-  const process = cycle.map((e) => {
+  // ONE chronological transcript of the review cycle: user messages, the agent's thinking, its messages, and
+  // its tool calls (skill label/query inline). One section, not dissected — simpler and clearer for the reviewer.
+  const rows: string[] = [];
+  for (const e of cycle) {
     const time = e.ts ? `[${e.ts}] ` : "";
-    const lines: string[] = [];
-    if (e.thinking) lines.push(`${time}[${e.role} thinking] ${e.thinking}`);
-    if (e.text || e.tools.length) {
-      const tools = e.tools.length ? ` (tools: ${e.tools.map((t) => t.name).join("; ")})` : "";
-      lines.push(`${time}[${e.role}] ${e.text}${tools}`.trimEnd());
-    }
-    return lines.join("\n");
-  }).filter(Boolean).join("\n");
-
-  const transcript = [
-    `SESSION USER MESSAGES (oldest first):\n${sessionUsers}`,
-    `SKILLS USED THIS CYCLE:\n${skillsLoaded.length ? skillsLoaded.map((s) => `- ${s}`).join("\n") : "(none)"}`,
-    `PROCESS THIS CYCLE (since last review) — the agent's thinking, messages, and tool calls in order:\n${process}`,
-  ].join("\n\n");
+    const role = e.role === "user" ? "USER" : "ASSISTANT";
+    if (e.thinking) rows.push(`${time}[${role} THINKING] ${e.thinking}`);
+    if (e.text) rows.push(`${time}[${role}] ${e.text}`);
+    for (const t of e.tools) rows.push(`${time}[TOOL] ${t.name}${t.hint ? ` "${t.hint}"` : ""}`);
+  }
+  const transcript = `TRANSCRIPT (oldest first):\n${rows.join("\n")}`;
 
   return { request, transcript, output };
 }

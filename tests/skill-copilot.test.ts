@@ -124,10 +124,12 @@ test("extractRunCopilot pulls request, output, and tool sequence for the cycle",
   const run = extractRunCopilot(p);
   expect(run?.request).toBe("write me a haiku");
   expect(run?.output).toContain("haiku about spring");
-  expect(run?.transcript).toContain("[tool] cairn-brain_search"); // tool calls captured in the RUN PROCESS section
+  expect(run?.transcript).toContain("TRANSCRIPT (oldest first):"); // ONE transcript section
+  expect(run?.transcript).toContain("[USER] write me a haiku");
+  expect(run?.transcript).toContain("[TOOL] brain_search");        // tool inline, cairn- prefix stripped
 });
 
-test("extractRunCopilot scopes the DETAIL to the current cycle (since the last skill_review)", () => {
+test("extractRunCopilot scopes the transcript to the current cycle (since the last skill_review)", () => {
   const p = events([
     userMsg("first task"),
     asstMsg("first answer"),
@@ -137,14 +139,13 @@ test("extractRunCopilot scopes the DETAIL to the current cycle (since the last s
     { type: "tool.execution_start", data: { toolName: "cairn-skill_review", arguments: '{"label":"b"}' } }, // cycle 2 = current
   ]);
   const run = extractRunCopilot(p);
-  expect(run?.request).toBe("second task");                 // request is the CURRENT cycle only
+  expect(run?.request).toBe("second task");                 // the CURRENT cycle only
   expect(run?.output).toBe("second answer");
-  expect(run?.transcript).not.toContain("[user] first task"); // earlier cycle's DETAIL is excluded
-  expect(run?.transcript).toContain("first task");            // but it still appears in the session-user-messages context
-  expect(run?.transcript).toContain("SESSION USER MESSAGES");
+  expect(run?.transcript).toContain("[USER] second task");
+  expect(run?.transcript).not.toContain("first task");      // the earlier cycle is excluded entirely
 });
 
-test("extractRunCopilot lists the SKILLS USED THIS CYCLE, with their hint", () => {
+test("extractRunCopilot shows tool calls inline with their skill hint (no separate section)", () => {
   const p = events([
     userMsg("fix this PR description"),
     { type: "tool.execution_start", data: { toolName: "cairn-skill_search", arguments: '{"task":"pr description"}' } },
@@ -152,31 +153,30 @@ test("extractRunCopilot lists the SKILLS USED THIS CYCLE, with their hint", () =
     asstMsg("Rewrote the description."),
   ]);
   const run = extractRunCopilot(p);
-  expect(run?.transcript).toContain("SKILLS USED THIS CYCLE");
-  expect(run?.transcript).toContain('skill_search "pr description"');
-  expect(run?.transcript).toContain('skill_create "pr description"');
+  expect(run?.transcript).toContain('[TOOL] skill_search "pr description"');
+  expect(run?.transcript).toContain('[TOOL] skill_create "pr description"');
 });
 
-test("extractRunCopilot captures the model's THINKING (reasoningText) in the process, not just the message", () => {
+test("extractRunCopilot captures the model's THINKING (reasoningText) in the transcript, not just the message", () => {
   const p = events([
     userMsg("write me a haiku about frost"),
     { type: "assistant.message", data: { reasoningText: "I should ground this in a concrete winter image and avoid the cliche of 'silent snow'.", content: "First frost on the gate / the dog's breath hangs in the air / no one else awake" } },
   ]);
   const run = extractRunCopilot(p);
-  expect(run?.transcript).toContain("[assistant thinking] I should ground this"); // the thoughts are shown
-  expect(run?.transcript).toContain("[assistant] First frost on the gate");        // and so is the visible message
+  expect(run?.transcript).toContain("[ASSISTANT THINKING] I should ground this"); // the thoughts are shown
+  expect(run?.transcript).toContain("[ASSISTANT] First frost on the gate");        // and so is the visible message
   expect(run?.output).toContain("First frost on the gate");                        // deliverable = the message
   expect(run?.output).not.toContain("I should ground this");                       // ...not the thinking
 });
 
-test("extractRunCopilot timestamps the session user messages and the cycle process", () => {
+test("extractRunCopilot timestamps each transcript line", () => {
   const ts = Date.UTC(2026, 6, 1, 14, 3, 9);
   const p = events([
     { type: "user.message", timestamp: ts, data: { content: "write me a haiku" } },
     { type: "assistant.message", timestamp: ts + 60000, data: { content: "first frost on the gate" } },
   ]);
   const run = extractRunCopilot(p);
-  expect(run?.transcript).toContain("[14:03:09]"); // HH:MM:SS from the events.jsonl timestamp field
+  expect(run?.transcript).toContain("[14:03:09] [USER] write me a haiku"); // HH:MM:SS from the events.jsonl timestamp
 });
 
 test("extractRunCopilot returns null when there is no deliverable", () => {
@@ -224,7 +224,7 @@ test("extractRunCopilot captures a subagent-produced deliverable that the main a
   expect(run).not.toBeNull();
   expect(run!.output).toContain("THE STORY");                       // the subagent's actual deliverable is graded
   expect(run!.transcript).toContain("spawned subagent: Story Writer"); // subagent activity is captured in the log
-  expect(run!.transcript).toContain("[subagent:Story Writer]");     // its message is tagged, not blended into the main agent
+  expect(run!.transcript).toContain("[SUBAGENT:Story Writer]");     // its message is tagged, not blended into the main agent
   expect(run!.transcript).toContain("subagent Story Writer returned");
 });
 
@@ -238,7 +238,7 @@ test("extractRunCopilot tags a subagent's tool calls distinctly from the main ag
     subDone("toolu_b2"),
   ]);
   const run = extractRunCopilot(p);
-  expect(run!.transcript).toContain("[tool] cairn-brain_search");   // main-agent tool: unchanged format
-  expect(run!.transcript).toContain("[subagent:Reviewer tool] view"); // subagent tool: tagged
+  expect(run!.transcript).toContain("[TOOL] brain_search");        // main-agent tool
+  expect(run!.transcript).toContain("[SUBAGENT:Reviewer TOOL] view"); // subagent tool: tagged
   expect(run!.output).toContain("REVIEW: 3 real issues");          // subagent's critique is captured as output
 });

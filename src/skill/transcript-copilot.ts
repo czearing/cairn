@@ -2,19 +2,29 @@ import { readFileSync } from "node:fs";
 import type { RunInput } from "./pipeline";
 import { isSystemEnvelope } from "./noise";
 
-// Extract a RunInput for the CURRENT turn from a GitHub Copilot CLI transcript. Copilot writes one JSON event
-// per line to ~/.copilot/session-state/<id>/events.jsonl, a DIFFERENT shape from Claude's message-JSONL (see
-// transcript.ts). The events we grade with: `user.message` (data.content = the human's prompt), `assistant.
-// message` (data.content = the agent's text), `tool.execution_start` (data.toolName = an action), and the
-// `subagent.started` / `subagent.completed` pair. A SUBAGENT's own messages and tool calls are interleaved in
-// THIS same log, tagged with an `agentId`, so the whole turn — including work a subagent produced — is here;
-// we tag those lines so the reviewer can tell a subagent's deliverable (e.g. a story review) from the main
-// agent's. We scope to the latest turn (everything from the last genuine human prompt on) and join all of the
-// turn's assistant text (main AND subagent) so a deliverable produced by either is never lost.
+// Extract a RunInput for the current REVIEW CYCLE from a GitHub Copilot CLI transcript. Copilot writes one JSON
+// event per line to ~/.copilot/session-state/<id>/events.jsonl. A review cycle is everything the agent did to
+// produce the deliverable it is now submitting: we scope the DETAILED process to everything since the PREVIOUS
+// skill_review call (or the session start, for the first review), NOT just the last user turn — so multi-turn
+// refinement, guidance, and corrections are all graded. On top of that we give the reviewer, for context:
+//   • every USER message in the whole session (condensed to timestamp + text), incl. earlier cycles;
+//   • the list of skills the agent loaded/created this cycle (skill_search / skill_create / skill_review);
+//   • the full ordered process of THIS cycle with timestamps, subagent activity tagged inline.
+// Subagent messages/tools are interleaved in this same log (agentId-tagged), so a subagent's deliverable is
+// captured too. Host system-envelope user messages (notifications, reminders) never count as a human prompt.
 
-interface Event { role: "user" | "assistant"; text: string; tool?: string; agent?: string; marker?: string }
+interface Event { type: string; role: "user" | "assistant" | "other"; text: string; tool?: string; toolArgs?: string; agent?: string; marker?: string; ts: number }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+const clock = (ts: number): string => (ts > 0 ? new Date(ts).toISOString().slice(11, 19) : "");
+const isReviewTool = (name: string): boolean => name.endsWith("skill_review") || name.includes("skill_review");
+const isSkillTool = (name: string): boolean => /skill_(search|create|review)/.test(name);
+// A tool's args arrive as a JSON string or object; pull a short human hint (the query/label) for the loaded list.
+function argHint(raw: unknown): string {
+  let o: { task?: unknown; label?: unknown; query?: unknown; what?: unknown } = {};
+  try { o = typeof raw === "string" ? JSON.parse(raw) : (raw ?? {}) as typeof o; } catch { return ""; }
+  return str(o.label) || str(o.task) || str(o.query) || str(o.what);
+}
 
 export function extractRunCopilot(path: string): RunInput | null {
   let lines: string[];
@@ -23,58 +33,71 @@ export function extractRunCopilot(path: string): RunInput | null {
   const agentName = new Map<string, string>(); // agentId -> a short human name, learned from subagent.started
   const events: Event[] = [];
   for (const line of lines) {
-    let o: { type?: string; agentId?: unknown; data?: { content?: unknown; toolName?: unknown; agentName?: unknown; agentDisplayName?: unknown } };
+    let o: { type?: string; agentId?: unknown; timestamp?: unknown; data?: { content?: unknown; toolName?: unknown; arguments?: unknown; agentName?: unknown; agentDisplayName?: unknown } };
     try { o = JSON.parse(line); } catch { continue; }
+    const type = str(o.type);
     const data = o.data ?? {};
+    const ts = typeof o.timestamp === "number" ? o.timestamp : 0;
     const agentId = str(o.agentId);
-    // A subagent's messages/tools carry an agentId; resolve it to the name captured at subagent.started.
     const agent = agentId ? (agentName.get(agentId) || "subagent") : undefined;
 
-    if (o.type === "subagent.started") {
+    if (type === "subagent.started") {
       const name = str(data.agentDisplayName) || str(data.agentName) || "subagent";
       if (agentId) agentName.set(agentId, name);
-      events.push({ role: "assistant", text: "", marker: `↳ spawned subagent: ${name}` });
-    } else if (o.type === "subagent.completed") {
+      events.push({ type, role: "other", text: "", marker: `↳ spawned subagent: ${name}`, ts });
+    } else if (type === "subagent.completed") {
       const name = (agentId && agentName.get(agentId)) || str(data.agentDisplayName) || str(data.agentName) || "subagent";
-      events.push({ role: "assistant", text: "", marker: `↳ subagent ${name} returned` });
-    } else if (o.type === "user.message") {
-      const t = str(data.content); if (t) events.push({ role: "user", text: t });
-    } else if (o.type === "assistant.message") {
-      const t = str(data.content); if (t) events.push({ role: "assistant", text: t, agent });
-    } else if (o.type === "tool.execution_start") {
-      const n = str(data.toolName); if (n) events.push({ role: "assistant", text: "", tool: n, agent });
+      events.push({ type, role: "other", text: "", marker: `↳ subagent ${name} returned`, ts });
+    } else if (type === "user.message") {
+      const t = str(data.content); if (t) events.push({ type, role: "user", text: t, ts });
+    } else if (type === "assistant.message") {
+      const t = str(data.content); if (t) events.push({ type, role: "assistant", text: t, agent, ts });
+    } else if (type === "tool.execution_start") {
+      const n = str(data.toolName); if (n) events.push({ type, role: "assistant", text: "", tool: n, toolArgs: str(data.arguments), agent, ts });
     }
   }
   if (events.length === 0) return null;
 
-  // Scope to the current turn: everything from the LAST GENUINE human prompt onward. A host system-envelope
-  // user.message (a <task-notification>, a <system_reminder>, a skill-context preamble, a slash-command frame)
-  // is the harness talking, not the user, so it never anchors a turn — otherwise the loop would grade whatever
-  // the agent did in response and mint a skill from a notification. If the turn has no genuine human prompt at
-  // all, there is nothing to learn.
-  let start = -1;
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i]!;
-    if (e.role === "user" && e.text && !isSystemEnvelope(e.text)) { start = i; break; }
-  }
-  if (start < 0) return null;
-  const turn = events.slice(start);
+  // The DETAIL window is the current review cycle: everything since the PREVIOUS skill_review call. The LAST
+  // skill_review in the log is the one that triggered this review, so we cut after the one BEFORE it; with only
+  // one (the first review ever) we take the whole session.
+  const reviewIdxs = events.map((e, i) => (e.tool && isReviewTool(e.tool) ? i : -1)).filter((i) => i >= 0);
+  const detailStart = reviewIdxs.length >= 2 ? reviewIdxs[reviewIdxs.length - 2]! + 1 : 0;
+  const cycle = events.slice(detailStart);
 
-  const request = turn.filter((e) => e.role === "user" && e.text && !isSystemEnvelope(e.text)).map((e) => e.text).join("\n").trim();
-  // Deliverable = ALL assistant text this turn, from the main agent AND any subagent (a story-writer subagent's
-  // story, a reviewer subagent's critique), so nothing a subagent produced is lost. The segmenter splits them.
-  const output = turn.filter((e) => e.role === "assistant" && e.text).map((e) => e.text).join("\n\n").trim();
+  const genuineUser = (e: Event) => e.role === "user" && e.text && !isSystemEnvelope(e.text);
+  const request = cycle.filter(genuineUser).map((e) => e.text).join("\n").trim();
+  // Deliverable = ALL assistant text this cycle, from the main agent AND any subagent, so nothing is lost.
+  const output = cycle.filter((e) => e.role === "assistant" && e.text).map((e) => e.text).join("\n\n").trim();
   if (!request || !output) return null;
 
-  // Process = the whole turn in order, subagent activity tagged inline, so the reviewer sees what actually
-  // happened (which skills it searched, when it spawned a subagent, what that subagent produced). No length cap
-  // here — runCopilot caps the final prompt if needed, dropping the transcript middle, never the deliverable.
-  const transcript = turn
+  // ── Context section 1: every user message in the WHOLE session, condensed to timestamp + text. Gives the
+  // reviewer the arc across cycles (earlier guidance, what was asked before) without the full earlier detail.
+  const sessionUsers = events
+    .filter(genuineUser)
+    .map((e) => `${clock(e.ts) ? `[${clock(e.ts)}] ` : ""}${e.text.replace(/\s+/g, " ")}`)
+    .join("\n");
+
+  // ── Context section 2: the skills the agent loaded/created/reviewed THIS cycle (which process it reused).
+  const skillsLoaded = cycle
+    .filter((e) => e.tool && isSkillTool(e.tool))
+    .map((e) => { const hint = argHint(e.toolArgs); const base = e.tool!.includes("__") ? e.tool!.slice(e.tool!.lastIndexOf("__") + 2) : e.tool!.replace(/^cairn-/, ""); return hint ? `${base} "${hint}"` : base; });
+
+  // ── Detailed process of THIS cycle, in order, with timestamps and subagent tags.
+  const process = cycle
     .map((e) => {
-      if (e.marker) return e.marker;
-      if (e.tool) return e.agent ? `[subagent:${e.agent} tool] ${e.tool}` : `[tool] ${e.tool}`;
-      return e.agent ? `[subagent:${e.agent}] ${e.text}` : `[${e.role}] ${e.text}`;
+      if (e.marker) return `${clock(e.ts) ? `[${clock(e.ts)}] ` : ""}${e.marker}`;
+      const time = clock(e.ts) ? `[${clock(e.ts)}] ` : "";
+      if (e.tool) return e.agent ? `${time}[subagent:${e.agent} tool] ${e.tool}` : `${time}[tool] ${e.tool}`;
+      return e.agent ? `${time}[subagent:${e.agent}] ${e.text}` : `${time}[${e.role}] ${e.text}`;
     })
     .join("\n");
+
+  const transcript = [
+    `ALL USER MESSAGES THIS SESSION (context across cycles, oldest first):\n${sessionUsers}`,
+    `SKILLS LOADED THIS CYCLE:\n${skillsLoaded.length ? skillsLoaded.map((s) => `- ${s}`).join("\n") : "(none)"}`,
+    `RUN PROCESS THIS CYCLE (since the last review, in order, with timestamps):\n${process}`,
+  ].join("\n\n");
+
   return { request, transcript, output };
 }

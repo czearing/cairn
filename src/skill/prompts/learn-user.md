@@ -12,7 +12,7 @@ CURRENT EXPLANATION (the prior reviewer's rationale, written for you to referenc
 PRIOR RUNS (best first):
 {{priors}}
 
-RUN PROCESS (what actually happened this run, in order, with timestamps and the tool calls it made; use it to see where the agent struggled, was corrected, went back and forth, or never finished, and fold any revealed gap into the master):
+RUN PROCESS (context for grading — the whole session's user messages with timestamps, the skills loaded this cycle, and the full ordered process SINCE THE LAST REVIEW with timestamps and tool calls; use it to see the guidance given, where the agent struggled or was corrected, and fold any revealed gap into the master):
 {{transcript}}
 
 NEW OUTPUT (everything the agent produced this turn; grade the actual deliverable within it and ignore process/bookkeeping chatter. If the agent never produced the deliverable the request asked for, that is a core-constraint failure):

@@ -115,7 +115,7 @@ const subStart = (agentId: string, agentDisplayName: string) => ({ type: "subage
 const subDone = (agentId: string) => ({ type: "subagent.completed", agentId, data: {} });
 const subMsg = (agentId: string, content: string) => ({ type: "assistant.message", agentId, data: { content } });
 
-test("extractRunCopilot pulls request, output, and tool sequence from the current turn", () => {
+test("extractRunCopilot pulls request, output, and tool sequence for the cycle", () => {
   const p = events([
     userMsg("write me a haiku"),
     toolStart("cairn-brain_search"),
@@ -124,20 +124,47 @@ test("extractRunCopilot pulls request, output, and tool sequence from the curren
   const run = extractRunCopilot(p);
   expect(run?.request).toBe("write me a haiku");
   expect(run?.output).toContain("haiku about spring");
-  expect(run?.transcript).toContain("[tool] cairn-brain_search");
+  expect(run?.transcript).toContain("[tool] cairn-brain_search"); // tool calls captured in the RUN PROCESS section
 });
 
-test("extractRunCopilot scopes to the LAST user turn, ignoring an earlier task", () => {
+test("extractRunCopilot scopes the DETAIL to the current cycle (since the last skill_review)", () => {
   const p = events([
     userMsg("first task"),
     asstMsg("first answer"),
+    { type: "tool.execution_start", data: { toolName: "cairn-skill_review", arguments: '{"label":"a"}' } }, // cycle 1 closed
     userMsg("second task"),
     asstMsg("second answer"),
+    { type: "tool.execution_start", data: { toolName: "cairn-skill_review", arguments: '{"label":"b"}' } }, // cycle 2 = current
   ]);
   const run = extractRunCopilot(p);
-  expect(run?.request).toBe("second task");
+  expect(run?.request).toBe("second task");                 // request is the CURRENT cycle only
   expect(run?.output).toBe("second answer");
-  expect(run?.output).not.toContain("first answer");
+  expect(run?.transcript).not.toContain("[user] first task"); // earlier cycle's DETAIL is excluded
+  expect(run?.transcript).toContain("first task");            // but it still appears in the session-user-messages context
+  expect(run?.transcript).toContain("ALL USER MESSAGES THIS SESSION");
+});
+
+test("extractRunCopilot lists the skills loaded this cycle, with their hint", () => {
+  const p = events([
+    userMsg("fix this PR description"),
+    { type: "tool.execution_start", data: { toolName: "cairn-skill_search", arguments: '{"task":"pr description"}' } },
+    { type: "tool.execution_start", data: { toolName: "cairn-skill_create", arguments: '{"label":"pr description"}' } },
+    asstMsg("Rewrote the description."),
+  ]);
+  const run = extractRunCopilot(p);
+  expect(run?.transcript).toContain("SKILLS LOADED THIS CYCLE");
+  expect(run?.transcript).toContain('skill_search "pr description"');
+  expect(run?.transcript).toContain('skill_create "pr description"');
+});
+
+test("extractRunCopilot timestamps the session user messages and the cycle process", () => {
+  const ts = Date.UTC(2026, 6, 1, 14, 3, 9);
+  const p = events([
+    { type: "user.message", timestamp: ts, data: { content: "write me a haiku" } },
+    { type: "assistant.message", timestamp: ts + 60000, data: { content: "first frost on the gate" } },
+  ]);
+  const run = extractRunCopilot(p);
+  expect(run?.transcript).toContain("[14:03:09]"); // HH:MM:SS from the events.jsonl timestamp field
 });
 
 test("extractRunCopilot returns null when there is no deliverable", () => {

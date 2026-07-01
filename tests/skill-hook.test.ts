@@ -14,36 +14,40 @@ beforeEach(() => {
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created */ }
 });
 
-test("extractRun scopes to the CURRENT turn, not the whole session", () => {
+test("extractRun scopes the DETAIL to the current cycle (since the last skill_review)", () => {
   const p = join(tmpdir(), `cairn-tx-${process.pid}.jsonl`);
   writeFileSync(p, [
     JSON.stringify({ type: "user", message: { content: "write me a haiku about frost" } }),
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "first frost on the gate" }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "skill_review", input: { label: "haiku" } }] } }), // cycle 1 closed
     JSON.stringify({ type: "user", message: { content: "make it sharper" } }),
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "the whole field holds still" }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "skill_review", input: { label: "haiku" } }] } }), // cycle 2 = current
   ].join("\n"));
   const run = extractRun(p);
   rmSync(p, { force: true });
-  expect(run!.request).toBe("make it sharper");                       // latest turn's prompt, not the first
+  expect(run!.request).toBe("make it sharper");                       // the CURRENT cycle's prompt
   expect(run!.output).toBe("the whole field holds still");
   expect(run!.transcript).toContain("[user] make it sharper");
-  expect(run!.transcript).not.toContain("write me a haiku about frost"); // earlier turn excluded
+  expect(run!.transcript).not.toContain("[user] write me a haiku about frost"); // earlier cycle's DETAIL excluded
+  expect(run!.transcript).toContain("ALL USER MESSAGES THIS SESSION");
+  expect(run!.transcript).toContain("write me a haiku about frost"); // ...but present in the session-user context
 });
 
-test("extractRun excludes an earlier unrelated task (poem before haiku)", () => {
+test("extractRun lists the skills loaded this cycle and every session user message", () => {
   const p = join(tmpdir(), `cairn-tx2-${process.pid}.jsonl`);
   writeFileSync(p, [
-    JSON.stringify({ type: "user", message: { content: "write a poem" } }),
-    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "ROSES_ARE_RED_POEM" }] } }),
-    JSON.stringify({ type: "user", message: { content: "write a haiku" } }),
-    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "SEVENTEEN_SYLLABLE_HAIKU" }] } }),
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T09:30:00.000Z", message: { content: "fix this PR description" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_search", input: { task: "pr description" } }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_create", input: { label: "pr description" } }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Rewrote the description." }] } }),
   ].join("\n"));
   const run = extractRun(p);
   rmSync(p, { force: true });
-  expect(run!.request).toBe("write a haiku");
-  expect(run!.output).toBe("SEVENTEEN_SYLLABLE_HAIKU");
-  expect(run!.transcript).not.toContain("poem");                    // the poem task is not reviewed
-  expect(run!.transcript).not.toContain("ROSES_ARE_RED_POEM");
+  expect(run!.transcript).toContain("SKILLS LOADED THIS CYCLE");
+  expect(run!.transcript).toContain('skill_search "pr description"');
+  expect(run!.transcript).toContain('skill_create "pr description"');
+  expect(run!.transcript).toContain("[09:30:00] fix this PR description"); // session user message, timestamped
 });
 
 test("extractRun batches successive user messages sent before a reply", () => {

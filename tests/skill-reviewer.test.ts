@@ -1,28 +1,10 @@
 import { test, expect, beforeEach } from "bun:test";
-import { readSegment, fromCapture } from "../src/skill/reviewer";
+import { fromCapture } from "../src/skill/reviewer";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
   try { db().run("DELETE FROM skills"); } catch { /* not created yet */ }
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created yet */ }
-});
-
-test("readSegment reads the structured skill_segment capture into clean rows", () => {
-  const out = readSegment('{"deliverables":[{"label":"short story","what":"the lighthouse story"},{"label":"short story review","what":"the critique"}]}');
-  expect(out).toEqual([
-    { label: "short story", what: "the lighthouse story" },
-    { label: "short story review", what: "the critique" },
-  ]);
-});
-
-test("readSegment also accepts a bare array (not wrapped in {deliverables})", () => {
-  expect(readSegment('[{"label":"haiku","what":"the frost haiku"}]')).toEqual([{ label: "haiku", what: "the frost haiku" }]);
-});
-
-test("readSegment returns [] for a submitted non-task and null when nothing was submitted", () => {
-  expect(readSegment('{"deliverables":[]}')).toEqual([]); // the segmenter submitted an empty list
-  expect(readSegment(null)).toBeNull();                   // the tool was never called
-  expect(readSegment("garbage, not json")).toBeNull();
 });
 
 test("fromCapture accepts a complete labeled submission, splitting master from explanation", () => {

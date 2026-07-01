@@ -154,7 +154,7 @@ test("the skill layer is OFF by default, ON via CAIRN_SKILLS=1 (or the config fl
   expect(skillsEnabled()).toBe(true);                       // explicit opt-in
   process.env.CAIRN_SKILLS = "0";
   expect(skillsEnabled()).toBe(false);                      // explicit opt-out
-  expect(() => skillLearn("/some/path.jsonl")).not.toThrow(); // disabled -> no-op, never throws
+  expect(() => skillLearn("/some/path.jsonl", "haiku")).not.toThrow(); // disabled -> no-op, never throws
   if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
 });
 

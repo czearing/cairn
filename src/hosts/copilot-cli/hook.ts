@@ -155,18 +155,18 @@ function parsePayload(raw: string): Payload {
   }
 }
 
-// Fire the background skill learner over a finished turn's transcript, best-effort. Tags the spawned worker
-// with CAIRN_LEARN_BACKEND=copilot so it parses Copilot's events.jsonl and grades via `copilot -p`. Returns
-// true only when a worker was actually spawned (skills on, transcript present, under the concurrency cap), so
-// callers can dedupe (the explicit skill_review path vs the agentStop fallback). Never throws or blocks.
-async function fireLearner(transcriptPath: string): Promise<boolean> {
-  if (!transcriptPath) return false;
+// Fire the background skill learner over a finished turn's transcript for the agent-DECLARED skill `label`,
+// best-effort. Tags the worker with CAIRN_LEARN_BACKEND=copilot so it parses Copilot's events.jsonl and grades
+// via `copilot -p`. Returns true only when a worker was actually spawned (skills on, transcript+label present,
+// under the concurrency cap). Never throws or blocks.
+async function fireLearner(transcriptPath: string, label: string, focus = ""): Promise<boolean> {
+  if (!transcriptPath || !label.trim()) return false;
   try {
     const { skillsEnabled } = await import("../../core/config");
     if (!skillsEnabled()) return false;
     process.env.CAIRN_LEARN_BACKEND = "copilot"; // the worker inherits this and picks the Copilot path
     const { learnFromTranscript } = await import("../../skill/learn");
-    return learnFromTranscript(transcriptPath);
+    return learnFromTranscript(transcriptPath, label, focus);
   } catch {
     return false; // skills are best-effort
   }
@@ -263,15 +263,19 @@ async function main(): Promise<void> {
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const st = readTurn(sessionId);
     if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) st.brainUsed = true;
-    // skill_search means the agent pulled a skill's steps: the turn now OWES a skill_review, enforced at agentStop.
-    if (isTool(toolName, "skill_search")) st.skillUsed = true;
+    // skill_search / skill_create mean the agent is doing skill work: the turn now OWES a skill_review, which
+    // the agentStop gate enforces.
+    if (isTool(toolName, "skill_search") || isTool(toolName, "skill_create")) st.skillUsed = true;
 
-    // The agent explicitly signalled a finished deliverable. Review the WHOLE turn log NOW (it already holds
-    // any subagent's output, which a turn-end fire could miss when the work was backgrounded). Fire once per
-    // turn; mark reviewed so agentStop does not learn the same turn again. If the fire was skipped (concurrency
-    // cap), leave reviewed false so agentStop can still retry at turn end.
-    if (isTool(toolName, "skill_review") && !st.reviewed) {
-      if (await fireLearner(eventsPathForSession(sessionId))) st.reviewed = true;
+    // The agent DECLARED a finished deliverable for skill `label`. Review the WHOLE turn log NOW (it already
+    // holds any subagent's output, which a turn-end fire could miss when the work was backgrounded). Each
+    // skill_review fires its own learner (a turn with two deliverables = two calls, two labels); mark reviewed
+    // so agentStop does not nag, and skillUsed so the gate is satisfied.
+    if (isTool(toolName, "skill_review")) {
+      const label = typeof args.label === "string" ? args.label : "";
+      const what = typeof args.what === "string" ? args.what : "";
+      st.skillUsed = true;
+      if (await fireLearner(eventsPathForSession(sessionId), label, what)) st.reviewed = true;
     }
 
     const answer = typeof args.answer === "string" ? args.answer : "";
@@ -284,24 +288,18 @@ async function main(): Promise<void> {
   }
 
   if (mode === "agent-stop") {
-    // The learner must run ONCE per logical turn, at the turn's TRUE end. agentStop can fire several times for
-    // one turn (each forced-continuation block ends in another agentStop), so we only learn on the agentStop
-    // that ALLOWS (no block) — otherwise we'd grade an unfinished turn and create duplicate runs.
-    if (process.env.CAIRN_COPILOT_NO_STOP) {
-      const st = readTurn(sessionId);
-      if (!st.reviewed) await fireLearner(transcriptPath);
-      return void emit({});
-    }
+    // Learning is now AGENT-DRIVEN: skill_review fires the learner mid-turn with the declared label. agentStop
+    // no longer auto-learns (there is no label to grade against here) — it only NAGS: brain unused, or a skill
+    // was used but the deliverable was not submitted via skill_review. Bounded to STOP_CAP nudges/turn.
+    if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
     const st = readTurn(sessionId);
     const { file } = stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, reviewed: st.reviewed, stopNudges: st.stopNudges });
     const text = file ? await promptText(file) : "";
     if (text) {
       writeTurn(sessionId, { ...st, stopNudges: st.stopNudges + 1 });
-      emit({ decision: "block", reason: text }); // turn not done yet — don't learn an unfinished turn
+      emit({ decision: "block", reason: text }); // nudge the agent to review before ending
       return;
     }
-    // Fallback auto-learn ONLY when the agent did not already close a deliverable with skill_review this turn.
-    if (!st.reviewed) await fireLearner(transcriptPath);
     emit({});
     return;
   }

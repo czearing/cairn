@@ -55,29 +55,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  // A subagent (Task tool) finished. SubagentStop is a PARENT-session event: its `transcript_path` is the main
-  // session file, while the subagent's OWN transcript (its <session>/subagents/agent-*.jsonl, holding the Task
-  // prompt and the subagent's reply) is under `agent_transcript_path`. We must learn over the latter, or we'd
-  // re-learn the parent's last turn. Run ONLY the skill learner here, so a real sub-task (e.g. a short-story
-  // reviewer the master spawned) is learned as its own skill, in parallel with the parent's Stop. We
-  // deliberately skip the brain split-leaves audit and prompt injection: those govern the MAIN agent's
-  // reasoning, not a tool subagent, and a Stop-shaped nudge back into a finished subagent would be wrong.
-  if (hookName === "SubagentStop") {
-    const p = payload as { agent_transcript_path?: string; transcript_path?: string };
-    const tp = p.agent_transcript_path ?? p.transcript_path;
-    // Diagnostic: log every subagent stop (path + payload keys) so the reviewer-learning path is observable.
-    // Default-on, one tiny append per stop; set CAIRN_SUBAGENT_DEBUG=0 to silence.
-    if (process.env.CAIRN_SUBAGENT_DEBUG !== "0") {
-      try { (await import("node:fs")).appendFileSync((await import("node:path")).join((await import("node:os")).homedir(), ".cairn", "subagent-stops.log"), `${new Date().toISOString()} ${JSON.stringify({ keys: Object.keys(payload as object), transcript_path: tp })}\n`); } catch { /* best-effort */ }
-    }
-    try {
-      if ((await import("../../core/config")).skillsEnabled()) {
-        const { skillLearn } = await import("../../skill/hook");
-        skillLearn(tp);
-      }
-    } catch { /* skills are best-effort */ }
-    return;
-  }
+  // A subagent (Task tool) finished. SubagentStop is a PARENT-session event. Learning is now agent-driven (the
+  // agent calls skill_review after the subagent returns), so we do NOT auto-learn here — we only skip the
+  // Stop-shaped nudge that would otherwise fire back into a finished subagent.
+  if (hookName === "SubagentStop") return;
 
   const event = await normalizeClaudeCode(payload);
   if (!event) return;
@@ -137,9 +118,15 @@ async function main(): Promise<void> {
   if ((await import("../../core/config")).skillsEnabled()) {
     try {
       const { skillInject, skillLearn, skillsExist } = await import("../../skill/hook");
-      const { resetSkillTurn, noteSkillSearched, claimSkillReminder, isActionTool, isSkillSearch } = await import("../../skill/turngate");
+      const { resetSkillTurn, noteSkillSearched, claimSkillReminder, isActionTool, isSkillSearch, isSkillReview } = await import("../../skill/turngate");
       if (event.kind === "user_message") { resetSkillTurn(session); await skillInject(event.text, session); }
-      else if (event.kind === "turn_finished") { resetSkillTurn(session); skillLearn((payload as { transcript_path?: string }).transcript_path); }
+      else if (event.kind === "turn_finished") { resetSkillTurn(session); } // learning is agent-driven (skill_review), not auto at turn end
+      else if (event.kind === "tool_completed" && isSkillReview(event.tool)) {
+        // The agent declared a finished deliverable for a skill: learn over this turn's transcript, graded against that label.
+        const label = typeof event.input.label === "string" ? event.input.label : "";
+        const focus = typeof event.input.what === "string" ? event.input.what : "";
+        skillLearn((payload as { transcript_path?: string }).transcript_path, label, focus);
+      }
       else if (event.kind === "tool_completed" && isSkillSearch(event.tool)) noteSkillSearched(session);
       else if (event.kind === "tool_pending" && isActionTool(event.tool) && skillsExist() && claimSkillReminder(session)) {
         out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;

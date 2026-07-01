@@ -4,7 +4,6 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { skillsEnabled } from "../core/config";
 import { retrieveSkills, condenseMessages, retrieveDiagnostic } from "./retrieve";
 import { learnFromTranscript } from "./learn";
-import { registerInflight } from "./coordinate";
 import { skillCatalog, skillVectors } from "./store";
 
 // Entry points the Claude Code dispatch calls. The skill feature is OFF by default (a fresh install never
@@ -29,22 +28,14 @@ function writeInjectionDebug(text: string, matches: { skill: { task: string }; s
   } catch { /* best-effort */ }
 }
 
-// On a user message: return the curated-steps injection for the matching skill(s), or "" (disabled, no
-// match, or any error). The dispatch appends this to the brain's injected context. When a sessionId is given,
-// also REGISTER each matched skill as in-flight for that session (a file write, safe from the read-only hook),
-// so the post-turn coordinator knows which windows are refining the same skill before they finish.
-export async function skillInject(text: string, sessionId?: string): Promise<string> {
-  // Auto-injection of a single cosine-matched master is DISABLED. Cosine mispicks near-duplicate skills (a
-  // story-WRITING prompt scored the reviewer's skill 0.568 vs the writer's 0.536 and injected the wrong steps).
-  // The agent now retrieves skills itself with the skill_search tool (instructed in the base prompt, enforced
-  // by a one-shot reminder), so it disambiguates with full context. We still run the cheap match here ONLY to
-  // register the in-flight skill for the post-turn coordinator and to record a diagnostic. Always returns ""
-  // (nothing is appended to the agent's context).
+// On a user message: run the cheap skill match ONLY to record a diagnostic (what would have matched and why).
+// Auto-injection of a master is disabled — the agent retrieves skills itself via skill_search — so this always
+// returns "" (nothing is appended to the agent's context). Best-effort; never throws.
+export async function skillInject(text: string, _sessionId?: string): Promise<string> {
   if (!skillsEnabled() || !text.trim()) return "";
   try {
     const query = condenseMessages([text]);
     const matches = await retrieveSkills(query);
-    if (sessionId && matches[0]) registerInflight(sessionId, matches[0].skill.task, Date.now());
     let why = "";
     if (!matches.length && process.env.CAIRN_SKILL_DEBUG !== "0") {
       const d = await retrieveDiagnostic(query);
@@ -70,6 +61,18 @@ export async function skillSearch(query: string): Promise<{ matches: { task: str
   } catch { return { matches: [], catalog: [] }; }
 }
 
+// Agent-facing skill creation (the skill_create MCP tool). Mints a new skill for `label` when skill_search
+// found nothing that fits, so the agent can then iterate it with skill_review. Idempotent: an existing label
+// is returned as created:false. No-op-safe (returns created:false) when the skill layer is off.
+export async function skillCreate(label: string): Promise<{ created: boolean; label: string }> {
+  if (!skillsEnabled() || !label.trim()) return { created: false, label: label.trim() };
+  try {
+    const { categorize } = await import("./match");
+    const { skill, created } = await categorize(label, Date.now());
+    return { created, label: skill.task };
+  } catch { return { created: false, label: label.trim() }; }
+}
+
 // True only when the skill layer is on AND at least one skill exists, so the search-first reminder never fires
 // on a fresh/empty store (there would be nothing to find).
 export function skillsExist(): boolean {
@@ -77,14 +80,12 @@ export function skillsExist(): boolean {
   try { return skillVectors().length > 0; } catch { return false; }
 }
 
-// On turn end, INCLUDING a subagent's stop: fire the background learner over that turn's transcript. A
-// subagent that did a real sub-task (e.g. the short-story reviewer the master spawns) has its OWN transcript
-// and produces a DISTINCT deliverable, so it is learned as its own skill in parallel with the parent's turn.
-// The learner classifies each by its deliverable, so the writer's turn forms "short story" and the reviewer's
-// forms "short story review" with no special-casing. Returns whether it fired.
-export function skillLearn(transcriptPath: string | undefined): boolean {
-  if (!skillsEnabled() || !transcriptPath) return false;
-  try { learnFromTranscript(transcriptPath); return true; } catch { return false; }
+// Fire the background learner over a finished turn's transcript, for the skill the agent DECLARED via
+// skill_review. `label` is that skill (a new label auto-creates it); `focus` optionally names which
+// deliverable to grade when the turn made more than one. Returns whether it fired.
+export function skillLearn(transcriptPath: string | undefined, label: string, focus = ""): boolean {
+  if (!skillsEnabled() || !transcriptPath || !label.trim()) return false;
+  try { return learnFromTranscript(transcriptPath, label, focus); } catch { return false; }
 }
 
 // For brain_search to piggyback: the matching skills as a small structured blob (capped), or [] when

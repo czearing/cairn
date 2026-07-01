@@ -1,2 +1,1 @@
-You used a skill this turn but are ending without calling skill_review. Call it now — after any subagent has returned — so the finished result is graded and the skill improves. Skip only if there was no real deliverable.
-
+You used a skill this turn but are ending without calling skill_review. Once you are finished with your task you must call it with the skill's label so the finished result is graded and the skill improves. Skip only if there was no deliverable or it is still being worked on.

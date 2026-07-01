@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { runLearner } from "./runner";
 import { cairnMcpConfigPath } from "./cairn-mcp";
-import { LEARN_SYSTEM, learnUserPrompt, CLASSIFY_SYSTEM, classifyUserPrompt } from "./prompts";
+import { LEARN_SYSTEM, learnUserPrompt } from "./prompts";
 import type { Review, SkillRun } from "./types";
 
 // The learner: ONE cairn-connected Claude that, in a single call, ASSIGNS the task's reusable label,
@@ -40,54 +40,6 @@ export function fromCapture(raw: string | null | undefined, forcedLabel?: string
   return { label, review, master, explanation };
 }
 
-// Pure: read the deliverables list the segmenter submitted via the skill_segment tool (captured as clean
-// JSON to CAIRN_SKILL_SEGMENT_PATH). Returns null when there is no submission to read (the tool was never
-// called) so segmentRun can tell "non-task" (an empty list WAS submitted) from "failed" (nothing submitted).
-// The tool already trims/lowercases/clips/dedups, so this just validates the shape.
-export interface Deliverable { label: string; what: string }
-export function readSegment(raw: string | null | undefined): Deliverable[] | null {
-  if (!raw) return null;
-  let o: unknown;
-  try { o = JSON.parse(raw); } catch { return null; }
-  const arr = Array.isArray(o) ? o : (o && typeof o === "object" && Array.isArray((o as { deliverables?: unknown }).deliverables) ? (o as { deliverables: unknown[] }).deliverables : null);
-  if (!arr) return null;
-  const out: Deliverable[] = [];
-  const seen = new Set<string>();
-  for (const it of arr) {
-    const d = (it ?? {}) as { label?: unknown; what?: unknown };
-    const label = typeof d.label === "string" ? d.label.trim().slice(0, 60).toLowerCase() : "";
-    if (!label || seen.has(label)) continue;
-    seen.add(label);
-    out.push({ label, what: typeof d.what === "string" ? d.what.trim().slice(0, 200) : "" });
-  }
-  return out;
-}
-
-/** STAGE 1 of the loop: the reviewing agent reads the finished turn and SUBMITS each distinct deliverable it
- *  produced with its reusable label via the skill_segment tool — UNANCHORED (no skill master/priors, and only
- *  the skill_segment tool, never brain_search), so it can never be biased into mislabeling a review of a story
- *  as "short story" (the anchoring failure proven 2026-06-29). A turn that writes a story AND reviews it
- *  submits two deliverables; most submit one; a non-task submits an empty list. We read the STRUCTURED tool
- *  capture (CAIRN_SKILL_SEGMENT_PATH) instead of regex-parsing free text. Never throws. */
-export interface SegmentResult { deliverables: Deliverable[]; failed: boolean; error?: string }
-export async function segmentRun(request: string, output: string, transcript: string, existing: string[], timeoutMs?: number): Promise<SegmentResult> {
-  const outPath = join(tmpdir(), `cairn-segment-${randomUUID()}.json`);
-  const r = await runLearner(classifyUserPrompt(request, output, transcript, existing), {
-    system: CLASSIFY_SYSTEM,
-    mcpConfigPath: cairnMcpConfigPath(),
-    allowedTools: ["mcp__cairn__skill_segment"], // ONLY segment: no brain_search, so it stays unanchored
-    env: { CAIRN_SKILL_SEGMENT_PATH: outPath },
-    timeoutMs: timeoutMs ?? 90_000,
-    model: process.env.CAIRN_CLASSIFY_MODEL || process.env.CAIRN_LEARN_MODEL || undefined,
-  });
-  let captured: Deliverable[] | null = null;
-  try { if (existsSync(outPath)) captured = readSegment(readFileSync(outPath, "utf8")); } catch { /* handled below */ }
-  try { if (existsSync(outPath)) rmSync(outPath); } catch { /* ignore */ }
-  if (captured) return { deliverables: captured, failed: false };  // the segmenter submitted (possibly empty = non-task)
-  const reason = r.ok ? "the segmenter finished without submitting skill_segment" : (r.error || "segment call failed");
-  return { deliverables: [], failed: true, error: reason };
-}
-
 /** In one cairn-connected call, the learner reasons out loud to assign the label for `request`, grade
  *  `output` (with the raw run `transcript` as process context), and rewrite the master, then submits the
  *  result via the skill_output tool. We read that structured submission (captured to a temp file via
@@ -119,18 +71,4 @@ export async function reviewAndLearn(request: string, output: string, transcript
   // the claude call errored, or it finished without ever calling skill_output with complete data.
   const reason = r.ok ? "the learner finished without submitting a valid skill_output" : (r.error || "claude call failed");
   return { label: null, review: null, master: null, explanation: null, failed: true, error: reason };
-}
-
-/** Review SEVERAL concurrent attempts at the same task in ONE call and update the master from all of them (the
- *  coalesce path). One run delegates to reviewAndLearn; many are folded into one learner call whose output
- *  field carries every attempt, so the rewritten master reflects what the learner sees across the whole set. */
-export async function reviewAndLearnMany(request: string, runs: { output: string; transcript: string }[], existing: string[], priors: SkillRun[], priorMaster = "", priorExplanation = "", timeoutMs?: number, forcedLabel?: string, focus = ""): Promise<LearnResult> {
-  if (runs.length <= 1) {
-    const r = runs[0];
-    return reviewAndLearn(request, r?.output ?? "", r?.transcript ?? "", existing, priors, priorMaster, priorExplanation, timeoutMs, forcedLabel, focus);
-  }
-  const output = runs.map((r, i) => `=== Attempt ${i + 1} ===\n${r.output}`).join("\n\n");
-  const transcript = runs.map((r, i) => `=== Attempt ${i + 1} ===\n${r.transcript}`).join("\n\n");
-  const req = `${request}\n\n(These are ${runs.length} concurrent attempts at this same task from different sessions. Grade them together and update the master so it fixes what you see across all of them.)`;
-  return reviewAndLearn(req, output, transcript, existing, priors, priorMaster, priorExplanation, timeoutMs, forcedLabel, focus);
 }

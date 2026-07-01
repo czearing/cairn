@@ -21,13 +21,14 @@ afterEach(() => {
 test("learnFromTranscript skips (returns false) when the concurrency cap is already reached", () => {
   writeFileSync(join(DIR, "a.lock"), "1");
   writeFileSync(join(DIR, "b.lock"), "1"); // 2 active learners, cap is 2
-  expect(learnFromTranscript(join(tmpdir(), "nope.jsonl"))).toBe(false); // over cap -> no spawn
+  expect(learnFromTranscript(join(tmpdir(), "nope.jsonl"), "haiku")).toBe(false); // over cap -> no spawn
 });
 
-test("learnFromTranscript is a no-op inside a worker, and with no transcript path", () => {
+test("learnFromTranscript is a no-op inside a worker, with no transcript path, and with no label", () => {
   const prev = process.env.CAIRN_SKILL_WORKER;
   process.env.CAIRN_SKILL_WORKER = "1";
-  expect(learnFromTranscript(join(tmpdir(), "x.jsonl"))).toBe(false); // worker loop guard
+  expect(learnFromTranscript(join(tmpdir(), "x.jsonl"), "haiku")).toBe(false); // worker loop guard
   if (prev === undefined) delete process.env.CAIRN_SKILL_WORKER; else process.env.CAIRN_SKILL_WORKER = prev;
-  expect(learnFromTranscript("")).toBe(false);                         // nothing to learn
+  expect(learnFromTranscript("", "haiku")).toBe(false);                // nothing to learn
+  expect(learnFromTranscript(join(tmpdir(), "x.jsonl"), "")).toBe(false); // no declared skill -> nothing to grade
 });

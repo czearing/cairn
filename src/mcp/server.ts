@@ -117,6 +117,21 @@ server.tool(
   }
 );
 
+// Agent-facing skill creation. When skill_search turns up nothing that fits (or nothing SPECIFIC enough), the
+// agent mints a new skill with this tool, does the work, then iterates it with skill_review. Creating up front
+// makes the new skill discoverable to other sessions immediately; skill_review would also auto-create, so this
+// is the explicit "none of the existing skills fit, this is its own thing" declaration.
+server.tool(
+  "skill_create",
+  "Create a NEW skill when skill_search returned nothing that fits your task, or nothing specific enough. Give it a short reusable label (1-4 lowercase words) naming the KIND of task by what it produces (e.g. 'short story', 'pr review', 'flaky test debug'). Then do the work and call skill_review with the SAME label so the first version is graded and its master is written.",
+  { label: z.string().describe("A short reusable label (1-4 lowercase words) naming the task by what it produces.") },
+  async ({ label }) => {
+    if (!label.trim()) return fail("label is required");
+    const { skillCreate } = await import("../skill/hook");
+    return json(await skillCreate(label));
+  }
+);
+
 // The LEARNER's submission tool. The learner reasons out loud to judge the run (reasoning makes it sharper
 // and is never suppressed), then hands its finished review here as structured fields. The skill loop reads
 // that JSON (via CAIRN_SKILL_OUTPUT_PATH) instead of parsing the master back out of free text. No-op
@@ -154,60 +169,26 @@ server.tool(
   }
 );
 
-// The SEGMENTER's submission tool (STAGE 1 of the skill loop). The segmenter reads ONE finished turn and
-// lists each distinct reusable deliverable it produced — UNANCHORED (it gets no skill master or priors, and
-// only this one tool), so it can never be biased into mislabeling a review of X as X. It submits the list
-// here as structured rows instead of printing a JSON array we'd have to regex back out of free text; the
-// loop reads that JSON via CAIRN_SKILL_SEGMENT_PATH. A non-task submits an empty list. No-op when no path.
-server.tool(
-  "skill_segment",
-  "Submit the list of distinct reusable DELIVERABLES this turn produced, ONCE, as the last action after reasoning out loud. Each row is a {label, what}. Pass an EMPTY list for a turn that produced no reusable deliverable (chit-chat, bookkeeping, a correction). A turn that writes a story AND reviews it submits TWO rows.",
-  {
-    deliverables: z
-      .array(
-        z.object({
-          label: z.string().describe("The reusable task label in 1-4 lowercase words, by WHAT was produced (a review of a story is 'short story review', never 'short story')."),
-          what: z.string().describe("One short phrase naming THIS specific deliverable so a grader can find it in the turn (e.g. 'the story about the lighthouse keeper')."),
-        })
-      )
-      .describe("Every distinct reusable deliverable in the turn. Empty for a non-task."),
-  },
-  async ({ deliverables }) => {
-    // Deterministic normalization only (trim/lowercase/clip/dedup) — never a content judgment: the model
-    // decided WHAT the deliverables are; this just canonicalizes the rows and drops exact-label duplicates so
-    // one turn never makes two runs of the same skill.
-    const out: { label: string; what: string }[] = [];
-    const seen = new Set<string>();
-    for (const it of deliverables) {
-      const label = (it.label ?? "").trim().slice(0, 60).toLowerCase();
-      if (!label || seen.has(label)) continue;
-      seen.add(label);
-      out.push({ label, what: (it.what ?? "").trim().slice(0, 200) });
-    }
-    const p = process.env.CAIRN_SKILL_SEGMENT_PATH;
-    if (p) { try { writeFileSync(p, JSON.stringify({ deliverables: out })); } catch { /* capture is best-effort */ } }
-    return json({ ok: true, count: out.length });
-  }
-);
+// The SEGMENTER's submission tool has been removed: the agent now declares the skill directly (skill_search /
+// skill_create + skill_review), so the reviewer never classifies a turn and no segmentation is needed.
 
-// The AGENT's explicit "this deliverable is finished, review it now" signal. The skill loop normally fires
-// automatically at turn end, but that mis-times work handed to a BACKGROUND subagent: the turn can end on a
-// "the reviewer is still running" status line before the real artifact exists, so the loop grades the status
-// line (the measured short-story 0.10 runs). This tool lets the agent close that gap: it calls skill_review
-// AFTER the finished work (its own or a subagent's) is actually in hand, and the host's postToolUse hook then
-// reviews the whole turn log — which by that point contains the subagent's output — instead of guessing at
-// turn end. The tool itself only acknowledges; the hook (which alone knows the session's transcript path)
-// does the firing, so this is a no-op when skills are off or run outside a hooked host.
+// The AGENT's "this deliverable is finished, review it as skill <label>" signal. The agent knows what it just
+// did — it reused a skill it found with skill_search, or minted one with skill_create — so it declares the
+// label here and the reviewer's only job is to grade this deliverable against that skill and iterate its
+// master. Calling it AFTER a subagent has returned means the finished artifact (not a "still running" status)
+// is what gets reviewed. The tool only acknowledges; the host's postToolUse hook reads the label and reviews
+// the whole turn log, so this is a no-op when skills are off or run outside a hooked host.
 server.tool(
   "skill_review",
-  "Call this the moment a REUSABLE deliverable is finished and in hand — a written piece, a shipped PR, a fixed bug, a completed analysis. If you delegated the work to a subagent, call it only AFTER that subagent has RETURNED its result, so the finished artifact (not a 'still running' status) is what gets reviewed. Call once per turn when there is a genuine deliverable; do NOT call for chit-chat, a question, a status update, or brain bookkeeping.",
+  "Call this when a REUSABLE deliverable is finished, to grade it and improve the skill it belongs to. Pass the `label` of that skill — the one you reused from skill_search, or created with skill_create (a new label auto-creates the skill). If you delegated the work, call it only AFTER the subagent has RETURNED. A turn that produced two deliverables (e.g. a story AND its review) is TWO calls, one per label. Do NOT call it for chit-chat, a question, or a status update.",
   {
-    what: z.string().optional().describe("A short phrase naming what you just finished (e.g. 'the short story about the clockmaker', 'PR #128 for the login button'). For your own intent; the reviewer re-derives the label independently."),
+    label: z.string().describe("The skill this deliverable belongs to (1-4 lowercase words), e.g. 'short story', 'pr review'. Reuse the label you got from skill_search/skill_create; a new label creates the skill."),
+    what: z.string().optional().describe("A short phrase naming this specific deliverable when the turn produced more than one, so the reviewer grades the right one (e.g. 'the review of the story', not the story)."),
   },
-  async ({ what }) => {
+  async ({ label, what }) => {
     // The transcript path lives with the host hook, not here, so this tool cannot fire the learner itself; it
-    // just acknowledges. The postToolUse hook sees this call and reviews the session's full turn log.
-    return json({ ok: true, queued: true, what: (what ?? "").trim().slice(0, 200) });
+    // just acknowledges. The postToolUse hook sees this call, reads the label, and reviews the turn log.
+    return json({ ok: true, queued: true, label: (label ?? "").trim().slice(0, 60), what: (what ?? "").trim().slice(0, 200) });
   }
 );
 

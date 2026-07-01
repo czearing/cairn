@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { processRun } from "../src/skill/pipeline";
+import { reviewDeclared } from "../src/skill/pipeline";
 import { skillByLabel, getSkill, topRuns } from "../src/skill/store";
 import { db } from "../src/core/db";
 
@@ -8,12 +8,11 @@ beforeEach(() => {
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created */ }
 });
 
-test("processRun wires segment -> learn (grade + master) -> categorize -> store", async () => {
-  const res = await processRun({ request: "write me a haiku about frost", transcript: "[user] frost\n[assistant] ok", output: "..." }, 1, {
-    segment: async () => ({ deliverables: [{ label: "haiku", what: "the frost haiku" }], failed: false }),
+test("reviewDeclared grades the agent-declared label -> learn -> categorize (auto-create) -> store", async () => {
+  const res = await reviewDeclared({ request: "write me a haiku about frost", transcript: "[user] frost\n[assistant] ok", output: "..." }, "haiku", "the frost haiku", 1, {
     learn: async () => ({ label: "haiku", review: { score: 0.8, right: "vivid", wrong: "flat ending", improve: "sharpen line 3", raw: "{}" }, master: "MASTER PROMPT V1", explanation: "RATIONALE V1" }),
   });
-  expect(res[0]).toMatchObject({ task: "haiku", score: 0.8, created: true });
+  expect(res).toMatchObject({ task: "haiku", score: 0.8, created: true }); // the skill was auto-created
   const skill = skillByLabel("haiku")!;
   expect(getSkill(skill.id)!.masterPrompt).toBe("MASTER PROMPT V1"); // instructions rewritten and stored
   expect(getSkill(skill.id)!.explanation).toBe("RATIONALE V1");      // reviewer-only rationale stored separately
@@ -23,60 +22,43 @@ test("processRun wires segment -> learn (grade + master) -> categorize -> store"
   expect(run.review).toContain("flat ending"); // verdict stored with the run
 });
 
-test("the SEGMENTER's label (not the learner's) routes to, and reuses, the right skill", async () => {
+test("the AGENT's declared label routes to, and reuses, the right skill", async () => {
   const haikuLearn = async () => ({ label: "haiku", review: { score: 0.7, right: "", wrong: "", improve: "", raw: "" }, master: null, explanation: null });
-  const haikuSeg = async () => ({ deliverables: [{ label: "haiku", what: "" }], failed: false });
-  await processRun({ request: "a haiku", transcript: "x", output: "y" }, 1, { segment: haikuSeg, learn: haikuLearn });
-  await processRun({ request: "a poem", transcript: "x", output: "y" }, 2, { segment: async () => ({ deliverables: [{ label: "poem", what: "" }], failed: false }), learn: async () => ({ label: "poem", review: { score: 0.6, right: "", wrong: "", improve: "", raw: "" }, master: null, explanation: null }) });
-  await processRun({ request: "another haiku", transcript: "x", output: "y" }, 3, { segment: haikuSeg, learn: haikuLearn });
+  await reviewDeclared({ request: "a haiku", transcript: "x", output: "y" }, "haiku", "", 1, { learn: haikuLearn });
+  await reviewDeclared({ request: "a poem", transcript: "x", output: "y" }, "poem", "", 2, { learn: async () => ({ label: "poem", review: { score: 0.6, right: "", wrong: "", improve: "", raw: "" }, master: null, explanation: null }) });
+  await reviewDeclared({ request: "another haiku", transcript: "x", output: "y" }, "haiku", "", 3, { learn: haikuLearn });
   expect(skillByLabel("haiku")!.id).not.toBe(skillByLabel("poem")!.id); // distinct labels -> distinct skills
   expect(topRuns(skillByLabel("haiku")!.id).length).toBe(2);           // same label reused, no duplicate skill
 });
 
-test("a story turn that also reviews itself yields a short story AND a short story review run", async () => {
+test("a story turn and its review are TWO skill_review calls, landing under two skills", async () => {
+  // The agent declares each deliverable separately (one skill_review per label); the reviewer never segments.
   const focuses: string[] = [];
-  const res = await processRun({ request: "write a short story", transcript: "t", output: "the story then a critique of it" }, 1, {
-    // The reviewing agent segments the one turn into its TWO distinct deliverables.
-    segment: async () => ({ deliverables: [{ label: "short story", what: "the story about the lighthouse" }, { label: "short story review", what: "the reviewer subagent's critique" }], failed: false }),
-    learn: async (_req, _out, _tx, _ex, _pr, _pm, _pe, forcedLabel, focus) => {
-      focuses.push(focus);
-      return { label: forcedLabel, review: { score: forcedLabel === "short story" ? 0.8 : 0.6, right: "", wrong: "", improve: "", raw: "" }, master: `${forcedLabel} MASTER`, explanation: "e" };
-    },
-  });
-  expect(res.map((r) => r.task).sort()).toEqual(["short story", "short story review"]); // two separate skills
-  expect(skillByLabel("short story")).not.toBeNull();
-  expect(skillByLabel("short story review")).not.toBeNull();
+  const learn = async (_req: string, _out: string, _tx: string, _ex: string[], _pr: unknown, _pm: string, _pe: string, forcedLabel: string, focus: string) => {
+    focuses.push(focus);
+    return { label: forcedLabel, review: { score: forcedLabel === "short story" ? 0.8 : 0.6, right: "", wrong: "", improve: "", raw: "" }, master: `${forcedLabel} MASTER`, explanation: "e" };
+  };
+  const a = await reviewDeclared({ request: "write a short story", transcript: "t", output: "the story" }, "short story", "the story about the lighthouse", 1, { learn });
+  const b = await reviewDeclared({ request: "write a short story", transcript: "t", output: "the critique" }, "short story review", "the reviewer's critique", 1, { learn });
+  expect([a!.task, b!.task].sort()).toEqual(["short story", "short story review"]); // two separate skills
   expect(skillByLabel("short story")!.masterPrompt).toBe("short story MASTER");
   expect(skillByLabel("short story review")!.masterPrompt).toBe("short story review MASTER");
-  expect(focuses).toContain("the reviewer subagent's critique"); // focus names which deliverable to grade
+  expect(focuses).toContain("the reviewer's critique"); // focus names which deliverable to grade
 });
 
-test("processRun returns [] and never grades when the turn has no deliverable (non-task)", async () => {
+test("reviewDeclared returns null and stores nothing when there is no declared label", async () => {
   let learnCalled = false;
-  const res = await processRun({ request: "thanks, that's great!", transcript: "x", output: "y" }, 1, {
-    segment: async () => ({ deliverables: [], failed: false }), // non-task: empty list short-circuits before learn
+  const res = await reviewDeclared({ request: "thanks!", transcript: "x", output: "y" }, "", "", 1, {
     learn: async () => { learnCalled = true; return { label: null, review: null, master: null, explanation: null }; },
   });
-  expect(res).toEqual([]);
-  expect(learnCalled).toBe(false);                         // STAGE 2 is never reached for a non-task
-  expect(skillByLabel("thanks that s great")).toBeNull();
+  expect(res).toBeNull();
+  expect(learnCalled).toBe(false); // no label -> the learner is never called
 });
 
-test("the segmenter always decides the labels (the doer never declares one)", async () => {
-  let segCalled = false;
-  const res = await processRun({ request: "write about a lighthouse", transcript: "t", output: "a story" }, 1, {
-    segment: async () => { segCalled = true; return { deliverables: [{ label: "short story", what: "the story" }], failed: false }; },
-    learn: async () => ({ label: "short story", review: { score: 0.8, right: "", wrong: "", improve: "", raw: "" }, master: "STORY MASTER", explanation: "why" }),
+test("a failed learner call is recorded as failed, stores nothing", async () => {
+  const res = await reviewDeclared({ request: "real task", transcript: "x", output: "y" }, "some skill", "", 1, {
+    learn: async () => ({ label: null, review: null, master: null, explanation: null, failed: true, error: "claude call failed" }),
   });
-  expect(segCalled).toBe(true);                            // labeling is the loop's job, run every time
-  expect(res[0]!.task).toBe("short story");                // routed by the segmenter's label
-  expect(skillByLabel("short story")!.masterPrompt).toBe("STORY MASTER");
-});
-
-test("a failed segment call is recorded as failed, not a non-task", async () => {
-  const res = await processRun({ request: "real task", transcript: "x", output: "y" }, 1, {
-    segment: async () => ({ deliverables: [], failed: true, error: "claude call failed" }),
-    learn: async () => ({ label: "x", review: { score: 0.5, right: "", wrong: "", improve: "", raw: "" }, master: "m", explanation: "e" }),
-  });
-  expect(res).toEqual([]);                                  // nothing stored on a failed segment
+  expect(res).toBeNull();
+  expect(skillByLabel("some skill")).toBeNull(); // nothing stored on a failed learn
 });

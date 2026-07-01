@@ -77,7 +77,7 @@ export function capPrompt(prompt: string, budget = PROMPT_BUDGET): string {
 }
 
 // Pure: assemble the argv AFTER the prompt (the prompt is args[1]). `mcpConfigPath` is set only for a call
-// that needs the brain (the learn step); a classify call passes none and therefore gets no tools at all.
+// that needs the brain (the learn step); a call that passes none gets no tools at all (a tool-free call).
 // Exported for deterministic tests.
 export function buildArgs(opts: ClaudeOpts = {}, mcpConfigPath?: string): string[] {
   const args = ["-s", "--no-color", "--no-custom-instructions"]; // silent (response only), reproducible

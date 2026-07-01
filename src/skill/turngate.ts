@@ -31,6 +31,7 @@ const ACTION_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "Bas
 const baseName = (tool: string) => (tool.includes("__") ? tool.slice(tool.lastIndexOf("__") + 2) : tool);
 export function isActionTool(tool: string): boolean { return ACTION_TOOLS.has(baseName(tool)); }
 export function isSkillSearch(tool: string): boolean { return baseName(tool) === "skill_search"; }
+export function isSkillReview(tool: string): boolean { return baseName(tool) === "skill_review"; }
 
 // True (and arms the latch so it never returns true again this turn) only the first time the agent is about to
 // act without having searched its skills. Returns false once it has searched, or after the one reminder.

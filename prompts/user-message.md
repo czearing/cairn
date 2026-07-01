@@ -2,7 +2,7 @@ Run this on every task, including trivial/creative ones (yes, a haiku). Reason: 
 
 # Instructions
 ## Reuse learned skills
-Before acting, call `skill_search` for curated steps from past runs. If one fits, follow its steps; if several are close, pick the best; otherwise proceed.
+Before acting, call `skill_search` for curated steps from past runs. If one fits, follow its steps; if several are close, pick the best; otherwise proceed. When you finish the task, call `skill_review` so the result is graded and the skill improves.
 
 ## Read the Shared Brain First
 1. Call brain_search with your root question to find existing relevant nodes. For creative tasks DO NOT repeat existing outputs.

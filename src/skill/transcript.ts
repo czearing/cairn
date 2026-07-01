@@ -11,7 +11,7 @@ import { isSystemEnvelope } from "./noise";
 // ordered process of THIS cycle with timestamps and tool calls.
 
 interface Tool { name: string; hint: string }
-interface Parts { text: string; tools: Tool[] }
+interface Parts { text: string; thinking: string; tools: Tool[] }
 // Pull the reusable label/query hint from a skill tool's input, so the "skills loaded" list can name what was
 // searched/created/reviewed. Empty for non-skill tools.
 function toolHint(name: string, input: unknown): string {
@@ -21,21 +21,22 @@ function toolHint(name: string, input: unknown): string {
   return s(o.label) || s(o.task) || s(o.query) || s(o.what);
 }
 
-// Split one message's content into its visible text and the tools it invoked (name + skill hint), so the
-// learner sees the ACTION sequence without the noisy full tool inputs/outputs.
+// Split one message's content into the model's THINKING, its visible text, and the tools it invoked (name +
+// skill hint), so the learner sees how the agent reasoned and acted, not just the final line.
 function partsOf(content: unknown): Parts {
-  if (typeof content === "string") return { text: content.trim(), tools: [] };
-  if (!Array.isArray(content)) return { text: "", tools: [] };
-  const texts: string[] = [], tools: Tool[] = [];
+  if (typeof content === "string") return { text: content.trim(), thinking: "", tools: [] };
+  if (!Array.isArray(content)) return { text: "", thinking: "", tools: [] };
+  const texts: string[] = [], thinks: string[] = [], tools: Tool[] = [];
   for (const c of content) {
-    const o = c as { type?: string; text?: string; name?: string; input?: unknown };
+    const o = c as { type?: string; text?: string; thinking?: string; name?: string; input?: unknown };
     if (o?.type === "text" && typeof o.text === "string") texts.push(o.text);
+    else if (o?.type === "thinking" && typeof o.thinking === "string") thinks.push(o.thinking);
     else if (o?.type === "tool_use" && typeof o.name === "string") {
       const name = o.name.includes("__") ? o.name.slice(o.name.lastIndexOf("__") + 2) : o.name;
       tools.push({ name, hint: toolHint(name, o.input) });
     }
   }
-  return { text: texts.join(" ").trim(), tools };
+  return { text: texts.join(" ").trim(), thinking: thinks.join(" ").trim(), tools };
 }
 
 // A user-role message carrying a tool_result is Claude Code's representation of a tool's OUTPUT, not a human
@@ -50,7 +51,7 @@ function clock(ts: unknown): string { return typeof ts === "string" && ts.length
 const isSkillTool = (name: string): boolean => /skill_(search|create|review)/.test(name);
 const isReviewTool = (name: string): boolean => name === "skill_review" || name.endsWith("skill_review");
 
-interface Event { role: "user" | "assistant"; text: string; tools: Tool[]; ts: string }
+interface Event { role: "user" | "assistant"; text: string; thinking: string; tools: Tool[]; ts: string }
 
 export function extractRun(path: string): RunInput | null {
   let lines: string[];
@@ -63,8 +64,8 @@ export function extractRun(path: string): RunInput | null {
     if (!role) continue;
     if (role === "user" && isToolResult(o.message?.content)) continue; // tool output, not a human prompt
     const p = partsOf(o.message?.content);
-    if (!p.text && !p.tools.length) continue;                          // skip empty/system frames
-    events.push({ role, text: p.text, tools: p.tools, ts: clock(o.timestamp) });
+    if (!p.text && !p.thinking && !p.tools.length) continue;          // skip empty/system frames
+    events.push({ role, text: p.text, thinking: p.thinking, tools: p.tools, ts: clock(o.timestamp) });
   }
   if (events.length === 0) return null;
 
@@ -77,6 +78,7 @@ export function extractRun(path: string): RunInput | null {
 
   const genuineUser = (e: Event) => e.role === "user" && e.text && !isSystemEnvelope(e.text);
   const request = cycle.filter(genuineUser).map((e) => e.text).join("\n").trim();
+  // Deliverable = the agent's visible text (thinking is process, shown below, not the deliverable).
   const output = cycle.filter((e) => e.role === "assistant" && e.text).map((e) => e.text).join("\n\n").trim();
   if (!request || !output) return null;
 
@@ -85,17 +87,22 @@ export function extractRun(path: string): RunInput | null {
   // Context 2: the skills the agent loaded/created/reviewed THIS cycle.
   const skillsLoaded: string[] = [];
   for (const e of cycle) for (const t of e.tools) if (isSkillTool(t.name)) skillsLoaded.push(t.hint ? `${t.name} "${t.hint}"` : t.name);
-  // Detailed process of THIS cycle, in order, with timestamps and tool calls.
+  // Detailed process of THIS cycle, in order: the agent's THINKING, its message, and its tool calls, timestamped.
   const process = cycle.map((e) => {
     const time = e.ts ? `[${e.ts}] ` : "";
-    const tools = e.tools.length ? ` (tools: ${e.tools.map((t) => t.name).join("; ")})` : "";
-    return `${time}[${e.role}] ${e.text}${tools}`.trimEnd();
-  }).join("\n");
+    const lines: string[] = [];
+    if (e.thinking) lines.push(`${time}[${e.role} thinking] ${e.thinking}`);
+    if (e.text || e.tools.length) {
+      const tools = e.tools.length ? ` (tools: ${e.tools.map((t) => t.name).join("; ")})` : "";
+      lines.push(`${time}[${e.role}] ${e.text}${tools}`.trimEnd());
+    }
+    return lines.join("\n");
+  }).filter(Boolean).join("\n");
 
   const transcript = [
-    `ALL USER MESSAGES THIS SESSION (context across cycles, oldest first):\n${sessionUsers}`,
-    `SKILLS LOADED THIS CYCLE:\n${skillsLoaded.length ? skillsLoaded.map((s) => `- ${s}`).join("\n") : "(none)"}`,
-    `RUN PROCESS THIS CYCLE (since the last review, in order, with timestamps):\n${process}`,
+    `SESSION USER MESSAGES (oldest first):\n${sessionUsers}`,
+    `SKILLS USED THIS CYCLE:\n${skillsLoaded.length ? skillsLoaded.map((s) => `- ${s}`).join("\n") : "(none)"}`,
+    `PROCESS THIS CYCLE (since last review) — the agent's thinking, messages, and tool calls in order:\n${process}`,
   ].join("\n\n");
 
   return { request, transcript, output };

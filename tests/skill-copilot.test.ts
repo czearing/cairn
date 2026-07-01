@@ -141,10 +141,10 @@ test("extractRunCopilot scopes the DETAIL to the current cycle (since the last s
   expect(run?.output).toBe("second answer");
   expect(run?.transcript).not.toContain("[user] first task"); // earlier cycle's DETAIL is excluded
   expect(run?.transcript).toContain("first task");            // but it still appears in the session-user-messages context
-  expect(run?.transcript).toContain("ALL USER MESSAGES THIS SESSION");
+  expect(run?.transcript).toContain("SESSION USER MESSAGES");
 });
 
-test("extractRunCopilot lists the skills loaded this cycle, with their hint", () => {
+test("extractRunCopilot lists the SKILLS USED THIS CYCLE, with their hint", () => {
   const p = events([
     userMsg("fix this PR description"),
     { type: "tool.execution_start", data: { toolName: "cairn-skill_search", arguments: '{"task":"pr description"}' } },
@@ -152,9 +152,21 @@ test("extractRunCopilot lists the skills loaded this cycle, with their hint", ()
     asstMsg("Rewrote the description."),
   ]);
   const run = extractRunCopilot(p);
-  expect(run?.transcript).toContain("SKILLS LOADED THIS CYCLE");
+  expect(run?.transcript).toContain("SKILLS USED THIS CYCLE");
   expect(run?.transcript).toContain('skill_search "pr description"');
   expect(run?.transcript).toContain('skill_create "pr description"');
+});
+
+test("extractRunCopilot captures the model's THINKING (reasoningText) in the process, not just the message", () => {
+  const p = events([
+    userMsg("write me a haiku about frost"),
+    { type: "assistant.message", data: { reasoningText: "I should ground this in a concrete winter image and avoid the cliche of 'silent snow'.", content: "First frost on the gate / the dog's breath hangs in the air / no one else awake" } },
+  ]);
+  const run = extractRunCopilot(p);
+  expect(run?.transcript).toContain("[assistant thinking] I should ground this"); // the thoughts are shown
+  expect(run?.transcript).toContain("[assistant] First frost on the gate");        // and so is the visible message
+  expect(run?.output).toContain("First frost on the gate");                        // deliverable = the message
+  expect(run?.output).not.toContain("I should ground this");                       // ...not the thinking
 });
 
 test("extractRunCopilot timestamps the session user messages and the cycle process", () => {

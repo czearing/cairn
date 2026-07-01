@@ -1,19 +1,18 @@
-Grade the OUTPUT, then rewrite the skill's master prompt from everything you have reviewed (best runs first).
-
+Grade the OUTPUT below, then rewrite the skill's master prompt (fold in the best prior runs and the gap this run exposed).
 {{focus}}
-REQUEST: {{request}}
+REQUEST:
+{{request}}
 
-CURRENT MASTER (the instructions a doer loads now; refine these, do not rewrite blind):
+CURRENT MASTER (refine these steps, don't rewrite blind):
 {{currentMaster}}
 
-CURRENT EXPLANATION (the prior reviewer's rationale, written for you to reference; build on it):
+CURRENT EXPLANATION (from the last reviewer; build on it):
 {{currentExplanation}}
 
 PRIOR RUNS (best first):
 {{priors}}
 
-RUN PROCESS (context for grading — the whole session's user messages with timestamps, the skills loaded this cycle, and the full ordered process SINCE THE LAST REVIEW with timestamps and tool calls; use it to see the guidance given, where the agent struggled or was corrected, and fold any revealed gap into the master):
 {{transcript}}
 
-NEW OUTPUT (everything the agent produced this turn; grade the actual deliverable within it and ignore process/bookkeeping chatter. If the agent never produced the deliverable the request asked for, that is a core-constraint failure):
+OUTPUT TO GRADE (find the deliverable here; ignore process chatter. No deliverable = core-constraint failure):
 {{output}}

@@ -13,7 +13,7 @@ import { isSystemEnvelope } from "./noise";
 // Subagent messages/tools are interleaved in this same log (agentId-tagged), so a subagent's deliverable is
 // captured too. Host system-envelope user messages (notifications, reminders) never count as a human prompt.
 
-interface Event { type: string; role: "user" | "assistant" | "other"; text: string; tool?: string; toolArgs?: string; agent?: string; marker?: string; ts: number }
+interface Event { type: string; role: "user" | "assistant" | "other"; text: string; tool?: string; toolArgs?: string; agent?: string; marker?: string; thinking?: boolean; ts: number }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 const clock = (ts: number): string => (ts > 0 ? new Date(ts).toISOString().slice(11, 19) : "");
@@ -33,7 +33,7 @@ export function extractRunCopilot(path: string): RunInput | null {
   const agentName = new Map<string, string>(); // agentId -> a short human name, learned from subagent.started
   const events: Event[] = [];
   for (const line of lines) {
-    let o: { type?: string; agentId?: unknown; timestamp?: unknown; data?: { content?: unknown; toolName?: unknown; arguments?: unknown; agentName?: unknown; agentDisplayName?: unknown } };
+    let o: { type?: string; agentId?: unknown; timestamp?: unknown; data?: { content?: unknown; reasoningText?: unknown; toolName?: unknown; arguments?: unknown; agentName?: unknown; agentDisplayName?: unknown } };
     try { o = JSON.parse(line); } catch { continue; }
     const type = str(o.type);
     const data = o.data ?? {};
@@ -51,6 +51,9 @@ export function extractRunCopilot(path: string): RunInput | null {
     } else if (type === "user.message") {
       const t = str(data.content); if (t) events.push({ type, role: "user", text: t, ts });
     } else if (type === "assistant.message") {
+      // The model's THINKING (reasoningText) comes first, then its visible message (content). Capture both,
+      // in order, so the reviewer sees how the agent reasoned — not just the final line.
+      const reasoning = str(data.reasoningText); if (reasoning) events.push({ type, role: "assistant", text: reasoning, thinking: true, agent, ts });
       const t = str(data.content); if (t) events.push({ type, role: "assistant", text: t, agent, ts });
     } else if (type === "tool.execution_start") {
       const n = str(data.toolName); if (n) events.push({ type, role: "assistant", text: "", tool: n, toolArgs: str(data.arguments), agent, ts });
@@ -67,8 +70,9 @@ export function extractRunCopilot(path: string): RunInput | null {
 
   const genuineUser = (e: Event) => e.role === "user" && e.text && !isSystemEnvelope(e.text);
   const request = cycle.filter(genuineUser).map((e) => e.text).join("\n").trim();
-  // Deliverable = ALL assistant text this cycle, from the main agent AND any subagent, so nothing is lost.
-  const output = cycle.filter((e) => e.role === "assistant" && e.text).map((e) => e.text).join("\n\n").trim();
+  // Deliverable = the agent's VISIBLE output this cycle (main + subagent). Thinking is process, not the
+  // deliverable, so it is excluded here (it appears in the PROCESS section below instead).
+  const output = cycle.filter((e) => e.role === "assistant" && e.text && !e.thinking).map((e) => e.text).join("\n\n").trim();
   if (!request || !output) return null;
 
   // ── Context section 1: every user message in the WHOLE session, condensed to timestamp + text. Gives the
@@ -83,20 +87,23 @@ export function extractRunCopilot(path: string): RunInput | null {
     .filter((e) => e.tool && isSkillTool(e.tool))
     .map((e) => { const hint = argHint(e.toolArgs); const base = e.tool!.includes("__") ? e.tool!.slice(e.tool!.lastIndexOf("__") + 2) : e.tool!.replace(/^cairn-/, ""); return hint ? `${base} "${hint}"` : base; });
 
-  // ── Detailed process of THIS cycle, in order, with timestamps and subagent tags.
+  // ── Detailed process of THIS cycle, in order: the agent's THINKING, its messages, its tool calls, and
+  // subagent activity — with timestamps — so the reviewer sees exactly how the run reasoned and acted.
   const process = cycle
     .map((e) => {
-      if (e.marker) return `${clock(e.ts) ? `[${clock(e.ts)}] ` : ""}${e.marker}`;
       const time = clock(e.ts) ? `[${clock(e.ts)}] ` : "";
+      if (e.marker) return `${time}${e.marker}`;
       if (e.tool) return e.agent ? `${time}[subagent:${e.agent} tool] ${e.tool}` : `${time}[tool] ${e.tool}`;
-      return e.agent ? `${time}[subagent:${e.agent}] ${e.text}` : `${time}[${e.role}] ${e.text}`;
+      const who = e.agent ? `subagent:${e.agent}` : e.role;
+      const tag = e.thinking ? `${who} thinking` : who;
+      return `${time}[${tag}] ${e.text}`;
     })
     .join("\n");
 
   const transcript = [
-    `ALL USER MESSAGES THIS SESSION (context across cycles, oldest first):\n${sessionUsers}`,
-    `SKILLS LOADED THIS CYCLE:\n${skillsLoaded.length ? skillsLoaded.map((s) => `- ${s}`).join("\n") : "(none)"}`,
-    `RUN PROCESS THIS CYCLE (since the last review, in order, with timestamps):\n${process}`,
+    `SESSION USER MESSAGES (oldest first):\n${sessionUsers}`,
+    `SKILLS USED THIS CYCLE:\n${skillsLoaded.length ? skillsLoaded.map((s) => `- ${s}`).join("\n") : "(none)"}`,
+    `PROCESS THIS CYCLE (since last review) — the agent's thinking, messages, and tool calls in order:\n${process}`,
   ].join("\n\n");
 
   return { request, transcript, output };

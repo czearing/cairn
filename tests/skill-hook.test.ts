@@ -30,11 +30,11 @@ test("extractRun scopes the DETAIL to the current cycle (since the last skill_re
   expect(run!.output).toBe("the whole field holds still");
   expect(run!.transcript).toContain("[user] make it sharper");
   expect(run!.transcript).not.toContain("[user] write me a haiku about frost"); // earlier cycle's DETAIL excluded
-  expect(run!.transcript).toContain("ALL USER MESSAGES THIS SESSION");
+  expect(run!.transcript).toContain("SESSION USER MESSAGES");
   expect(run!.transcript).toContain("write me a haiku about frost"); // ...but present in the session-user context
 });
 
-test("extractRun lists the skills loaded this cycle and every session user message", () => {
+test("extractRun lists the SKILLS USED THIS CYCLE and every session user message", () => {
   const p = join(tmpdir(), `cairn-tx2-${process.pid}.jsonl`);
   writeFileSync(p, [
     JSON.stringify({ type: "user", timestamp: "2026-07-01T09:30:00.000Z", message: { content: "fix this PR description" } }),
@@ -44,7 +44,7 @@ test("extractRun lists the skills loaded this cycle and every session user messa
   ].join("\n"));
   const run = extractRun(p);
   rmSync(p, { force: true });
-  expect(run!.transcript).toContain("SKILLS LOADED THIS CYCLE");
+  expect(run!.transcript).toContain("SKILLS USED THIS CYCLE");
   expect(run!.transcript).toContain('skill_search "pr description"');
   expect(run!.transcript).toContain('skill_create "pr description"');
   expect(run!.transcript).toContain("[09:30:00] fix this PR description"); // session user message, timestamped

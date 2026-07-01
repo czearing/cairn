@@ -28,9 +28,7 @@ export function learnUserPrompt(request: string, output: string, transcript: str
   const priorsText = priors.length ? priors.map((r) => `- q=${r.quality.toFixed(2)} ${r.review.slice(0, 500)}`).join("\n") : "(none yet)";
   // When the turn produced several deliverables (e.g. a story AND its review), the loop grades them one at a
   // time and names which one HERE, so the learner scores exactly that deliverable, not the whole turn.
-  const focusText = focus.trim()
-    ? `GRADE ONLY THIS DELIVERABLE from the turn, ignoring any others it produced (e.g. grade the review, not the story it reviews): ${focus.trim()}\n`
-    : "";
+  const focusText = focus.trim() ? `GRADE ONLY this deliverable (not others from the turn): ${focus.trim()}\n` : "";
   return fill(LEARN_USER, {
     focus: focusText,
     existing: existing.length ? existing.join(", ") : "(none yet)",

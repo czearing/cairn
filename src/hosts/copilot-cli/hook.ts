@@ -5,9 +5,7 @@
 //
 //   session-start  (sessionStart)        : inject the full brain workflow (user-message.md) once per session.
 //   user-prompt    (userPromptSubmitted) : output is IGNORED by Copilot, so we cannot inject per prompt —
-//                                          but the hook still RUNS, so we use it to RESET the per-turn latch,
-//                                          re-inject the brain workflow at turn start, and (skill layer on)
-//                                          the skill_review reminder so a finished deliverable is submitted.
+//                                          but the hook still RUNS, so we use it to RESET the per-turn latch.
 //   pre-tool       (preToolUse)          : gate a brain_create (deny closed-question / root-only-branch).
 //                                          preToolUse has no additionalContext channel, so entry-format.md /
 //                                          orchestrate.md cannot be injected here — only allow/deny/modify.
@@ -17,9 +15,10 @@
 //                                          deliverable, review the whole turn log now (catches backgrounded
 //                                          subagent output a turn-end fire would miss).
 //   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn. Used
-//                                          for turn-reminder.md (brain unused this turn). Loop-bounded
-//                                          (max 2 nudges/turn) and resettable. Auto-learns the turn as a
-//                                          FALLBACK only when skill_review did not already review it.
+//                                          for turn-reminder.md (brain unused) and skill-review.md (a skill
+//                                          was used but not submitted via skill_review). Loop-bounded (max 2
+//                                          nudges/turn). Auto-learns the turn as a FALLBACK only when
+//                                          skill_review did not already review it.
 //   subagent-start (subagentStart)       : additionalContext is PREPENDED to the subagent's own prompt —
 //                                          the one channel that reaches a subagent's window (subagent-protocol.md).
 //
@@ -63,21 +62,17 @@ export function postToolFiles(toolName: string, answer: string): string[] {
   return [];
 }
 
-// Compose the turn-start additionalContext: the brain workflow, plus (only when the skill layer is ON) the
-// skill_review reminder, so an agent that just finished a deliverable is nudged to submit it for learning.
-// Pure/joins non-empty parts; the caller passes an empty skillReview when the skill layer is off.
-export function turnStartContext(workflow: string, skillReview: string): string {
-  return [workflow, skillReview].map((s) => s.trim()).filter((s) => s.length > 0).join("\n\n");
-}
-
 // Whether agentStop should force another turn, and with which prompt. Bounded to STOP_CAP nudges per
 // turn so a stubborn agent can never be looped forever (Copilot sends no stop_hook_active flag).
+// If the agent used a skill this turn but is ending WITHOUT submitting the result via skill_review, block
+// and inject the skill-review reminder so the finished work is actually graded.
 export const STOP_CAP = 2;
-export function stopDecision(s: { brainUsed: boolean; stopNudges: number }): {
+export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; reviewed: boolean; stopNudges: number }): {
   file: string;
 } {
   if (s.stopNudges >= STOP_CAP) return { file: "" };
   if (!s.brainUsed) return { file: "turn-reminder.md" };
+  if (s.skillUsed && !s.reviewed) return { file: "skill-review.md" };
   return { file: "" };
 }
 
@@ -101,15 +96,16 @@ export function gateDecision(
 }
 
 // ── Per-turn state (drives the agentStop gate without parsing Copilot's transcript) ─────────────
-// A turn runs from userPromptSubmitted to agentStop. We record whether the brain was used this turn, and
-// whether the agent already explicitly closed a deliverable with skill_review (so agentStop does not fire a
-// duplicate learn), keyed by sessionId.
+// A turn runs from userPromptSubmitted to agentStop. Keyed by sessionId, we record whether the brain was
+// used, whether the agent used a skill this turn (skill_search), and whether it closed the deliverable with
+// skill_review — so agentStop can nag an un-reviewed skill turn and never fire a duplicate learn.
 interface TurnState {
   brainUsed: boolean;
+  skillUsed: boolean;
   reviewed: boolean;
   stopNudges: number;
 }
-const freshTurn = (): TurnState => ({ brainUsed: false, reviewed: false, stopNudges: 0 });
+const freshTurn = (): TurnState => ({ brainUsed: false, skillUsed: false, reviewed: false, stopNudges: 0 });
 const turnDir = () => join(homedir(), ".cairn", "copilot-turn");
 const turnPath = (sid: string) =>
   join(turnDir(), `${(sid || "default").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128)}.json`);
@@ -239,15 +235,7 @@ async function main(): Promise<void> {
     // Also reset the per-turn latch so the agentStop gate is scoped to this turn.
     writeTurn(sessionId, freshTurn());
     const wf = await promptText("user-message.md");
-    // Reinforce skill_review at turn start (only when the skill layer is ON), so the agent submits a finished
-    // deliverable — its own or a subagent's — for learning instead of relying on the turn-end fallback scrape.
-    let skillReview = "";
-    try {
-      const { skillsEnabled } = await import("../../core/config");
-      if (skillsEnabled()) skillReview = await promptText("skill-review.md");
-    } catch { /* skills off / config unreadable: no reminder */ }
-    const text = turnStartContext(wf, skillReview);
-    emit(text ? { additionalContext: text } : {});
+    emit(wf ? { additionalContext: wf } : {});
     return;
   }
 
@@ -275,6 +263,8 @@ async function main(): Promise<void> {
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const st = readTurn(sessionId);
     if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) st.brainUsed = true;
+    // skill_search means the agent pulled a skill's steps: the turn now OWES a skill_review, enforced at agentStop.
+    if (isTool(toolName, "skill_search")) st.skillUsed = true;
 
     // The agent explicitly signalled a finished deliverable. Review the WHOLE turn log NOW (it already holds
     // any subagent's output, which a turn-end fire could miss when the work was backgrounded). Fire once per
@@ -303,7 +293,7 @@ async function main(): Promise<void> {
       return void emit({});
     }
     const st = readTurn(sessionId);
-    const { file } = stopDecision({ brainUsed: st.brainUsed, stopNudges: st.stopNudges });
+    const { file } = stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, reviewed: st.reviewed, stopNudges: st.stopNudges });
     const text = file ? await promptText(file) : "";
     if (text) {
       writeTurn(sessionId, { ...st, stopNudges: st.stopNudges + 1 });

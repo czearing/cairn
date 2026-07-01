@@ -85,7 +85,8 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
 //                         the skill_review trigger (review the whole turn log when the agent signals a
 //                         finished deliverable — catches backgrounded subagent output).
 //   agentStop           → the Stop equivalent: decision:"block" re-runs the turn (turn-reminder when brain
-//                         unused). Auto-learns the turn as a FALLBACK unless skill_review already reviewed it.
+//                         unused; skill-review when a skill was used but not submitted via skill_review).
+//                         Auto-learns the turn as a FALLBACK unless skill_review already reviewed it.
 //   subagentStart       → additionalContext prepended to a spawned subagent's own prompt.
 // hook.ts picks the mode from its argv.
 function hookConfig(): object {

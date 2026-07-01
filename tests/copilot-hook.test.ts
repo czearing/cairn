@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { postToolFiles, stopDecision, gateDecision, isTool, STOP_CAP, turnStartContext } from "../src/hosts/copilot-cli/hook";
+import { postToolFiles, stopDecision, gateDecision, isTool, STOP_CAP } from "../src/hosts/copilot-cli/hook";
 
 // ── postToolFiles: which prompts a COMPLETED Copilot tool delivers, mirroring Claude's after-tool set ──
 
@@ -24,29 +24,26 @@ test("postToolFiles is empty for unrelated tools", () => {
   expect(postToolFiles("bash", "")).toEqual([]);
 });
 
-// ── turnStartContext: the brain workflow + the skill_review reminder (only when the skill layer is on) ──
-
-test("turnStartContext appends the skill_review reminder when the skill layer is on", () => {
-  expect(turnStartContext("WORKFLOW", "REVIEW")).toBe("WORKFLOW\n\nREVIEW");
-});
-
-test("turnStartContext is just the workflow when the skill layer is off (empty reminder)", () => {
-  expect(turnStartContext("WORKFLOW", "")).toBe("WORKFLOW");
-  expect(turnStartContext("WORKFLOW", "   ")).toBe("WORKFLOW"); // whitespace-only reminder is dropped
-});
-
 // ── stopDecision: the agentStop gate, bounded so it can never loop forever ────────────────────────
 
 test("stopDecision nudges turn-reminder when the brain was not used this turn", () => {
-  expect(stopDecision({ brainUsed: false, stopNudges: 0 })).toEqual({ file: "turn-reminder.md" });
+  expect(stopDecision({ brainUsed: false, skillUsed: false, reviewed: false, stopNudges: 0 })).toEqual({ file: "turn-reminder.md" });
 });
 
-test("stopDecision allows the turn to end when the brain was used", () => {
-  expect(stopDecision({ brainUsed: true, stopNudges: 0 })).toEqual({ file: "" });
+test("stopDecision nudges skill-review when a skill was used but not reviewed before ending", () => {
+  expect(stopDecision({ brainUsed: true, skillUsed: true, reviewed: false, stopNudges: 0 })).toEqual({ file: "skill-review.md" });
+});
+
+test("stopDecision allows the turn to end when the skill was reviewed", () => {
+  expect(stopDecision({ brainUsed: true, skillUsed: true, reviewed: true, stopNudges: 0 })).toEqual({ file: "" });
+});
+
+test("stopDecision allows the turn to end when no skill was used", () => {
+  expect(stopDecision({ brainUsed: true, skillUsed: false, reviewed: false, stopNudges: 0 })).toEqual({ file: "" });
 });
 
 test("stopDecision stops nudging once the per-turn cap is reached (no infinite loop)", () => {
-  expect(stopDecision({ brainUsed: false, stopNudges: STOP_CAP })).toEqual({ file: "" });
+  expect(stopDecision({ brainUsed: false, skillUsed: true, reviewed: false, stopNudges: STOP_CAP })).toEqual({ file: "" });
 });
 
 // ── gateDecision: the preToolUse brain_create gate (pure; deps injected) ──────────────────────────

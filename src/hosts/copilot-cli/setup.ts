@@ -81,8 +81,11 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
 //                         model. sessionStart stays as a fallback in case a future version regresses.
 //   preToolUse          → gate a brain_create (deny closed-question / root-only-branch); matcher-scoped
 //                         to brain_create so it never fires on ordinary tools.
-//   postToolUse         → entry-format/orchestrate + per-tool reminders after a brain_* or Task call.
-//   agentStop           → the Stop equivalent: decision:"block" re-runs the turn (turn-reminder when brain unused).
+//   postToolUse         → entry-format/orchestrate + per-tool reminders after a brain_* or Task call; also
+//                         the skill_review trigger (review the whole turn log when the agent signals a
+//                         finished deliverable — catches backgrounded subagent output).
+//   agentStop           → the Stop equivalent: decision:"block" re-runs the turn (turn-reminder when brain
+//                         unused). Auto-learns the turn as a FALLBACK unless skill_review already reviewed it.
 //   subagentStart       → additionalContext prepended to a spawned subagent's own prompt.
 // hook.ts picks the mode from its argv.
 function hookConfig(): object {

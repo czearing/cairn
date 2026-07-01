@@ -10,10 +10,14 @@
 //                                          preToolUse has no additionalContext channel, so entry-format.md /
 //                                          orchestrate.md cannot be injected here — only allow/deny/modify.
 //   post-tool      (postToolUse)         : after a brain_* or Task tool, inject the matching reminder, and
-//                                          record brain usage for this turn (drives the agentStop gate).
+//                                          record brain usage for this turn (drives the agentStop gate). Also
+//                                          the skill_review trigger: when the agent signals a finished
+//                                          deliverable, review the whole turn log now (catches backgrounded
+//                                          subagent output a turn-end fire would miss).
 //   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn. Used
 //                                          for turn-reminder.md (brain unused this turn). Loop-bounded
-//                                          (max 2 nudges/turn) and resettable.
+//                                          (max 2 nudges/turn) and resettable. Auto-learns the turn as a
+//                                          FALLBACK only when skill_review did not already review it.
 //   subagent-start (subagentStart)       : additionalContext is PREPENDED to the subagent's own prompt —
 //                                          the one channel that reaches a subagent's window (subagent-protocol.md).
 //
@@ -88,13 +92,15 @@ export function gateDecision(
 }
 
 // ── Per-turn state (drives the agentStop gate without parsing Copilot's transcript) ─────────────
-// A turn runs from userPromptSubmitted to agentStop. We record whether the brain was used this turn,
-// keyed by sessionId, so agentStop can scope its turn-reminder gate to THIS turn.
+// A turn runs from userPromptSubmitted to agentStop. We record whether the brain was used this turn, and
+// whether the agent already explicitly closed a deliverable with skill_review (so agentStop does not fire a
+// duplicate learn), keyed by sessionId.
 interface TurnState {
   brainUsed: boolean;
+  reviewed: boolean;
   stopNudges: number;
 }
-const freshTurn = (): TurnState => ({ brainUsed: false, stopNudges: 0 });
+const freshTurn = (): TurnState => ({ brainUsed: false, reviewed: false, stopNudges: 0 });
 const turnDir = () => join(homedir(), ".cairn", "copilot-turn");
 const turnPath = (sid: string) =>
   join(turnDir(), `${(sid || "default").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128)}.json`);
@@ -145,19 +151,27 @@ function parsePayload(raw: string): Payload {
 }
 
 // Fire the background skill learner over a finished turn's transcript, best-effort. Tags the spawned worker
-// with CAIRN_LEARN_BACKEND=copilot so it parses Copilot's events.jsonl and grades via `copilot -p`. No-op
-// when the skill layer is off (the default) or there is no transcript; never throws or blocks the hook.
-async function fireLearner(transcriptPath: string): Promise<void> {
-  if (!transcriptPath) return;
+// with CAIRN_LEARN_BACKEND=copilot so it parses Copilot's events.jsonl and grades via `copilot -p`. Returns
+// true only when a worker was actually spawned (skills on, transcript present, under the concurrency cap), so
+// callers can dedupe (the explicit skill_review path vs the agentStop fallback). Never throws or blocks.
+async function fireLearner(transcriptPath: string): Promise<boolean> {
+  if (!transcriptPath) return false;
   try {
     const { skillsEnabled } = await import("../../core/config");
-    if (!skillsEnabled()) return;
+    if (!skillsEnabled()) return false;
     process.env.CAIRN_LEARN_BACKEND = "copilot"; // the worker inherits this and picks the Copilot path
     const { learnFromTranscript } = await import("../../skill/learn");
-    learnFromTranscript(transcriptPath);
+    return learnFromTranscript(transcriptPath);
   } catch {
-    /* skills are best-effort */
+    return false; // skills are best-effort
   }
+}
+
+// Copilot writes each session's turn log to ~/.copilot/session-state/<sessionId>/events.jsonl. postToolUse
+// (where skill_review is detected) carries only the sessionId, not a transcript path, so we reconstruct the
+// events-log path from it to review the whole turn — including any subagent output already written there.
+function eventsPathForSession(sessionId: string): string {
+  return join(homedir(), ".copilot", "session-state", sessionId, "events.jsonl");
 }
 
 function debugLog(mode: string, raw: string): void {
@@ -245,6 +259,14 @@ async function main(): Promise<void> {
     const st = readTurn(sessionId);
     if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) st.brainUsed = true;
 
+    // The agent explicitly signalled a finished deliverable. Review the WHOLE turn log NOW (it already holds
+    // any subagent's output, which a turn-end fire could miss when the work was backgrounded). Fire once per
+    // turn; mark reviewed so agentStop does not learn the same turn again. If the fire was skipped (concurrency
+    // cap), leave reviewed false so agentStop can still retry at turn end.
+    if (isTool(toolName, "skill_review") && !st.reviewed) {
+      if (await fireLearner(eventsPathForSession(sessionId))) st.reviewed = true;
+    }
+
     const answer = typeof args.answer === "string" ? args.answer : "";
     const blocks = (await Promise.all(postToolFiles(toolName, answer).map(promptText))).filter((t) => t.length > 0);
     writeTurn(sessionId, st);
@@ -258,7 +280,11 @@ async function main(): Promise<void> {
     // The learner must run ONCE per logical turn, at the turn's TRUE end. agentStop can fire several times for
     // one turn (each forced-continuation block ends in another agentStop), so we only learn on the agentStop
     // that ALLOWS (no block) — otherwise we'd grade an unfinished turn and create duplicate runs.
-    if (process.env.CAIRN_COPILOT_NO_STOP) { await fireLearner(transcriptPath); return void emit({}); }
+    if (process.env.CAIRN_COPILOT_NO_STOP) {
+      const st = readTurn(sessionId);
+      if (!st.reviewed) await fireLearner(transcriptPath);
+      return void emit({});
+    }
     const st = readTurn(sessionId);
     const { file } = stopDecision({ brainUsed: st.brainUsed, stopNudges: st.stopNudges });
     const text = file ? await promptText(file) : "";
@@ -267,7 +293,8 @@ async function main(): Promise<void> {
       emit({ decision: "block", reason: text }); // turn not done yet — don't learn an unfinished turn
       return;
     }
-    await fireLearner(transcriptPath); // turn truly ends here: learn it once
+    // Fallback auto-learn ONLY when the agent did not already close a deliverable with skill_review this turn.
+    if (!st.reviewed) await fireLearner(transcriptPath);
     emit({});
     return;
   }

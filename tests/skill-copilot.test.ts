@@ -110,6 +110,10 @@ function events(objs: object[]): string {
 const userMsg = (content: string) => ({ type: "user.message", data: { content } });
 const asstMsg = (content: string) => ({ type: "assistant.message", data: { content } });
 const toolStart = (toolName: string) => ({ type: "tool.execution_start", data: { toolName } });
+// Subagent-tagged variants: Copilot interleaves a subagent's own messages/tools in the PARENT log, keyed by agentId.
+const subStart = (agentId: string, agentDisplayName: string) => ({ type: "subagent.started", agentId, data: { agentDisplayName } });
+const subDone = (agentId: string) => ({ type: "subagent.completed", agentId, data: {} });
+const subMsg = (agentId: string, content: string) => ({ type: "assistant.message", agentId, data: { content } });
 
 test("extractRunCopilot pulls request, output, and tool sequence from the current turn", () => {
   const p = events([
@@ -164,4 +168,38 @@ test("extractRunCopilot returns null when the only user message is a system enve
     asstMsg("I noticed the job finished."),
   ]);
   expect(extractRunCopilot(p)).toBeNull();                  // nothing the human actually asked for: skip learning
+});
+
+test("extractRunCopilot captures a subagent-produced deliverable that the main agent only narrates", () => {
+  // The backgrounded-subagent bug: the main agent ends on a status line, but the STORY was written by a
+  // subagent and is interleaved in the same log (agentId-tagged). The graded output must be the story.
+  const p = events([
+    userMsg("write me a short story"),
+    asstMsg("I'll delegate the writing to a story subagent."),
+    subStart("toolu_a1", "Story Writer"),
+    subMsg("toolu_a1", "THE STORY: The pacemaker stepped aside at the bell and the boy behind him never knew the pace had been a gift."),
+    subDone("toolu_a1"),
+    asstMsg("The story subagent is finished; reconciling now."),
+  ]);
+  const run = extractRunCopilot(p);
+  expect(run).not.toBeNull();
+  expect(run!.output).toContain("THE STORY");                       // the subagent's actual deliverable is graded
+  expect(run!.transcript).toContain("spawned subagent: Story Writer"); // subagent activity is captured in the log
+  expect(run!.transcript).toContain("[subagent:Story Writer]");     // its message is tagged, not blended into the main agent
+  expect(run!.transcript).toContain("subagent Story Writer returned");
+});
+
+test("extractRunCopilot tags a subagent's tool calls distinctly from the main agent's", () => {
+  const p = events([
+    userMsg("review this PR"),
+    toolStart("cairn-brain_search"),                                // main agent
+    subStart("toolu_b2", "Reviewer"),
+    { type: "tool.execution_start", agentId: "toolu_b2", data: { toolName: "view" } }, // subagent tool
+    subMsg("toolu_b2", "REVIEW: 3 real issues, 2 non-issues, each with file:line."),
+    subDone("toolu_b2"),
+  ]);
+  const run = extractRunCopilot(p);
+  expect(run!.transcript).toContain("[tool] cairn-brain_search");   // main-agent tool: unchanged format
+  expect(run!.transcript).toContain("[subagent:Reviewer tool] view"); // subagent tool: tagged
+  expect(run!.output).toContain("REVIEW: 3 real issues");          // subagent's critique is captured as output
 });

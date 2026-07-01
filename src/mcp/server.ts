@@ -190,4 +190,25 @@ server.tool(
   }
 );
 
+// The AGENT's explicit "this deliverable is finished, review it now" signal. The skill loop normally fires
+// automatically at turn end, but that mis-times work handed to a BACKGROUND subagent: the turn can end on a
+// "the reviewer is still running" status line before the real artifact exists, so the loop grades the status
+// line (the measured short-story 0.10 runs). This tool lets the agent close that gap: it calls skill_review
+// AFTER the finished work (its own or a subagent's) is actually in hand, and the host's postToolUse hook then
+// reviews the whole turn log — which by that point contains the subagent's output — instead of guessing at
+// turn end. The tool itself only acknowledges; the hook (which alone knows the session's transcript path)
+// does the firing, so this is a no-op when skills are off or run outside a hooked host.
+server.tool(
+  "skill_review",
+  "Call this the moment a REUSABLE deliverable is finished and in hand — a written piece, a shipped PR, a fixed bug, a completed analysis. If you delegated the work to a subagent, call it only AFTER that subagent has RETURNED its result, so the finished artifact (not a 'still running' status) is what gets reviewed. Call once per turn when there is a genuine deliverable; do NOT call for chit-chat, a question, a status update, or brain bookkeeping.",
+  {
+    what: z.string().optional().describe("A short phrase naming what you just finished (e.g. 'the short story about the clockmaker', 'PR #128 for the login button'). For your own intent; the reviewer re-derives the label independently."),
+  },
+  async ({ what }) => {
+    // The transcript path lives with the host hook, not here, so this tool cannot fire the learner itself; it
+    // just acknowledges. The postToolUse hook sees this call and reviews the session's full turn log.
+    return json({ ok: true, queued: true, what: (what ?? "").trim().slice(0, 200) });
+  }
+);
+
 await server.connect(new StdioServerTransport());

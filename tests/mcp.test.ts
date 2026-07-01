@@ -31,7 +31,7 @@ const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.t
 
 test("exposes the brain tools", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_output", "skill_search", "skill_segment"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_output", "skill_review", "skill_search", "skill_segment"]);
 });
 
 test("brain_create returns a neuron with an id and a viewer url", async () => {
@@ -220,4 +220,12 @@ test("skill_segment captures the submitted deliverables as clean JSON (trim/lowe
     await c.close();
     try { rmSync(segPath); } catch { /* ignore */ }
   }
+});
+
+test("skill_review acknowledges the agent's finished-deliverable signal (the host hook does the firing)", async () => {
+  const withWhat = await call("skill_review", { what: "the short story about the clockmaker" });
+  expect(JSON.parse(withWhat.content[0]!.text)).toMatchObject({ ok: true, queued: true, what: "the short story about the clockmaker" });
+  // `what` is optional — a bare call still acknowledges.
+  const bare = await call("skill_review", {});
+  expect(JSON.parse(bare.content[0]!.text)).toMatchObject({ ok: true, queued: true });
 });

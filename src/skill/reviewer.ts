@@ -40,17 +40,15 @@ export function fromCapture(raw: string | null | undefined, forcedLabel?: string
   return { label, review, master, explanation };
 }
 
-/** In one cairn-connected call, the learner reasons out loud to assign the label for `request`, grade
- *  `output` (with the raw run `transcript` as process context), and rewrite the master, then submits the
- *  result via the skill_output tool. We read that structured submission (captured to a temp file via
- *  CAIRN_SKILL_OUTPUT_PATH); if it never submits a valid one, we fail loudly with the real reason.
- *  Returns {label, review, master}; never throws. */
-export async function reviewAndLearn(request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster = "", priorExplanation = "", timeoutMs?: number, forcedLabel?: string, focus = ""): Promise<LearnResult> {
-  // Labeling is the loop's job, never the learner's: the label was decided in STAGE 1 and is handed to the
+/** In one cairn-connected call, the learner grades `output` for the forced `label` (with the raw run
+ *  `transcript` as process context) and rewrites the master, then submits via the skill_output tool. We read
+ *  that structured submission (captured to a temp file via CAIRN_SKILL_OUTPUT_PATH); if it never submits a
+ *  valid one, we fail loudly with the real reason. Returns {label, review, master}; never throws. */
+export async function reviewAndLearn(request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster = "", priorExplanation = "", timeoutMs?: number, forcedLabel?: string): Promise<LearnResult> {
+  // Labeling is the loop's job, never the learner's: the label was decided by the agent and is handed to the
   // skill_output tool via the CAIRN_SKILL_FORCED_LABEL env below. The learner only grades and rewrites the
-  // master, so it never sees, echoes, or can corrupt a label. `focus` names which of the turn's deliverables
-  // to grade when the turn produced more than one (e.g. the review, not the story it reviews).
-  const user = learnUserPrompt(request, output, transcript, existing, priors, priorMaster, priorExplanation, focus);
+  // master, so it never sees, echoes, or can corrupt a label.
+  const user = learnUserPrompt(request, output, transcript, existing, priors, priorMaster, priorExplanation);
   const outPath = join(tmpdir(), `cairn-learn-${randomUUID()}.json`);
   const r = await runLearner(user, {
     system: LEARN_SYSTEM,

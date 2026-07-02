@@ -16,21 +16,21 @@ export interface SkillResult { skillId: string; task: string; score: number; cre
 
 export interface PipelineDeps {
   // Injected in tests. Grades `output` against the declared `label` (forced) and rewrites its master.
-  learn?: (request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster: string, priorExplanation: string, label: string, what: string) => Promise<LearnResult>;
+  learn?: (request: string, output: string, transcript: string, existing: string[], priors: SkillRun[], priorMaster: string, priorExplanation: string, label: string) => Promise<LearnResult>;
 }
 
 // Grade ONE agent-declared deliverable and store it under its skill (auto-created if the label is new). Returns
 // the result, or null when the learner failed or produced nothing usable. The label is the AGENT's, forced into
 // the learner, so the reviewer only iterates the master — it never re-labels the work.
-export async function reviewDeclared(input: RunInput, label: string, what: string, now: number, deps: PipelineDeps = {}): Promise<SkillResult | null> {
+export async function reviewDeclared(input: RunInput, label: string, now: number, deps: PipelineDeps = {}): Promise<SkillResult | null> {
   const norm = normalizeLabel(label);
   if (!norm) { recordActivity({ ts: now, phase: "skipped", request: input.request }); return null; } // no label ⇒ nothing to iterate
-  const learn = deps.learn ?? ((req, out, tx, ex, pr, pm, pe, fl, fo) => reviewAndLearn(req, out, tx, ex, pr, pm, pe, undefined, fl, fo));
+  const learn = deps.learn ?? ((req, out, tx, ex, pr, pm, pe, fl) => reviewAndLearn(req, out, tx, ex, pr, pm, pe, undefined, fl));
 
   recordActivity({ ts: now, phase: "start", request: input.request });
   const anchor = skillByLabel(norm);
   const priors = anchor ? topRuns(anchor.id, 10) : [];
-  const result = await learn(input.request, input.output, input.transcript, skillLabels(), priors, anchor?.masterPrompt ?? "", anchor?.explanation ?? "", label, what);
+  const result = await learn(input.request, input.output, input.transcript, skillLabels(), priors, anchor?.masterPrompt ?? "", anchor?.explanation ?? "", label);
   const { review, master, explanation } = result;
   if (result.failed || !review || !result.label) {
     recordActivity({ ts: now, phase: result.failed ? "failed" : "skipped", request: input.request, error: result.error });

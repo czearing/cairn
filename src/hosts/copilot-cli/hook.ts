@@ -159,14 +159,14 @@ function parsePayload(raw: string): Payload {
 // best-effort. Tags the worker with CAIRN_LEARN_BACKEND=copilot so it parses Copilot's events.jsonl and grades
 // via `copilot -p`. Returns true only when a worker was actually spawned (skills on, transcript+label present,
 // under the concurrency cap). Never throws or blocks.
-async function fireLearner(transcriptPath: string, label: string, focus = ""): Promise<boolean> {
+async function fireLearner(transcriptPath: string, label: string): Promise<boolean> {
   if (!transcriptPath || !label.trim()) return false;
   try {
     const { skillsEnabled } = await import("../../core/config");
     if (!skillsEnabled()) return false;
     process.env.CAIRN_LEARN_BACKEND = "copilot"; // the worker inherits this and picks the Copilot path
     const { learnFromTranscript } = await import("../../skill/learn");
-    return learnFromTranscript(transcriptPath, label, focus);
+    return learnFromTranscript(transcriptPath, label);
   } catch {
     return false; // skills are best-effort
   }
@@ -273,9 +273,8 @@ async function main(): Promise<void> {
     // so agentStop does not nag, and skillUsed so the gate is satisfied.
     if (isTool(toolName, "skill_review")) {
       const label = typeof args.label === "string" ? args.label : "";
-      const what = typeof args.what === "string" ? args.what : "";
       st.skillUsed = true;
-      if (await fireLearner(eventsPathForSession(sessionId), label, what)) st.reviewed = true;
+      if (await fireLearner(eventsPathForSession(sessionId), label)) st.reviewed = true;
     }
 
     const answer = typeof args.answer === "string" ? args.answer : "";

@@ -81,12 +81,11 @@ export function skillsExist(): boolean {
 }
 
 // Fire the background learner over a finished turn's transcript, for the skill the agent DECLARED via
-// skill_review. `label` is that skill (a new label auto-creates it); `focus` optionally names which
-// deliverable to grade when the turn made more than one. Returns whether it fired.
-export function skillLearn(transcriptPath: string | undefined, label: string, focus = ""): boolean {
+// skill_review. `label` is that skill (a new label auto-creates it). Returns whether it fired.
+export function skillLearn(transcriptPath: string | undefined, label: string): boolean {
   if (!skillsEnabled() || !transcriptPath || !label.trim()) return false;
   process.env.CAIRN_LEARN_BACKEND = "claude"; // Claude host: parse the Claude transcript AND grade via `claude -p`
-  try { return learnFromTranscript(transcriptPath, label, focus); } catch { return false; }
+  try { return learnFromTranscript(transcriptPath, label); } catch { return false; }
 }
 
 // For brain_search to piggyback: the matching skills as a small structured blob (capped), or [] when

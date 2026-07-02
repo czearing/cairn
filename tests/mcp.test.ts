@@ -198,9 +198,8 @@ test("skill_create mints a new skill (idempotent) and skill_review acknowledges 
   const again = await call("skill_create", { label: "flash fiction" });
   expect(JSON.parse(again.content[0]!.text)).toMatchObject({ created: false }); // idempotent: same normalized label
 
-  const rev = await call("skill_review", { label: "flash fiction", what: "the two-sentence story" });
-  expect(JSON.parse(rev.content[0]!.text)).toMatchObject({ ok: true, queued: true, label: "flash fiction", what: "the two-sentence story" });
-  // `what` is optional — a bare call with just the label still acknowledges.
+  const rev = await call("skill_review", { label: "flash fiction" });
+  expect(JSON.parse(rev.content[0]!.text)).toMatchObject({ ok: true }); // acknowledge only; the label rides via the host hook
   const bare = await call("skill_review", { label: "haiku" });
-  expect(JSON.parse(bare.content[0]!.text)).toMatchObject({ ok: true, queued: true, label: "haiku" });
+  expect(JSON.parse(bare.content[0]!.text)).toMatchObject({ ok: true });
 });

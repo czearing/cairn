@@ -8,13 +8,12 @@ import { reviewDeclared } from "../src/skill/pipeline";
 process.env.CAIRN_SKILL_WORKER = "1"; // belt-and-suspenders loop guard
 const transcriptPath = process.argv[2];
 const label = process.env.CAIRN_REVIEW_LABEL ?? "";
-const focus = process.env.CAIRN_REVIEW_FOCUS ?? "";
 if (!transcriptPath || !label.trim()) process.exit(1); // nothing to grade without a declared skill
 try {
   // Pick the transcript parser for the host that produced it: Copilot's events.jsonl vs Claude's message-JSONL.
   const backend = (process.env.CAIRN_LEARN_BACKEND || "").trim().toLowerCase();
   const input = (backend === "copilot" ? extractRunCopilot : extractRun)(transcriptPath);
-  if (input) await reviewDeclared(input, label, focus, Date.now());
+  if (input) await reviewDeclared(input, label, Date.now());
 } catch { /* best-effort background work; never surface */ }
 finally {
   // Release this worker's concurrency-cap lock so the next learner can run (learn.ts counts these files).

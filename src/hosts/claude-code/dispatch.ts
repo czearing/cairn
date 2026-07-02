@@ -124,8 +124,7 @@ async function main(): Promise<void> {
       else if (event.kind === "tool_completed" && isSkillReview(event.tool)) {
         // The agent declared a finished deliverable for a skill: learn over this turn's transcript, graded against that label.
         const label = typeof event.input.label === "string" ? event.input.label : "";
-        const focus = typeof event.input.what === "string" ? event.input.what : "";
-        skillLearn((payload as { transcript_path?: string }).transcript_path, label, focus);
+        skillLearn((payload as { transcript_path?: string }).transcript_path, label);
       }
       else if (event.kind === "tool_completed" && isSkillSearch(event.tool)) noteSkillSearched(session);
       else if (event.kind === "tool_pending" && isActionTool(event.tool) && skillsExist() && claimSkillReminder(session)) {

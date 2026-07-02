@@ -181,15 +181,14 @@ if (process.env.CAIRN_SKILL_OUTPUT_PATH) {
 // the whole turn log, so this is a no-op when skills are off or run outside a hooked host.
 server.tool(
   "skill_review",
-  "Call this when a REUSABLE deliverable is finished, to grade it and improve the skill it belongs to. Pass the `label` of that skill — the one you reused from skill_search, or created with skill_create (a new label auto-creates the skill). If you delegated the work, call it only AFTER the subagent has RETURNED. A turn that produced two deliverables (e.g. a story AND its review) is TWO calls, one per label. Do NOT call it for chit-chat, a question, or a status update.",
+  "Call this when a REUSABLE deliverable is finished, to grade it and improve the skill it belongs to. Pass the `label` of that skill — the one you reused from skill_search, or created with skill_create (a new label auto-creates the skill). If you delegated the work, call it only AFTER the subagent has RETURNED. Call it once per finished deliverable. Do NOT call it for chit-chat, a question, or a status update.",
   {
     label: z.string().describe("The skill this deliverable belongs to (1-4 lowercase words), e.g. 'short story', 'pr review'. Reuse the label you got from skill_search/skill_create; a new label creates the skill."),
-    what: z.string().optional().describe("A short phrase naming this specific deliverable when the turn produced more than one, so the reviewer grades the right one (e.g. 'the review of the story', not the story)."),
   },
-  async ({ label, what }) => {
+  async () => {
     // The transcript path lives with the host hook, not here, so this tool cannot fire the learner itself; it
     // just acknowledges. The postToolUse hook sees this call, reads the label, and reviews the turn log.
-    return json({ ok: true, queued: true, label: (label ?? "").trim().slice(0, 60), what: (what ?? "").trim().slice(0, 200) });
+    return json({ ok: true });
   }
 );
 

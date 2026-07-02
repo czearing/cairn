@@ -1,5 +1,5 @@
 Grade the OUTPUT below, then rewrite the skill's master prompt (fold in the best prior runs and the gap this run exposed).
-{{focus}}
+
 CURRENT MASTER (refine these steps, don't rewrite blind):
 {{currentMaster}}
 

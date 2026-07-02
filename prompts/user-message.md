@@ -49,3 +49,5 @@ Every node is an open question. If a node can be answered yes or no, it is too c
 3. How you tested your conclusion and how you are certain it is the highest quality possible.
 4. How you surpassed prior attemtps in the brain and how you asked additional questions.
 5. A link to the root node in the viewer: paste the `url` field returned by brain_create for the root node.
+
+After ALL output is done call `skill_review`

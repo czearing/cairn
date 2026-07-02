@@ -119,7 +119,11 @@ export async function runCopilot(prompt: string, opts: ClaudeOpts = {}): Promise
 
   let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
   try {
-    proc = Bun.spawn([bin, ...prefix, ...argv], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    // windowsHide: this runs from the detached background worker, which has no console to inherit — without
+    // CREATE_NO_WINDOW, spawning node.exe (the copilot loader) pops a visible console window on every review.
+    // Hiding it also gives the copilot process an invisible console its own children (the learn MCP server)
+    // inherit, so nothing flashes on screen. No-op off Windows. Mirrors claude.ts / embed.ts.
+    proc = Bun.spawn([bin, ...prefix, ...argv], { stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true });
   } catch (e) {
     return { ok: false, text: "", error: `spawn failed: ${e instanceof Error ? e.message : String(e)}` };
   }

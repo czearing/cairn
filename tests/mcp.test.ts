@@ -29,9 +29,9 @@ const call = (name: string, args: Record<string, unknown>) =>
   }>;
 const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.text);
 
-test("exposes the brain tools", async () => {
+test("exposes the AGENT-facing tools (skill_output is learner-only, not exposed here)", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_output", "skill_review", "skill_search"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_review", "skill_search"]);
 });
 
 test("brain_create returns a neuron with an id and a viewer url", async () => {

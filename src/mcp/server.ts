@@ -132,42 +132,43 @@ server.tool(
   }
 );
 
-// The LEARNER's submission tool. The learner reasons out loud to judge the run (reasoning makes it sharper
-// and is never suppressed), then hands its finished review here as structured fields. The skill loop reads
-// that JSON (via CAIRN_SKILL_OUTPUT_PATH) instead of parsing the master back out of free text. No-op
-// acknowledgement when no path is set.
-server.tool(
-  "skill_output",
-  "The learner submits its finished review here, ONCE, as the last action after reasoning out loud: the 0..1 quality score, what worked / what failed / one concrete improvement, and the rewritten master prompt a future agent will load. The task's label is already decided and supplied by the loop, so do NOT pass it.",
-  {
-    score: z.number().describe("Quality of the graded output, 0..1."),
-    right: z.string().describe("What the output did well."),
-    wrong: z.string().describe("What the output got wrong or missed."),
-    improve: z.string().describe("One concrete change for next time."),
-    master: z.string().describe("The rewritten master prompt: the numbered steps ONLY (no rationale paragraph). This is the only text injected into the doer."),
-    explanation: z.string().describe("The 2-to-4-sentence rationale for the next reviewer (why the best runs win, what excellent looks like, the failure mode to avoid). Never shown to the doer."),
-  },
-  async ({ score, right, wrong, improve, master, explanation }) => {
-    // The label is the loop's, not the learner's: it was decided before this call by the classifier and
-    // passed in via CAIRN_SKILL_FORCED_LABEL. The learner no longer echoes it, so it can
-    // neither restate nor corrupt it. An empty forced label means a non-task (no skill, empty master ok).
-    const lbl = (process.env.CAIRN_SKILL_FORCED_LABEL ?? "").trim();
-    // Validate hard, then ERROR back so the learner resends correctly, never accept a half-formed review.
-    const problems: string[] = [];
-    if (lbl) {
-      if (!Number.isFinite(score) || score < 0 || score > 1) problems.push("score must be a number in [0,1]");
-      if (!master.trim()) problems.push("master must be a non-empty rewritten prompt (numbered steps) for a labeled task");
-      if (!explanation.trim()) problems.push("explanation must be a non-empty rationale for a labeled task");
-      if (!right.trim() && !wrong.trim() && !improve.trim()) problems.push("provide at least one of right/wrong/improve");
-    } else if (master.trim() || explanation.trim()) {
-      problems.push("master and explanation must be empty when label is empty (a non-task forms no skill)");
+// The LEARNER's submission tool. It is registered ONLY in the learner context (when CAIRN_SKILL_OUTPUT_PATH
+// is set — the background `copilot -p`/`claude -p` learner bakes that env into its own cairn server). The
+// MAIN agent's cairn server has no such env, so skill_output is NEVER exposed to it — the agent uses
+// skill_search / skill_create / skill_review, and can no longer mistakenly call this internal tool.
+if (process.env.CAIRN_SKILL_OUTPUT_PATH) {
+  server.tool(
+    "skill_output",
+    "The learner submits its finished review here, ONCE, as the last action after reasoning out loud: the 0..1 quality score, what worked / what failed / one concrete improvement, and the rewritten master prompt a future agent will load. The task's label is already decided and supplied by the loop, so do NOT pass it.",
+    {
+      score: z.number().describe("Quality of the graded output, 0..1."),
+      right: z.string().describe("What the output did well."),
+      wrong: z.string().describe("What the output got wrong or missed."),
+      improve: z.string().describe("One concrete change for next time."),
+      master: z.string().describe("The rewritten master prompt: the numbered steps ONLY (no rationale paragraph). This is the only text injected into the doer."),
+      explanation: z.string().describe("The 2-to-4-sentence rationale for the next reviewer (why the best runs win, what excellent looks like, the failure mode to avoid). Never shown to the doer."),
+    },
+    async ({ score, right, wrong, improve, master, explanation }) => {
+      // The label is the loop's, not the learner's: it was decided before this call and passed in via
+      // CAIRN_SKILL_FORCED_LABEL. An empty forced label means a non-task (no skill, empty master ok).
+      const lbl = (process.env.CAIRN_SKILL_FORCED_LABEL ?? "").trim();
+      // Validate hard, then ERROR back so the learner resends correctly, never accept a half-formed review.
+      const problems: string[] = [];
+      if (lbl) {
+        if (!Number.isFinite(score) || score < 0 || score > 1) problems.push("score must be a number in [0,1]");
+        if (!master.trim()) problems.push("master must be a non-empty rewritten prompt (numbered steps) for a labeled task");
+        if (!explanation.trim()) problems.push("explanation must be a non-empty rationale for a labeled task");
+        if (!right.trim() && !wrong.trim() && !improve.trim()) problems.push("provide at least one of right/wrong/improve");
+      } else if (master.trim() || explanation.trim()) {
+        problems.push("master and explanation must be empty when label is empty (a non-task forms no skill)");
+      }
+      if (problems.length) return fail(`skill_output rejected, call it again with every field correct: ${problems.join("; ")}`);
+      const p = process.env.CAIRN_SKILL_OUTPUT_PATH;
+      if (p) { try { writeFileSync(p, JSON.stringify({ label: lbl, score, right, wrong, improve, master, explanation })); } catch { /* capture is best-effort */ } }
+      return json({ ok: true });
     }
-    if (problems.length) return fail(`skill_output rejected, call it again with every field correct: ${problems.join("; ")}`);
-    const p = process.env.CAIRN_SKILL_OUTPUT_PATH;
-    if (p) { try { writeFileSync(p, JSON.stringify({ label: lbl, score, right, wrong, improve, master, explanation })); } catch { /* capture is best-effort */ } }
-    return json({ ok: true });
-  }
-);
+  );
+}
 
 // The SEGMENTER's submission tool has been removed: the agent now declares the skill directly (skill_search /
 // skill_create + skill_review), so the reviewer never classifies a turn and no segmentation is needed.

@@ -2,7 +2,7 @@ Run this on every task, including trivial/creative ones (yes, a haiku). Reason: 
 
 # Instructions
 ## Reuse learned skills
-Before acting, call `skill_search` for curated steps from past runs. If one fits, follow its steps; if several are close, pick the best. If none fit call `skill_create` with a short new label. When you finish the task, call `skill_review` with that skill's label so the result is graded and the skill improves for future agents.
+Before acting, call `skill_search` for curated steps from past runs. If one fits, follow its steps; if several are close, pick the best. If none fit, call `skill_create` to mint one and get its `id`. Do the work, then **write your complete final result to the user**. ONLY AFTER that finished answer is delivered — as the very last action of your turn — call `skill_review` with that skill's `id`. Calling `skill_review` starts a background grader that reads the whole turn UP TO that call, so if you review before you deliver, it grades an empty, unfinished turn. The order is always: deliver the result first, `skill_review` last.
 
 ## Read the Shared Brain First
 1. Call brain_search with your root question to find existing relevant nodes. For creative tasks DO NOT repeat existing outputs.

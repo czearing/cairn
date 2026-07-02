@@ -135,7 +135,7 @@ server.tool(
 // skill_review(id). Creating up front makes the new skill discoverable to other sessions immediately.
 server.tool(
   "skill_create",
-  "Create a NEW skill when skill_search returned nothing that fits your task, or nothing specific enough. Give it a short label (1-4 lowercase words) naming the KIND of task by what it produces (e.g. 'short story', 'pr review', 'flaky test debug'). Returns the new skill's `id`; do the work, then call skill_review with that `id` so the first version is graded and its master is written.",
+  "Create a NEW skill when skill_search returned nothing that fits your task, or nothing specific enough. Give it a short label (1-4 lowercase words) naming the KIND of task by what it produces (e.g. 'short story', 'pr review', 'flaky test debug'). Returns the new skill's `id`; do the work, deliver the finished result to the user, and THEN (as your last action) call skill_review with that `id` so the completed first version is graded and its master is written.",
   { label: z.string().describe("A short label (1-4 lowercase words) naming the task by what it produces.") },
   async ({ label }) => {
     if (!label.trim()) return fail("label is required");
@@ -189,12 +189,14 @@ if (process.env.CAIRN_SKILL_OUTPUT_PATH) {
 // did — it reused a skill it found with skill_search, or minted one with skill_create — so it declares that
 // skill's ID here and the reviewer's only job is to grade this deliverable against that skill and iterate its
 // master. Referencing the concrete id (not a re-typed label) means the run can never drift onto a near-
-// duplicate. Calling it AFTER a subagent has returned means the finished artifact (not a "still running"
-// status) is what gets reviewed. The tool validates the id and acknowledges; the host's postToolUse hook reads
-// the id and reviews the whole turn log, so this is a no-op when skills are off or run outside a hooked host.
+// duplicate. TIMING MATTERS: the postToolUse hook fires the learner immediately over the transcript UP TO this
+// call, so the agent must DELIVER its finished result first and call skill_review last (and, if it delegated,
+// only after the subagent has returned) — otherwise the grader sees an unfinished turn with no deliverable.
+// The tool validates the id and acknowledges; the host's postToolUse hook reads the id and reviews the whole
+// turn log, so this is a no-op when skills are off or run outside a hooked host.
 server.tool(
   "skill_review",
-  "Call this when a REUSABLE deliverable is finished, to grade it and improve the skill it belongs to. Pass the `id` of that skill — the id you got back from skill_search (reusing an existing skill) or from skill_create (a new one). If you delegated the work, call it only AFTER the subagent has RETURNED. Call it once per finished deliverable. Do NOT call it for chit-chat, a question, or a status update.",
+  "Call this as your LAST action of the turn, AFTER you have already written the finished deliverable to the user — it starts a background grader that reads the whole turn UP TO this call, so reviewing before you deliver grades an empty, unfinished turn. Pass the `id` of the skill this deliverable belongs to (from skill_search when reusing, or skill_create for a new one). If you delegated the work, call it only AFTER the subagent has RETURNED. Call it once per finished deliverable; never for chit-chat, a question, or a status update.",
   {
     id: z.string().describe("The id of the skill this deliverable belongs to, as returned by skill_search or skill_create."),
   },

@@ -144,6 +144,24 @@ server.tool(
   }
 );
 
+// Agent-facing DIRECT refinement. Lets the agent fix a skill's master the moment it learns a better way —
+// classically, the user says "that was wrong, do X next time" — so the correction lands in the master
+// immediately and the very next run uses it, instead of waiting for the background grader to catch up.
+server.tool(
+  "skill_edit",
+  "Refine a skill's master prompt directly when you've learned to do it better — e.g. the user corrected you. Pass the skill `id` (from skill_search) and the rewritten master (numbered imperative steps only). Folds the fix in immediately so the next run uses it, without waiting for the background grader.",
+  {
+    id: z.string().describe("The id of the skill to refine (from skill_search or skill_create)."),
+    master: z.string().describe("The rewritten master: numbered imperative steps only, no rationale/preamble."),
+    explanation: z.string().optional().describe("Optional rationale for the next reviewer (why this is better); never shown to the doer."),
+  },
+  async ({ id, master, explanation }) => {
+    const { skillEdit } = await import("../skill/hook");
+    const r = await skillEdit(id, master, explanation);
+    return r.ok ? json(r) : fail(r.error || "skill_edit failed");
+  }
+);
+
 // The LEARNER's submission tool. It is registered ONLY in the learner context (when CAIRN_SKILL_OUTPUT_PATH
 // is set — the background `copilot -p`/`claude -p` learner bakes that env into its own cairn server). The
 // MAIN agent's cairn server has no such env, so skill_output is NEVER exposed to it — the agent uses

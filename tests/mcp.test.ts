@@ -31,7 +31,7 @@ const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.t
 
 test("exposes the AGENT-facing tools (skill_output is learner-only, not exposed here)", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_review", "skill_search"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_edit", "skill_review", "skill_search"]);
 });
 
 test("brain_create returns a neuron with an id and a viewer url", async () => {
@@ -204,4 +204,14 @@ test("skill_create mints a new skill (idempotent, returns its id) and skill_revi
   expect(parse(rev)).toMatchObject({ ok: true }); // acknowledge only; the id rides via the host hook
   const bad = await call("skill_review", { id: "does-not-exist" });
   expect(bad.isError).toBe(true); // an unknown id is rejected, never silently accepted (no drift onto a junk skill)
+});
+
+test("skill_edit rewrites a skill's master directly (agent-driven fix, no grader needed)", async () => {
+  const created = parse(await call("skill_create", { label: "flash edit" }));
+  const ok = parse(await call("skill_edit", { id: created.id, master: "1. do the thing better\n2. verify the result" }));
+  expect(ok).toMatchObject({ ok: true, id: created.id, task: "flash edit" });
+  const bad = await call("skill_edit", { id: "no-such-id", master: "1. x" });
+  expect(bad.isError).toBe(true); // unknown id rejected
+  const found = parse(await call("skill_search", { task: "flash edit" }));
+  expect(JSON.stringify(found.matches)).toContain("do the thing better"); // the new master is stored + retrievable
 });

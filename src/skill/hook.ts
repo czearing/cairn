@@ -75,6 +75,27 @@ export async function skillCreate(label: string): Promise<{ created: boolean; id
   } catch { return { created: false, id: "", label: label.trim() }; }
 }
 
+// Agent-facing skill refinement (the skill_edit MCP tool). Lets the agent rewrite a skill's master prompt
+// directly — e.g. right after the user corrects it — folding the fix in IMMEDIATELY instead of waiting for
+// the background grader. Records a new version and reindexes retrieval. No-op-safe when the skill layer is off
+// or the id is unknown.
+export async function skillEdit(id: string, master: string, explanation?: string): Promise<{ ok: boolean; id: string; task: string; error?: string }> {
+  if (!skillsEnabled()) return { ok: false, id, task: "", error: "skills are disabled" };
+  if (!id.trim()) return { ok: false, id, task: "", error: "id is required" };
+  if (!master.trim()) return { ok: false, id, task: "", error: "master is required" };
+  try {
+    const { getSkill, setMasterPrompt, addVersion, topRuns } = await import("./store");
+    const s = getSkill(id.trim());
+    if (!s) return { ok: false, id, task: "", error: "unknown skill id" };
+    const now = Date.now();
+    const expl = (explanation ?? "").trim() || s.explanation || "";
+    setMasterPrompt(s.id, master, expl);
+    addVersion(s.id, master, expl, topRuns(s.id, 1)[0]?.quality ?? 0, now); // timeline entry for the manual edit
+    try { const { reindexSkill } = await import("./match"); await reindexSkill(s.id, s.task, master); } catch { /* embedder down: keep the existing vector */ }
+    return { ok: true, id: s.id, task: s.task };
+  } catch (e) { return { ok: false, id, task: "", error: e instanceof Error ? e.message : String(e) }; }
+}
+
 // True only when the skill layer is on AND at least one skill exists, so the search-first reminder never fires
 // on a fresh/empty store (there would be nothing to find).
 export function skillsExist(): boolean {

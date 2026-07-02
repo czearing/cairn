@@ -44,10 +44,10 @@ Every node is an open question. If a node can be answered yes or no, it is too c
 - The drafts may only be created after all subsequent research has been created.
 
 # Output (MANDATORY)
-1. The root node answer as your final synthesis.
-2. Explanation of why there are no more questions to explore.
-3. How you tested your conclusion and how you are certain it is the highest quality possible.
-4. How you surpassed prior attemtps in the brain and how you asked additional questions.
-5. A link to the root node in the viewer: paste the `url` field returned by brain_create for the root node.
+Show your work, then hand over a clean result — the deliverable must never be buried:
 
-After ALL output is done call `skill_review`
+1. SHOW THE DECOMPOSITION (this is the point — keep it visible). As you go, surface the questions/nodes you created and why you split them that way, what the brain already held, and how you surpass it. Seeing how the problem was decomposed is essential, helpful debug information — do not hide it.
+
+2. END WITH THE DELIVERABLE, ALONE. Your FINAL message must be the finished result and nothing else — the three haiku lines by themselves, the answer, the code — with NO preamble, NO "how I tested / how I surpassed" self-grade, and NO localhost node URL trailing it. A reader must be able to copy the result straight off the bottom of the reply. That self-assessment belongs in the BRAIN: set it as the root node's answer via brain_mutate, not in the chat.
+
+3. THEN, as your last action, call `skill_review`.

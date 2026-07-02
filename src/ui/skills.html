@@ -216,16 +216,18 @@ function renderModal() {
   modalKey = key;
   const scores = s.runs.map((r) => r.quality), last = scores.length ? scores[scores.length - 1] : null, vs = s.versions || [];
   const runs = s.runs.slice().reverse().map((r) => `<div class="run"><div class="runtop"><span class="chip ${tier(r.quality)}">${r.quality.toFixed(2)}</span><span class="when" title="${fullTs(r.ts)}">${rel(r.ts)}</span></div>${reviewLines(rev(r.review))}</div>`).join("");
-  const latest = vs.length >= 2 ? `<div class="sect">what changed &middot; v${vs.length - 1} &rarr; v${vs.length}</div>${renderDiff(vs[vs.length - 2].master, vs[vs.length - 1].master)}`
-    : `<div class="sect">version history</div><div class="muted" style="font-size:13px">v1 &middot; initial master, no earlier version to diff yet</div>`;
+  // Lead with the CURRENT master prompt (what a future agent actually loads) — that is what you want to read
+  // when you open a skill. The version-to-version diff is secondary, tucked into a collapsible below it.
+  const masterBlock = `<div class="sect">current master prompt</div><pre>${esc(s.masterPrompt || "(no master yet — first run pending)")}</pre>`;
+  const diffBlock = vs.length >= 2 ? `<details class="more"><summary>what changed &middot; v${vs.length - 1} &rarr; v${vs.length}</summary>${renderDiff(vs[vs.length - 2].master, vs[vs.length - 1].master)}</details>` : "";
   const history = vs.length >= 3 ? `<details class="more"><summary>full history &middot; ${vs.length} versions</summary>${vs.map((v, i) => ({ ...v, n: i + 1 })).reverse().map((v) => `<div class="version"><div class="vhead"><span class="chip ${tier(v.score || 0)}">${(v.score || 0).toFixed(2)}</span><b>v${v.n}</b><span class="when">${rel(v.ts)}</span></div>${v.explanation ? `<div class="why" style="margin-top:5px">${esc(v.explanation)}</div>` : ""}${vs[v.n - 2] ? `<details class="more"><summary>diff v${v.n - 1} &rarr; v${v.n}</summary>${renderDiff(vs[v.n - 2].master, v.master)}</details>` : ""}</div>`).join("")}</details>` : "";
-  el.innerHTML = `<div class="backdrop" data-close="1"><div class="modal" role="dialog" aria-modal="true">
+  el.innerHTML = `<div class="backdrop"><div class="modal" role="dialog" aria-modal="true">
     <div class="mhead"><span class="chip ${last != null ? tier(last) : ""}">${last != null ? last.toFixed(2) : "—"}</span><span class="mtitle">${esc(s.task)}</span><span class="sub">${s.runs.length} run${s.runs.length === 1 ? "" : "s"}</span><button class="mclose" data-close="1" aria-label="close">×</button></div>
     <div class="mbody">
-      ${latest}
+      ${masterBlock}
+      ${diffBlock}
       ${s.explanation ? `<details class="more"><summary>why this works</summary><div class="why">${esc(s.explanation)}</div></details>` : ""}
       ${s.runs.length ? `<details class="more"><summary>runs &middot; what worked / what didn't &middot; ${s.runs.length}</summary>${runs}</details>` : ""}
-      ${s.masterPrompt ? `<details class="more"><summary>current master prompt</summary><pre>${esc(s.masterPrompt)}</pre></details>` : ""}
       ${history}
       <div class="delrow"><button class="del" data-del="${esc(s.id)}" data-name="${esc(s.task)}">delete skill</button></div>
     </div></div></div>`;
@@ -249,7 +251,8 @@ function openSkill(id) { modalId = id; renderModal(); }
 function closeModal() { modalId = null; renderModal(); }
 document.addEventListener("click", async (e) => {
   const t = e.target.closest("[data-tab]"); if (t) { tab = t.dataset.tab; listKey = ""; renderTabs(); renderList(); return; }
-  if (e.target.closest("[data-close]")) { closeModal(); return; }
+  if (e.target.closest("[data-close]")) { closeModal(); return; } // the × button
+  if (e.target.classList && e.target.classList.contains("backdrop")) { closeModal(); return; } // a click on the dim area ONLY (not bubbled from inside the modal)
   const del = e.target.closest("[data-del]"); if (del) {
     e.preventDefault();
     if (!confirm(`Delete skill "${del.dataset.name}"?\nThis removes its master prompt, all runs, and version history.`)) return;

@@ -2,7 +2,7 @@ Run this on every task, including trivial/creative ones (yes, a haiku). Reason: 
 
 # Instructions
 ## Reuse learned skills
-Before acting, call `skill_search`. If a skill fits, follow its steps; if none fits, `skill_create` to get an `id`. Do the work, deliver the result, then — as your LAST action — call `skill_review` with that `id`. It grades the turn up to the call, so reviewing before you deliver grades nothing.
+Before acting, call `skill_search` for curated steps from past runs. If one fits, follow its steps; if several are close, pick the best. If none fit call `skill_create` with a short new label. When you finish the task, call `skill_review` with that skill's label so the result is graded and the skill improves for future agents.
 
 ## Read the Shared Brain First
 1. Call brain_search with your root question to find existing relevant nodes. For creative tasks DO NOT repeat existing outputs.
@@ -44,6 +44,10 @@ Every node is an open question. If a node can be answered yes or no, it is too c
 - The drafts may only be created after all subsequent research has been created.
 
 # Output (MANDATORY)
-1. Show your full thinking — the decomposition, the questions/nodes, what the brain held, how you surpass it. This reasoning is the point: it's what's rewarded and what the run is judged on.
-2. Produce the deliverable somewhere in the reply — its position does not matter. Keep the synthesis/self-grade in the brain (root node answer).
-3. Then call `skill_review` last.
+1. The root node answer as your final synthesis.
+2. Explanation of why there are no more questions to explore.
+3. How you tested your conclusion and how you are certain it is the highest quality possible.
+4. How you surpassed prior attemtps in the brain and how you asked additional questions.
+5. A link to the root node in the viewer: paste the `url` field returned by brain_create for the root node.
+
+After ALL output is done call `skill_review`

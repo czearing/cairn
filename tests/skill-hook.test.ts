@@ -248,7 +248,8 @@ test("skill_search returns several candidate masters plus the catalog, so the ag
   const labels = res.matches.map((m) => m.task);
   expect(labels).toContain("short story");                         // the writer surfaces as a candidate...
   expect(labels).toContain("short story review");                  // ...alongside the near-duplicate, for the agent to pick
-  expect(res.catalog.some((c) => c.startsWith("short story"))).toBe(true); // the full catalog rides along
+  expect(res.matches.every((m) => typeof m.id === "string" && m.id.length > 0)).toBe(true); // each match carries its id, so the agent reuses it by id
+  expect(res.catalog.some((c) => c.label === "short story" && typeof c.id === "string" && c.id.length > 0)).toBe(true); // the full catalog rides along, each with an id
 });
 
 test("skillsExist is false on an empty store, true once a skill exists (gates the search-first reminder)", async () => {

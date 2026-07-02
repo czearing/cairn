@@ -122,9 +122,9 @@ async function main(): Promise<void> {
       if (event.kind === "user_message") { resetSkillTurn(session); await skillInject(event.text, session); }
       else if (event.kind === "turn_finished") { resetSkillTurn(session); } // learning is agent-driven (skill_review), not auto at turn end
       else if (event.kind === "tool_completed" && isSkillReview(event.tool)) {
-        // The agent declared a finished deliverable for a skill: learn over this turn's transcript, graded against that label.
-        const label = typeof event.input.label === "string" ? event.input.label : "";
-        skillLearn((payload as { transcript_path?: string }).transcript_path, label);
+        // The agent declared a finished deliverable for a skill: learn over this turn's transcript, graded against that skill id.
+        const id = typeof event.input.id === "string" ? event.input.id : "";
+        skillLearn((payload as { transcript_path?: string }).transcript_path, id);
       }
       else if (event.kind === "tool_completed" && isSkillSearch(event.tool)) noteSkillSearched(session);
       else if (event.kind === "tool_pending" && isActionTool(event.tool) && skillsExist() && claimSkillReminder(session)) {

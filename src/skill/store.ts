@@ -108,17 +108,15 @@ export function skillLabels(): string[] {
   return (db().query("SELECT task FROM skills").all() as { task: string }[]).map((r) => r.task);
 }
 
-/** Every skill as a `label — one-line gist` line, so the classifier (an LLM) can see WHAT each existing skill
- *  is and decide reuse-vs-new itself, instead of a cosine threshold guessing redundancy. The gist is the first
- *  line of the master (what the skill produces), falling back to the explanation. Capped so the prompt stays
- *  small. */
-export function skillCatalog(): string[] {
+/** Every skill as `{id, label, gist}`, so the agent can see WHAT each existing skill is AND has its stable
+ *  `id` to reuse it (skill_review takes the id, never a re-typed label). The gist is the first line of the
+ *  master (what the skill produces), falling back to the explanation. Capped so the prompt stays small. */
+export function skillCatalog(): { id: string; label: string; gist: string }[] {
   ensure();
-  const rows = db().query("SELECT task, master_prompt, explanation FROM skills").all() as { task: string; master_prompt: string; explanation: string }[];
+  const rows = db().query("SELECT id, task, master_prompt, explanation FROM skills").all() as { id: string; task: string; master_prompt: string; explanation: string }[];
   return rows.map((r) => {
     const firstLine = (r.master_prompt || "").split("\n").map((l) => l.trim()).find((l) => l.length > 0);
-    const gist = (firstLine || r.explanation || "").slice(0, 140);
-    return gist ? `${r.task}: ${gist}` : r.task;
+    return { id: r.id, label: r.task, gist: (firstLine || r.explanation || "").slice(0, 140) };
   });
 }
 

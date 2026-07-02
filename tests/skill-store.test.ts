@@ -66,12 +66,12 @@ test("listSkills includes the master-version timeline", () => {
   expect(sk.versions[0]!.master).toBe("A"); // oldest first
 });
 
-test("skillCatalog lists each skill as 'label: gist' from the master's first line", () => {
+test("skillCatalog lists each skill as {id, label, gist} from the master's first line", () => {
   putSkill({ id: "c1", task: "haiku", masterPrompt: "1. count 5-7-5 syllables\n2. sharpen the cut", ts: 1 }, [1, 0]);
   putSkill({ id: "c2", task: "blank", masterPrompt: "", ts: 2 }, [0, 1]);
   const cat = skillCatalog();
-  expect(cat).toContain("haiku: 1. count 5-7-5 syllables"); // gist = first non-empty master line
-  expect(cat).toContain("blank");                            // no master -> bare label, never crashes
+  expect(cat).toContainEqual({ id: "c1", label: "haiku", gist: "1. count 5-7-5 syllables" }); // gist = first non-empty master line
+  expect(cat).toContainEqual({ id: "c2", label: "blank", gist: "" });                          // no master -> empty gist, never crashes
 });
 
 test("putSkill/getSkill round-trips, vector decodes back", () => {

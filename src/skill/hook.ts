@@ -47,30 +47,32 @@ export async function skillInject(text: string, _sessionId?: string): Promise<st
 }
 
 // Agent-facing skill retrieval. The agent calls this (via the skill_search MCP tool) with a description of the
-// task it is about to do; it gets back the top matching skills WITH their full step lists, plus the full
-// catalog of skill labels, and PICKS the right one itself. Returning several candidates (not one) is what fixes
-// the near-duplicate mispick: a "write a story" query surfaces both "short story" and "short story review", and
-// the agent follows the writer. Empty when the skill layer is off or the store is empty.
-export async function skillSearch(query: string): Promise<{ matches: { task: string; steps: string }[]; catalog: string[] }> {
+// task it is about to do; it gets back the top matching skills WITH their id + full step list, plus the full
+// catalog of skills (each with its id). The agent PICKS the one that fits and reuses it by passing its id to
+// skill_review — never a re-typed label. Returning several candidates (not one) fixes the near-duplicate
+// mispick: a "write a story" query surfaces both "short story" and "short story review", and the agent follows
+// the writer. Empty when the skill layer is off or the store is empty.
+export async function skillSearch(query: string): Promise<{ matches: { id: string; task: string; steps: string }[]; catalog: { id: string; label: string; gist: string }[] }> {
   if (!skillsEnabled() || !query.trim()) return { matches: [], catalog: [] };
   try {
     const matches = (await retrieveSkills(query, 3))
       .filter((m) => m.skill.masterPrompt.trim())
-      .map((m) => ({ task: m.skill.task, steps: m.skill.masterPrompt }));
+      .map((m) => ({ id: m.skill.id, task: m.skill.task, steps: m.skill.masterPrompt }));
     return { matches, catalog: skillCatalog() };
   } catch { return { matches: [], catalog: [] }; }
 }
 
 // Agent-facing skill creation (the skill_create MCP tool). Mints a new skill for `label` when skill_search
-// found nothing that fits, so the agent can then iterate it with skill_review. Idempotent: an existing label
-// is returned as created:false. No-op-safe (returns created:false) when the skill layer is off.
-export async function skillCreate(label: string): Promise<{ created: boolean; label: string }> {
-  if (!skillsEnabled() || !label.trim()) return { created: false, label: label.trim() };
+// found nothing that fits, and returns its `id` so the agent can iterate it with skill_review(id). Idempotent:
+// an existing (normalized) label returns the SAME id with created:false. No-op-safe (created:false, empty id)
+// when the skill layer is off.
+export async function skillCreate(label: string): Promise<{ created: boolean; id: string; label: string }> {
+  if (!skillsEnabled() || !label.trim()) return { created: false, id: "", label: label.trim() };
   try {
     const { categorize } = await import("./match");
     const { skill, created } = await categorize(label, Date.now());
-    return { created, label: skill.task };
-  } catch { return { created: false, label: label.trim() }; }
+    return { created, id: skill.id, label: skill.task };
+  } catch { return { created: false, id: "", label: label.trim() }; }
 }
 
 // True only when the skill layer is on AND at least one skill exists, so the search-first reminder never fires
@@ -81,11 +83,11 @@ export function skillsExist(): boolean {
 }
 
 // Fire the background learner over a finished turn's transcript, for the skill the agent DECLARED via
-// skill_review. `label` is that skill (a new label auto-creates it). Returns whether it fired.
-export function skillLearn(transcriptPath: string | undefined, label: string): boolean {
-  if (!skillsEnabled() || !transcriptPath || !label.trim()) return false;
+// skill_review. `skillId` is the id of that skill (from skill_search or skill_create). Returns whether it fired.
+export function skillLearn(transcriptPath: string | undefined, skillId: string): boolean {
+  if (!skillsEnabled() || !transcriptPath || !skillId.trim()) return false;
   process.env.CAIRN_LEARN_BACKEND = "claude"; // Claude host: parse the Claude transcript AND grade via `claude -p`
-  try { return learnFromTranscript(transcriptPath, label); } catch { return false; }
+  try { return learnFromTranscript(transcriptPath, skillId); } catch { return false; }
 }
 
 // For brain_search to piggyback: the matching skills as a small structured blob (capped), or [] when

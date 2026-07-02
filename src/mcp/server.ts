@@ -109,7 +109,7 @@ server.tool(
 // full context, which a cosine auto-injection cannot. Returns empty arrays when the skill layer is off/empty.
 server.tool(
   "skill_search",
-  "Search your LEARNED SKILLS before doing a task. Returns curated, step-by-step process masters distilled from past runs of similar tasks, plus the catalog of every skill. Call this FIRST with a short description of the task you are about to do; if a returned skill matches, FOLLOW its steps instead of redoing the work from scratch. This is how you reuse hard-won process.",
+  "Search your LEARNED SKILLS before doing a task. Returns matching skills (each with an `id` and its curated step-by-step master), plus the catalog of every skill (each with an `id`). Call this FIRST with a short description of the task you are about to do; if a returned skill matches, FOLLOW its steps and remember its `id` to pass to skill_review. This is how you reuse hard-won process.",
   { task: z.string().describe("A short description of the task you are about to do (e.g. 'write a short story', 'review a PR', 'debug a flaky test').") },
   async ({ task }) => {
     const { skillSearch } = await import("../skill/hook");
@@ -118,13 +118,12 @@ server.tool(
 );
 
 // Agent-facing skill creation. When skill_search turns up nothing that fits (or nothing SPECIFIC enough), the
-// agent mints a new skill with this tool, does the work, then iterates it with skill_review. Creating up front
-// makes the new skill discoverable to other sessions immediately; skill_review would also auto-create, so this
-// is the explicit "none of the existing skills fit, this is its own thing" declaration.
+// agent mints a new skill with this tool and gets back its `id`, does the work, then iterates it with
+// skill_review(id). Creating up front makes the new skill discoverable to other sessions immediately.
 server.tool(
   "skill_create",
-  "Create a NEW skill when skill_search returned nothing that fits your task, or nothing specific enough. Give it a short reusable label (1-4 lowercase words) naming the KIND of task by what it produces (e.g. 'short story', 'pr review', 'flaky test debug'). Then do the work and call skill_review with the SAME label so the first version is graded and its master is written.",
-  { label: z.string().describe("A short reusable label (1-4 lowercase words) naming the task by what it produces.") },
+  "Create a NEW skill when skill_search returned nothing that fits your task, or nothing specific enough. Give it a short label (1-4 lowercase words) naming the KIND of task by what it produces (e.g. 'short story', 'pr review', 'flaky test debug'). Returns the new skill's `id`; do the work, then call skill_review with that `id` so the first version is graded and its master is written.",
+  { label: z.string().describe("A short label (1-4 lowercase words) naming the task by what it produces.") },
   async ({ label }) => {
     if (!label.trim()) return fail("label is required");
     const { skillCreate } = await import("../skill/hook");
@@ -173,21 +172,25 @@ if (process.env.CAIRN_SKILL_OUTPUT_PATH) {
 // The SEGMENTER's submission tool has been removed: the agent now declares the skill directly (skill_search /
 // skill_create + skill_review), so the reviewer never classifies a turn and no segmentation is needed.
 
-// The AGENT's "this deliverable is finished, review it as skill <label>" signal. The agent knows what it just
-// did — it reused a skill it found with skill_search, or minted one with skill_create — so it declares the
-// label here and the reviewer's only job is to grade this deliverable against that skill and iterate its
-// master. Calling it AFTER a subagent has returned means the finished artifact (not a "still running" status)
-// is what gets reviewed. The tool only acknowledges; the host's postToolUse hook reads the label and reviews
-// the whole turn log, so this is a no-op when skills are off or run outside a hooked host.
+// The AGENT's "this deliverable is finished, review it as skill <id>" signal. The agent knows what it just
+// did — it reused a skill it found with skill_search, or minted one with skill_create — so it declares that
+// skill's ID here and the reviewer's only job is to grade this deliverable against that skill and iterate its
+// master. Referencing the concrete id (not a re-typed label) means the run can never drift onto a near-
+// duplicate. Calling it AFTER a subagent has returned means the finished artifact (not a "still running"
+// status) is what gets reviewed. The tool validates the id and acknowledges; the host's postToolUse hook reads
+// the id and reviews the whole turn log, so this is a no-op when skills are off or run outside a hooked host.
 server.tool(
   "skill_review",
-  "Call this when a REUSABLE deliverable is finished, to grade it and improve the skill it belongs to. Pass the `label` of that skill — the one you reused from skill_search, or created with skill_create (a new label auto-creates the skill). If you delegated the work, call it only AFTER the subagent has RETURNED. Call it once per finished deliverable. Do NOT call it for chit-chat, a question, or a status update.",
+  "Call this when a REUSABLE deliverable is finished, to grade it and improve the skill it belongs to. Pass the `id` of that skill — the id you got back from skill_search (reusing an existing skill) or from skill_create (a new one). If you delegated the work, call it only AFTER the subagent has RETURNED. Call it once per finished deliverable. Do NOT call it for chit-chat, a question, or a status update.",
   {
-    label: z.string().describe("The skill this deliverable belongs to (1-4 lowercase words), e.g. 'short story', 'pr review'. Reuse the label you got from skill_search/skill_create; a new label creates the skill."),
+    id: z.string().describe("The id of the skill this deliverable belongs to, as returned by skill_search or skill_create."),
   },
-  async () => {
+  async ({ id }) => {
+    if (!id.trim()) return fail("id is required (pass the skill id from skill_search or skill_create)");
+    const { getSkill } = await import("../skill/store");
+    if (!getSkill(id.trim())) return fail("unknown skill id; pass an id returned by skill_search or skill_create");
     // The transcript path lives with the host hook, not here, so this tool cannot fire the learner itself; it
-    // just acknowledges. The postToolUse hook sees this call, reads the label, and reviews the turn log.
+    // just acknowledges. The postToolUse hook sees this call, reads the id, and reviews the turn log.
     return json({ ok: true });
   }
 );

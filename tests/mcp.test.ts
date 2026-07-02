@@ -192,14 +192,16 @@ test("skill_output bakes in the loop's forced label and HARD-rejects incomplete 
   }
 });
 
-test("skill_create mints a new skill (idempotent) and skill_review acknowledges the declared label", async () => {
-  const created = await call("skill_create", { label: "Flash Fiction" });
-  expect(JSON.parse(created.content[0]!.text)).toMatchObject({ created: true, label: "Flash Fiction" }); // task keeps original casing
-  const again = await call("skill_create", { label: "flash fiction" });
-  expect(JSON.parse(again.content[0]!.text)).toMatchObject({ created: false }); // idempotent: same normalized label
+test("skill_create mints a new skill (idempotent, returns its id) and skill_review acks a valid id", async () => {
+  const created = parse(await call("skill_create", { label: "Flash Fiction" }));
+  expect(created).toMatchObject({ created: true, label: "Flash Fiction" }); // task keeps original casing
+  expect(typeof created.id).toBe("string");
+  expect(created.id.length).toBeGreaterThan(0);
+  const again = parse(await call("skill_create", { label: "flash fiction" }));
+  expect(again).toMatchObject({ created: false, id: created.id }); // idempotent: same normalized label -> same id
 
-  const rev = await call("skill_review", { label: "flash fiction" });
-  expect(JSON.parse(rev.content[0]!.text)).toMatchObject({ ok: true }); // acknowledge only; the label rides via the host hook
-  const bare = await call("skill_review", { label: "haiku" });
-  expect(JSON.parse(bare.content[0]!.text)).toMatchObject({ ok: true });
+  const rev = await call("skill_review", { id: created.id });
+  expect(parse(rev)).toMatchObject({ ok: true }); // acknowledge only; the id rides via the host hook
+  const bad = await call("skill_review", { id: "does-not-exist" });
+  expect(bad.isError).toBe(true); // an unknown id is rejected, never silently accepted (no drift onto a junk skill)
 });

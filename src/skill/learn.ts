@@ -38,12 +38,12 @@ function activeLearners(): number {
   } catch { return 0; }
 }
 
-// Fire-and-forget the learner over a turn's transcript for the agent-DECLARED skill `label`, detached. No-op
-// (false) inside a worker (loop guard), with no transcript or label, or when the concurrency cap is reached.
-// Never throws. The label rides to the worker as env; the lock file is created here (so the count is
+// Fire-and-forget the learner over a turn's transcript for the agent-DECLARED skill `skillId`, detached. No-op
+// (false) inside a worker (loop guard), with no transcript or id, or when the concurrency cap is reached.
+// Never throws. The id rides to the worker as env; the lock file is created here (so the count is
 // accurate immediately) and removed by the worker on exit.
-export function learnFromTranscript(transcriptPath: string, label: string): boolean {
-  if (isSkillWorker() || !transcriptPath || !label.trim()) return false;
+export function learnFromTranscript(transcriptPath: string, skillId: string): boolean {
+  if (isSkillWorker() || !transcriptPath || !skillId.trim()) return false;
   if (activeLearners() >= MAX_LEARNERS()) return false; // too many running: skip this turn, a later one re-learns
   const lock = join(LEARNERS_DIR(), `${randomUUID()}.lock`);
   try { mkdirSync(LEARNERS_DIR(), { recursive: true }); writeFileSync(lock, String(Date.now())); } catch { /* proceed without a lock */ }
@@ -56,8 +56,8 @@ export function learnFromTranscript(transcriptPath: string, label: string): bool
       windowsHide: true, // no console window pops up on Windows (the detached worker is invisible)
       // CAIRN_SKILL_WORKER blocks recursion; CAIRN_READONLY is cleared because the worker WRITES skills
       // (the hook that spawns it runs read-only). CAIRN_LEARNER_LOCK tells the worker which lock to release.
-      // CAIRN_REVIEW_LABEL carries the agent-declared skill the worker grades against.
-      env: { ...process.env, CAIRN_SKILL_WORKER: "1", CAIRN_READONLY: "", CAIRN_LEARNER_LOCK: lock, CAIRN_REVIEW_LABEL: label },
+      // CAIRN_REVIEW_ID carries the id of the agent-declared skill the worker grades against.
+      env: { ...process.env, CAIRN_SKILL_WORKER: "1", CAIRN_READONLY: "", CAIRN_LEARNER_LOCK: lock, CAIRN_REVIEW_ID: skillId },
     });
     child.unref(); // let the parent (the Stop hook) exit immediately
     return true;

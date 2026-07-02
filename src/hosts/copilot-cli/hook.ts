@@ -155,18 +155,18 @@ function parsePayload(raw: string): Payload {
   }
 }
 
-// Fire the background skill learner over a finished turn's transcript for the agent-DECLARED skill `label`,
+// Fire the background skill learner over a finished turn's transcript for the agent-DECLARED skill `skillId`,
 // best-effort. Tags the worker with CAIRN_LEARN_BACKEND=copilot so it parses Copilot's events.jsonl and grades
-// via `copilot -p`. Returns true only when a worker was actually spawned (skills on, transcript+label present,
+// via `copilot -p`. Returns true only when a worker was actually spawned (skills on, transcript+id present,
 // under the concurrency cap). Never throws or blocks.
-async function fireLearner(transcriptPath: string, label: string): Promise<boolean> {
-  if (!transcriptPath || !label.trim()) return false;
+async function fireLearner(transcriptPath: string, skillId: string): Promise<boolean> {
+  if (!transcriptPath || !skillId.trim()) return false;
   try {
     const { skillsEnabled } = await import("../../core/config");
     if (!skillsEnabled()) return false;
     process.env.CAIRN_LEARN_BACKEND = "copilot"; // the worker inherits this and picks the Copilot path
     const { learnFromTranscript } = await import("../../skill/learn");
-    return learnFromTranscript(transcriptPath, label);
+    return learnFromTranscript(transcriptPath, skillId);
   } catch {
     return false; // skills are best-effort
   }
@@ -267,14 +267,14 @@ async function main(): Promise<void> {
     // the agentStop gate enforces.
     if (isTool(toolName, "skill_search") || isTool(toolName, "skill_create")) st.skillUsed = true;
 
-    // The agent DECLARED a finished deliverable for skill `label`. Review the WHOLE turn log NOW (it already
+    // The agent DECLARED a finished deliverable for skill `id`. Review the WHOLE turn log NOW (it already
     // holds any subagent's output, which a turn-end fire could miss when the work was backgrounded). Each
-    // skill_review fires its own learner (a turn with two deliverables = two calls, two labels); mark reviewed
+    // skill_review fires its own learner (a turn with two deliverables = two calls, two ids); mark reviewed
     // so agentStop does not nag, and skillUsed so the gate is satisfied.
     if (isTool(toolName, "skill_review")) {
-      const label = typeof args.label === "string" ? args.label : "";
+      const id = typeof args.id === "string" ? args.id : "";
       st.skillUsed = true;
-      if (await fireLearner(eventsPathForSession(sessionId), label)) st.reviewed = true;
+      if (await fireLearner(eventsPathForSession(sessionId), id)) st.reviewed = true;
     }
 
     const answer = typeof args.answer === "string" ? args.answer : "";

@@ -2,7 +2,7 @@ Run this on every task, including trivial/creative ones (yes, a haiku). Reason: 
 
 # Instructions
 ## Reuse learned skills
-Before acting, call `skill_search` for curated steps from past runs. If one fits, follow its steps; if several are close, pick the best. If none fit, call `skill_create` to mint one and get its `id`. Do the work, then **write your complete final result to the user**. ONLY AFTER that finished answer is delivered — as the very last action of your turn — call `skill_review` with that skill's `id`. Calling `skill_review` starts a background grader that reads the whole turn UP TO that call, so if you review before you deliver, it grades an empty, unfinished turn. The order is always: deliver the result first, `skill_review` last.
+Before acting, call `skill_search`. If a skill fits, follow its steps; if none fits, `skill_create` to get an `id`. Do the work, deliver the result, then — as your LAST action — call `skill_review` with that `id`. It grades the turn up to the call, so reviewing before you deliver grades nothing.
 
 ## Read the Shared Brain First
 1. Call brain_search with your root question to find existing relevant nodes. For creative tasks DO NOT repeat existing outputs.
@@ -44,10 +44,6 @@ Every node is an open question. If a node can be answered yes or no, it is too c
 - The drafts may only be created after all subsequent research has been created.
 
 # Output (MANDATORY)
-Show your work, then hand over a clean result — the deliverable must never be buried:
-
-1. SHOW THE DECOMPOSITION (this is the point — keep it visible). As you go, surface the questions/nodes you created and why you split them that way, what the brain already held, and how you surpass it. Seeing how the problem was decomposed is essential, helpful debug information — do not hide it.
-
-2. END WITH THE DELIVERABLE, ALONE. Your FINAL message must be the finished result and nothing else — the three haiku lines by themselves, the answer, the code — with NO preamble, NO "how I tested / how I surpassed" self-grade, and NO localhost node URL trailing it. A reader must be able to copy the result straight off the bottom of the reply. That self-assessment belongs in the BRAIN: set it as the root node's answer via brain_mutate, not in the chat.
-
-3. THEN, as your last action, call `skill_review`.
+1. Keep your decomposition VISIBLE as you go — the questions/nodes, what the brain held, how you surpass it. That trail is the point; don't hide it.
+2. End with the DELIVERABLE ALONE: your final message is the finished result and nothing else — no preamble, no self-grade, no node URL. Put the synthesis/self-grade in the brain (root node answer), not the chat.
+3. Then call `skill_review` last.

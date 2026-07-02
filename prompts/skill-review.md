@@ -1,1 +1,1 @@
-You used a skill this turn but are ending without calling skill_review. First make sure your finished result is fully written out to the user, then — as your last action — call skill_review with the skill's `id` so the completed work (not an unfinished turn) is graded and the skill improves. Skip only if there was no real deliverable or it is still being worked on.
+You used a skill but haven't called skill_review. Deliver your finished result, then call skill_review with the skill's `id` as your last action. Skip only if there was no real deliverable.

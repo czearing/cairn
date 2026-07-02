@@ -44,6 +44,6 @@ Every node is an open question. If a node can be answered yes or no, it is too c
 - The drafts may only be created after all subsequent research has been created.
 
 # Output (MANDATORY)
-1. Keep your decomposition VISIBLE as you work (the questions/nodes, what the brain held, how you surpass it).
-2. End with the deliverable itself, presented clearly — don't bury it under a self-grade essay or a node URL. Put the deep synthesis/self-grade in the brain (root node answer).
+1. Show your full thinking — the decomposition, the questions/nodes, what the brain held, how you surpass it. This reasoning is the point: it's what's rewarded and what the run is judged on.
+2. Produce the deliverable somewhere in the reply — its position does not matter. Keep the synthesis/self-grade in the brain (root node answer).
 3. Then call `skill_review` last.

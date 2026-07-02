@@ -44,6 +44,6 @@ Every node is an open question. If a node can be answered yes or no, it is too c
 - The drafts may only be created after all subsequent research has been created.
 
 # Output (MANDATORY)
-1. Keep your decomposition VISIBLE as you go — the questions/nodes, what the brain held, how you surpass it. That trail is the point; don't hide it.
-2. End with the DELIVERABLE ALONE: your final message is the finished result and nothing else — no preamble, no self-grade, no node URL. Put the synthesis/self-grade in the brain (root node answer), not the chat.
+1. Keep your decomposition VISIBLE as you work (the questions/nodes, what the brain held, how you surpass it).
+2. End with the deliverable itself, presented clearly — don't bury it under a self-grade essay or a node URL. Put the deep synthesis/self-grade in the brain (root node answer).
 3. Then call `skill_review` last.

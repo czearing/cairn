@@ -62,13 +62,15 @@ test("writeLearnMcpConfig bakes the capture env into a cairnlearn server", () =>
 
 // ── learnerBackend: explicit env wins; runLearner dispatches ──────────────────────────────────────
 
-test("learnerBackend honors CAIRN_LEARN_BACKEND", () => {
+test("learnerBackend honors CAIRN_LEARN_BACKEND, and defaults to copilot when unset", () => {
   const prev = process.env.CAIRN_LEARN_BACKEND;
   try {
     process.env.CAIRN_LEARN_BACKEND = "copilot";
     expect(learnerBackend()).toBe("copilot");
     process.env.CAIRN_LEARN_BACKEND = "claude";
     expect(learnerBackend()).toBe("claude");
+    delete process.env.CAIRN_LEARN_BACKEND; // unset -> auto-probe prefers copilot (this machine has it)
+    expect(learnerBackend()).toBe("copilot");
   } finally {
     if (prev === undefined) delete process.env.CAIRN_LEARN_BACKEND; else process.env.CAIRN_LEARN_BACKEND = prev;
   }

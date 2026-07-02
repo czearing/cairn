@@ -50,13 +50,20 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   const cfg: McpConfig = existsSync(path) ? JSON.parse(await readFile(path, "utf8")) : {};
   const servers = cfg.mcpServers ?? (cfg.mcpServers = {});
   const env = libsqlEnv();
-  const existing = servers[mcpName()] as { env?: Record<string, string> } | undefined;
+  // --hot: the server re-loads changed source in-place (same process/session), so a push reaches every live
+  // Copilot session without a restart. See src/mcp/server.ts for the connect-once guard that makes it safe.
+  const wantArgs = ["--hot", SERVER];
+  const existing = servers[mcpName()] as { command?: string; args?: string[]; env?: Record<string, string> } | undefined;
   if (existing) {
     const cur = existing.env ?? (existing.env = {});
-    const missing = Object.entries(env).filter(([k, v]) => cur[k] !== v);
-    if (!missing.length) return "already";
+    const envMissing = Object.entries(env).filter(([k, v]) => cur[k] !== v);
+    const argsStale = JSON.stringify(existing.args) !== JSON.stringify(wantArgs);
+    const cmdStale = existing.command !== bunExe();
+    if (!envMissing.length && !argsStale && !cmdStale) return "already";
     if (dryRun) return "would-add";
-    for (const [k, v] of missing) cur[k] = v;
+    for (const [k, v] of envMissing) cur[k] = v;
+    if (argsStale) existing.args = wantArgs; // upgrade an older install to --hot in place
+    if (cmdStale) existing.command = bunExe();
     await writeFile(path, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
     return "added";
   }
@@ -64,7 +71,7 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   servers[mcpName()] = {
     type: "local", // Copilot CLI's name for a local stdio server
     command: bunExe(),
-    args: [SERVER],
+    args: wantArgs,
     env, // CAIRN_LIBSQL_* if set (cloud sync), else {} — CAIRN_DB_PATH is still inherited from the env
     tools: ["*"], // required by Copilot CLI to enable the server's tools
   };

@@ -2,15 +2,21 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { writeFileSync } from "node:fs";
 import { z } from "zod";
-import { create, mutate, remove, refsByIds } from "../core/neurons";
-import { search } from "../core/search";
 import { config } from "../core/config";
 import { neighborContext } from "./context";
 import type { Neuron } from "../core/neurons.types";
 import type { ScoredResult } from "../core/search.types";
 
 // The bridge that lets an agent read and write the brain. THREE tools, each a thin wrapper
-// over src/core (the same code the tests cover). Run: bun src/mcp/server.ts
+// over src/core (the same code the tests cover). Run: bun --hot src/mcp/server.ts
+//
+// HOT-RELOAD: installed as `bun --hot`, so a `git pull` / source edit is picked up by every LIVE server
+// process (one per Copilot session) WITHOUT restarting the session. --hot re-runs THIS entry file in the
+// same process on each change; two rules make that safe: (1) every tool handler resolves its logic via a
+// dynamic import() so it serves freshly-reloaded code, and (2) the stdio transport is bound exactly once
+// (guarded at the bottom) — a second bind on the same stdin would corrupt the protocol. Tool NAMES and
+// SCHEMAS are sent to the client once at connect, so changing those still needs a new session; handler
+// BEHAVIOR updates live.
 
 const server = new McpServer({ name: "cairn", version: "1.0.0" });
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
@@ -38,6 +44,8 @@ server.tool(
   "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a `score` (0-1 cosine relevance): weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. A result may also carry `prior`/`next`: the adjacent question above/below it in the brain's reasoning graph, for context. Use this as much as possible to learn from previous thoughts",
   { query: z.string().describe("What you are looking for, in natural language.") },
   async ({ query }) => {
+    const { search } = await import("../core/search");
+    const { refsByIds } = await import("../core/neurons");
     // Relevance-ranked search (cosine, most-relevant-first).
     const hits = await search(query);
     const capped = SEARCH_LIMIT > 0 ? hits.slice(0, SEARCH_LIMIT) : hits;
@@ -68,6 +76,7 @@ server.tool(
   },
   async ({ text, edges }) => {
     if (!text.trim()) return fail("text is required");
+    const { create } = await import("../core/neurons");
     return json(withUrl(await create(text, edges ?? [])));
   }
 );
@@ -87,6 +96,7 @@ server.tool(
   },
   async ({ id, text, answer, citation, edges }) => {
     try {
+      const { mutate } = await import("../core/neurons");
       const n = await mutate(id, { text, answer, citation, edges });
       return n ? json(withUrl(n)) : fail(`no thought with id ${id}`);
     } catch (err) {
@@ -99,7 +109,10 @@ server.tool(
   "brain_delete",
   "Delete a thought by id (removes it and detaches its edges from other thoughts). Use to clear duplicates or mistakes.",
   { id: z.string().describe("id of the thought to delete.") },
-  async ({ id }) => json({ deleted: remove(id) })
+  async ({ id }) => {
+    const { remove } = await import("../core/neurons");
+    return json({ deleted: remove(id) });
+  }
 );
 
 // Agent-facing skill retrieval. Before doing a task, the agent calls this with a description of it and gets
@@ -195,4 +208,12 @@ server.tool(
   }
 );
 
-await server.connect(new StdioServerTransport());
+// Bind the stdio transport exactly once. `bun --hot` re-runs this file in the same process on every source
+// change; the live server (and its stdin listeners) from the first run keep serving, and its handlers pull
+// reloaded logic via dynamic import(). A second connect() on the same stdin would corrupt the protocol, so a
+// globalThis flag makes every hot re-run a no-op here.
+const hotState = globalThis as typeof globalThis & { __cairnConnected?: boolean };
+if (!hotState.__cairnConnected) {
+  hotState.__cairnConnected = true;
+  await server.connect(new StdioServerTransport());
+}

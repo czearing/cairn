@@ -106,7 +106,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // Skill layer, OFF by default (opt in with "skills": true in ~/.cairn/config.json or CAIRN_SKILLS=1). The
+  // Skill layer, ON by default (turn off with "skills": false in ~/.cairn/config.json or CAIRN_SKILLS=0). The
   // agent retrieves skills ITSELF via the skill_search tool (taught in the base prompt) rather than via a
   // cosine auto-injection that mispicks near-duplicates. We enforce that with one per-turn reminder: record
   // when the agent calls skill_search, and remind ONCE if it reaches for an action tool first. The latch is

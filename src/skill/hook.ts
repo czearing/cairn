@@ -6,8 +6,8 @@ import { retrieveSkills, condenseMessages, retrieveDiagnostic } from "./retrieve
 import { learnFromTranscript } from "./learn";
 import { skillCatalog, skillVectors } from "./store";
 
-// Entry points the Claude Code dispatch calls. The skill feature is OFF by default (a fresh install never
-// runs it); opt in per machine with `"skills": true` in ~/.cairn/config.json or CAIRN_SKILLS=1. All are
+// Entry points the Claude Code dispatch calls. The skill feature is ON by default; turn it OFF per machine
+// with `"skills": false` in ~/.cairn/config.json or CAIRN_SKILLS=0. All are
 // best-effort and never throw, and do no work when disabled or when the skill store is empty.
 
 export { skillsEnabled };

@@ -161,14 +161,14 @@ test("extractRun does not treat a tool-only assistant message as the output", ()
   expect(run!.request).toBe("write me a haiku about frost");
 });
 
-test("the skill layer is OFF by default, ON via CAIRN_SKILLS=1 (or the config flag)", () => {
+test("the skill layer is ON by default, and CAIRN_SKILLS env overrides both ways", () => {
   const prev = process.env.CAIRN_SKILLS;
   delete process.env.CAIRN_SKILLS;
-  expect(skillsEnabled()).toBe(false);                      // default OFF (no env, no config flag in tests)
+  expect(skillsEnabled()).toBe(true);                       // ON by default (no explicit opt-out)
   process.env.CAIRN_SKILLS = "1";
   expect(skillsEnabled()).toBe(true);                       // explicit opt-in
   process.env.CAIRN_SKILLS = "0";
-  expect(skillsEnabled()).toBe(false);                      // explicit opt-out
+  expect(skillsEnabled()).toBe(false);                      // explicit opt-out wins
   expect(() => skillLearn("/some/path.jsonl", "haiku")).not.toThrow(); // disabled -> no-op, never throws
   if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
 });

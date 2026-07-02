@@ -41,16 +41,17 @@ export const config: CairnConfig = {
   expandSubtree: process.env.CAIRN_SEARCH_EXPAND === "1", // off by default: return only direct matches
   maxAnswerChars: Number(process.env.CAIRN_MAX_ANSWER_CHARS || "2000"), // reject insanely verbose answers
 
-  // The skill layer is OFF by default so a fresh install never runs it. The file flag is the per-machine
-  // opt-in (env wins, applied live in skillsEnabled). Short-lived hooks read this from the config file,
-  // since they don't inherit the MCP server's env.
-  skills: parsedFile.skills === true,
+  // The skill layer is ON by default now that the agent-driven learn loop is proven. Turn it OFF per-machine
+  // with "skills": false in ~/.cairn/config.json (or CAIRN_SKILLS=0). Short-lived hooks read this from the
+  // config file, since they don't inherit the MCP server's env.
+  skills: parsedFile.skills !== false,
 
   uiPort,
   uiUrl: process.env.CAIRN_UI_URL || `http://localhost:${uiPort}`,
 };
 
-/** Is the skill-learning layer active? OFF by default; CAIRN_SKILLS env wins (1 on / 0 off), else the
- *  per-machine `skills` flag in ~/.cairn/config.json. Evaluated live so an env toggle takes effect at once. */
+/** Is the skill-learning layer active? ON by default; CAIRN_SKILLS env wins (1 on / 0 off), else the
+ *  per-machine `skills` flag in ~/.cairn/config.json (on unless explicitly set to false). Evaluated live
+ *  so an env toggle takes effect at once. */
 export const skillsEnabled = (): boolean =>
   process.env.CAIRN_SKILLS === "1" ? true : process.env.CAIRN_SKILLS === "0" ? false : config.skills;

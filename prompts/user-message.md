@@ -3,6 +3,7 @@ Run this on every task, including trivial/creative ones (yes, a haiku). Reason: 
 # Instructions
 ## Reuse learned skills
 Before acting, call `skill_search` for curated steps from past runs. If one fits, follow its steps; if several are close, pick the best. If none fit call `skill_create` with a short new label. When you finish the task, call `skill_review` with that skill's label so the result is graded and the skill improves for future agents.
+If the user corrects you or you find a clearly better way, call `skill_edit` with the skill's `id` to fix its master now — not for one-off tweaks (the grader handles normal iteration).
 
 ## Read the Shared Brain First
 1. Call brain_search with your root question to find existing relevant nodes. For creative tasks DO NOT repeat existing outputs.

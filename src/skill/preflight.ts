@@ -27,6 +27,3 @@ export function skillPreflight(): Check[] {
     { name: "cairn MCP server", ok: existsSync(server), fix: `set CAIRN_MCP_SERVER to the cairn server path (looked at ${server})` },
   ];
 }
-
-/** Convenience: are all preflight checks passing? */
-export const skillReady = (): boolean => skillPreflight().every((c) => c.ok);

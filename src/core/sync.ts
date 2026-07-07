@@ -192,6 +192,3 @@ export function startBackgroundSync(local: Db, url: string, token: string): void
   const t = setInterval(fire, Math.max(15, config.libsql.syncPeriod || 60) * 1000);
   (t as unknown as { unref?: () => void }).unref?.(); // never keep the process alive just for sync
 }
-
-// One-shot reconcile, for tests and an explicit flush.
-export async function syncOnce(local: Db, url: string, token: string): Promise<void> { await reconcile(local, url, token); }

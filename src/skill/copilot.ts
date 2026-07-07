@@ -17,8 +17,6 @@ import type { ClaudeOpts, ClaudeResult } from "./types";
 //     ambient `cairn` server is disabled for the run so the learner can only reach this capture-wired one.
 // Every run is best-effort and NEVER throws.
 
-export const BIN = process.env.CAIRN_COPILOT_BIN || "copilot";
-
 // Resolve how to launch Copilot as an argv prefix. On Windows `copilot` is an npm .cmd/.ps1 shim; spawning
 // the .cmd routes through cmd.exe, whose command line is capped at ~8191 chars — so a large learner prompt
 // silently truncates the flags that come after it (the MCP config, tool allowlist), breaking the run. The

@@ -32,6 +32,26 @@ import { join } from "node:path";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 const emit = (obj: object) => process.stdout.write(JSON.stringify(obj));
+
+// Read stdin but NEVER block the host indefinitely. `Bun.stdin.text()` only resolves on EOF, so if the
+// CLI invokes a hook without closing its stdin (observed on some Copilot/Claude CLI versions, and for
+// events that carry no tool-input payload) the hook would hang forever — and since the host runs hooks
+// synchronously and waits for their JSON, that hang freezes the whole agent. Racing against a timeout
+// makes a slow/never-closed stdin degrade to an empty payload (fail-open) instead of a freeze.
+const STDIN_TIMEOUT_MS = Number(process.env.CAIRN_HOOK_STDIN_TIMEOUT_MS || "1500");
+const readStdin = async (): Promise<string> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Bun.stdin.text(),
+      new Promise<string>((resolve) => {
+        timer = setTimeout(() => resolve(""), STDIN_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
 const promptText = async (file: string): Promise<string> => {
   try {
     return (await readFile(new URL(file, PROMPTS), "utf8")).trim();
@@ -213,7 +233,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const raw = await Bun.stdin.text();
+  const raw = await readStdin();
   debugLog(mode ?? "", raw);
   const { sessionId, toolName, args, transcriptPath } = parsePayload(raw);
 
@@ -306,4 +326,12 @@ async function main(): Promise<void> {
   emit({});
 }
 
-if (import.meta.main) await main();
+if (import.meta.main) {
+  await main();
+  // A timed-out stdin read leaves Bun.stdin.text()'s read handle open, which keeps this process (and any
+  // host that waits for the hook to EXIT, not just for its stdout) alive until the host finally closes
+  // stdin — the freeze we are guarding against. Flush our emitted JSON, then exit explicitly so the
+  // dangling handle can never hold the host. The detached skill-learner is child.unref()'d, so it survives.
+  await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
+  process.exit(0);
+}

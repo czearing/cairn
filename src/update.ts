@@ -33,12 +33,31 @@ export async function update(): Promise<void> {
 
   const before = head();
   step(c.dim(`current ${before}, pulling latest…`));
+
+  // Auto-stash local changes so the update just works. A cairn checkout should never make the user run git
+  // by hand: local changes here are almost always line-ending noise (autocrlf) or WIP, so we save them, pull,
+  // then restore, instead of bailing with "resolve local changes".
+  const dirty = text(sh([g, "-C", ROOT, "status", "--porcelain", "--untracked-files=no"]).stdout).length > 0;
+  let stashed = false;
+  if (dirty) {
+    step(c.dim("stashing local changes…"));
+    stashed = sh([g, "-C", ROOT, "stash", "push", "-m", "cairn-update-autostash"]).success;
+  }
+
   const pull = sh([g, "-C", ROOT, "pull", "--ff-only"]);
   if (!pull.success) {
+    if (stashed) sh([g, "-C", ROOT, "stash", "pop"]); // put the changes back before we bail
     step(`${sym.bad} ${c.red("git pull failed.")} ${c.dim(text(pull.stderr).split("\n")[0] ?? "")}`);
-    step(`    ${sym.arrow} Resolve local changes in ${c.cyan(ROOT.replace(/\\/g, "/"))} and retry ${c.cyan("cairn update")}.`);
+    step(`    ${sym.arrow} Your checkout has diverged from origin/main (local commits). Reconcile it in ${c.cyan(ROOT.replace(/\\/g, "/"))} and retry ${c.cyan("cairn update")}.`);
     process.exitCode = 1;
     return;
+  }
+
+  // Restore anything we stashed. If it conflicts with the pulled update, keep it in the stash and say so.
+  if (stashed) {
+    const pop = sh([g, "-C", ROOT, "stash", "pop"]);
+    if (pop.success) step(c.dim("restored your local changes."));
+    else step(`${sym.warn} Your local changes conflicted with the update and are kept in ${c.cyan("git stash")}; run ${c.cyan("git stash pop")} to reapply.`);
   }
 
   const after = head();

@@ -4,8 +4,7 @@
 // so Cairn now reaches near-parity with Claude Code (see docs.github.com/.../hooks-reference):
 //
 //   session-start  (sessionStart)        : inject the full brain workflow (user-message.md) once per session.
-//   user-prompt    (userPromptSubmitted) : output is IGNORED by Copilot, so we cannot inject per prompt —
-//                                          but the hook still RUNS, so we use it to RESET the per-turn latch.
+//   user-prompt    (userPromptSubmitted) : inject the workflow and reset the per-turn latch.
 //   pre-tool       (preToolUse)          : gate a brain_create (deny closed-question / root-only-branch).
 //                                          preToolUse has no additionalContext channel, so entry-format.md /
 //                                          orchestrate.md cannot be injected here — only allow/deny/modify.
@@ -17,14 +16,11 @@
 //   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn. Used
 //                                          for turn-reminder.md (brain unused) and skill-review.md (a skill
 //                                          was used but not submitted via skill_review). Loop-bounded (max 2
-//                                          nudges/turn). Auto-learns the turn as a FALLBACK only when
-//                                          skill_review did not already review it.
+//                                          nudges/turn).
 //   subagent-start (subagentStart)       : additionalContext is PREPENDED to the subagent's own prompt —
 //                                          the one channel that reaches a subagent's window (subagent-protocol.md).
 //
-// The only Claude behavior still unreachable on Copilot: per-PROMPT brain RECALL (userPromptSubmitted output
-// is dropped). Per-event context that lives on PreToolUse (entry-format/orchestrate) is also context-unreachable;
-// the brain_create gate enforces the format intent instead.
+// Per-event context on PreToolUse remains unreachable; the brain_create gate enforces the format intent instead.
 import { readFile } from "node:fs/promises";
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -32,6 +28,7 @@ import { join } from "node:path";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 const emit = (obj: object) => process.stdout.write(JSON.stringify(obj));
+export const internalContext = (text: string): string => text ? `<cairn-internal>\n${text}\n</cairn-internal>` : "";
 
 // Read stdin but NEVER block the host indefinitely. `Bun.stdin.text()` only resolves on EOF, so if the
 // CLI invokes a hook without closing its stdin (observed on some Copilot/Claude CLI versions, and for
@@ -124,11 +121,13 @@ interface TurnState {
   skillUsed: boolean;
   reviewed: boolean;
   stopNudges: number;
+  stopBlocked: boolean;
 }
-const freshTurn = (): TurnState => ({ brainUsed: false, skillUsed: false, reviewed: false, stopNudges: 0 });
+const freshTurn = (): TurnState => ({ brainUsed: false, skillUsed: false, reviewed: false, stopNudges: 0, stopBlocked: false });
 const turnDir = () => join(homedir(), ".cairn", "copilot-turn");
 const turnPath = (sid: string) =>
   join(turnDir(), `${(sid || "default").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128)}.json`);
+const turnScope = (sessionId: string, agentId: string): string => agentId ? `${sessionId}--${agentId}` : sessionId;
 function readTurn(sid: string): TurnState {
   try {
     return { ...freshTurn(), ...(JSON.parse(readFileSync(turnPath(sid), "utf8")) as Partial<TurnState>) };
@@ -155,6 +154,7 @@ const safeJson = (s: string): unknown => {
 };
 interface Payload {
   sessionId: string;
+  agentId: string;
   toolName: string;
   args: Record<string, unknown>;
   transcriptPath: string;
@@ -166,27 +166,29 @@ function parsePayload(raw: string): Payload {
     const args = (typeof rawArgs === "string" ? safeJson(rawArgs) : rawArgs) as Record<string, unknown> | undefined;
     return {
       sessionId: (j.sessionId as string) ?? (j.session_id as string) ?? "",
+      agentId: (j.agentId as string) ?? (j.agent_id as string) ?? "",
       toolName: (j.toolName as string) ?? (j.tool_name as string) ?? "",
       args: args ?? {},
       transcriptPath: (j.transcriptPath as string) ?? (j.transcript_path as string) ?? "",
     };
   } catch {
-    return { sessionId: "", toolName: "", args: {}, transcriptPath: "" };
+    return { sessionId: "", agentId: "", toolName: "", args: {}, transcriptPath: "" };
   }
 }
 
-// Fire the background skill learner over a finished turn's transcript for the agent-DECLARED skill `skillId`,
-// best-effort. Tags the worker with CAIRN_LEARN_BACKEND=copilot so it parses Copilot's events.jsonl and grades
-// via `copilot -p`. Returns true only when a worker was actually spawned (skills on, transcript+id present,
-// under the concurrency cap). Never throws or blocks.
-async function fireLearner(transcriptPath: string, skillId: string): Promise<boolean> {
-  if (!transcriptPath || !skillId.trim()) return false;
+// Durably enqueue the latest matching skill_review event. Capacity only delays the queued job; acceptance
+// marks the turn reviewed immediately so agentStop never asks the agent to resubmit work it already submitted.
+async function queueLatestReview(
+  transcriptPath: string,
+  sessionId: string,
+  options: { skillId?: string; agentId?: string; subagentOnly?: boolean } = {}
+): Promise<boolean> {
+  if (!transcriptPath || !sessionId) return false;
   try {
     const { skillsEnabled } = await import("../../core/config");
     if (!skillsEnabled()) return false;
-    process.env.CAIRN_LEARN_BACKEND = "copilot"; // the worker inherits this and picks the Copilot path
-    const { learnFromTranscript } = await import("../../skill/learn");
-    return learnFromTranscript(transcriptPath, skillId);
+    const { learnLatestCopilotReview } = await import("../../skill/learn");
+    return learnLatestCopilotReview(transcriptPath, sessionId, options);
   } catch {
     return false; // skills are best-effort
   }
@@ -224,24 +226,22 @@ async function main(): Promise<void> {
 
   if (mode === "session-start") {
     const text = await promptText("user-message.md");
-    emit(text ? { additionalContext: text } : {});
+    emit(text ? { additionalContext: internalContext(text) } : {});
     return;
   }
   if (mode === "subagent-start") {
     const text = await promptText("subagent-protocol.md");
-    emit(text ? { additionalContext: text } : {});
+    emit(text ? { additionalContext: internalContext(text) } : {});
     return;
   }
 
   const raw = await readStdin();
   debugLog(mode ?? "", raw);
-  const { sessionId, toolName, args, transcriptPath } = parsePayload(raw);
+  const { sessionId, agentId, toolName, args, transcriptPath } = parsePayload(raw);
 
   if (mode === "subagent-stop") {
-    // No learning here. On Copilot a subagent's activity is interleaved in the PARENT session transcript (its
-    // subagentStop transcriptPath is the parent, not an isolated subagent log), so firing the learner here
-    // re-graded the parent turn and produced a duplicate run. Instead the agentStop learner segments the whole
-    // turn and the reviewing agent splits out the subagent's deliverable (e.g. a story review) itself.
+    const path = transcriptPath || eventsPathForSession(sessionId);
+    await queueLatestReview(path, sessionId, { agentId: agentId || undefined, subagentOnly: true });
     emit({});
     return;
   }
@@ -253,9 +253,13 @@ async function main(): Promise<void> {
     // IS delivered to the model (the published hooks reference says "Output processed: No", but a live marker
     // test proved otherwise; sessionStart still injects a baseline copy in case a future version regresses).
     // Also reset the per-turn latch so the agentStop gate is scoped to this turn.
-    writeTurn(sessionId, freshTurn());
+    //
+    // Copilot can re-fire this hook for a blocked continuation. Preserve the cap only for that continuation,
+    // then let the next genuine user turn start with a fresh budget.
+    const prev = readTurn(sessionId);
+    writeTurn(sessionId, { ...freshTurn(), stopNudges: prev.stopBlocked ? prev.stopNudges : 0 });
     const wf = await promptText("user-message.md");
-    emit(wf ? { additionalContext: wf } : {});
+    emit(wf ? { additionalContext: internalContext(wf) } : {});
     return;
   }
 
@@ -281,7 +285,8 @@ async function main(): Promise<void> {
 
   if (mode === "post-tool") {
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
-    const st = readTurn(sessionId);
+    const stateId = turnScope(sessionId, agentId);
+    const st = readTurn(stateId);
     if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) st.brainUsed = true;
     // skill_search / skill_create mean the agent is doing skill work: the turn now OWES a skill_review, which
     // the agentStop gate enforces.
@@ -294,14 +299,15 @@ async function main(): Promise<void> {
     if (isTool(toolName, "skill_review")) {
       const id = typeof args.id === "string" ? args.id : "";
       st.skillUsed = true;
-      if (await fireLearner(eventsPathForSession(sessionId), id)) st.reviewed = true;
+      const path = transcriptPath || eventsPathForSession(sessionId);
+      if (await queueLatestReview(path, sessionId, { skillId: id, agentId: agentId || undefined })) st.reviewed = true;
     }
 
     const answer = typeof args.answer === "string" ? args.answer : "";
     const blocks = (await Promise.all(postToolFiles(toolName, answer).map(promptText))).filter((t) => t.length > 0);
-    writeTurn(sessionId, st);
+    writeTurn(stateId, st);
 
-    const text = blocks.join("\n\n");
+    const text = internalContext(blocks.join("\n\n"));
     emit(text ? { additionalContext: text } : {});
     return;
   }
@@ -313,12 +319,13 @@ async function main(): Promise<void> {
     if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
     const st = readTurn(sessionId);
     const { file } = stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, reviewed: st.reviewed, stopNudges: st.stopNudges });
-    const text = file ? await promptText(file) : "";
+    const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
-      writeTurn(sessionId, { ...st, stopNudges: st.stopNudges + 1 });
+      writeTurn(sessionId, { ...st, stopNudges: st.stopNudges + 1, stopBlocked: true });
       emit({ decision: "block", reason: text }); // nudge the agent to review before ending
       return;
     }
+    if (st.stopBlocked) writeTurn(sessionId, { ...st, stopBlocked: false });
     emit({});
     return;
   }

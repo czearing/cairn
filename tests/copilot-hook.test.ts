@@ -1,5 +1,11 @@
 import { test, expect } from "bun:test";
-import { postToolFiles, stopDecision, gateDecision, isTool, STOP_CAP } from "../src/hosts/copilot-cli/hook";
+import { Database } from "bun:sqlite";
+import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { postToolFiles, stopDecision, gateDecision, internalContext, isTool, STOP_CAP } from "../src/hosts/copilot-cli/hook";
 
 // ── postToolFiles: which prompts a COMPLETED Copilot tool delivers, mirroring Claude's after-tool set ──
 
@@ -76,4 +82,78 @@ test("isTool matches across naming conventions", () => {
   expect(isTool("cairn-brain_search", "brain_search")).toBe(true);
   expect(isTool("mcp__cairn__brain_search", "brain_search")).toBe(true);
   expect(isTool("view", "brain_search")).toBe(false);
+});
+
+test("internalContext gives injected reminders one structural envelope", () => {
+  expect(internalContext("remember this")).toBe("<cairn-internal>\nremember this\n</cairn-internal>");
+  expect(internalContext("")).toBe("");
+});
+
+test("subagentStop durably queues the subagent's latest skill_review", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-review-hook-${id}.db`);
+  const home = join(tmpdir(), `cairn-review-hook-home-${id}`);
+  const transcriptPath = join(tmpdir(), `cairn-review-hook-${id}.jsonl`);
+  writeFileSync(transcriptPath, [
+    JSON.stringify({ type: "subagent.started", agentId: "agent-1", timestamp: 10, data: { agentDisplayName: "Reviewer" } }),
+    JSON.stringify({ type: "assistant.message", agentId: "agent-1", timestamp: 11, data: { content: "Finished review." } }),
+    JSON.stringify({ type: "tool.execution_start", agentId: "agent-1", timestamp: 12, data: { toolCallId: "review-1", toolName: "cairn-skill_review", arguments: { id: "skill-1" } } }),
+    JSON.stringify({ type: "tool.execution_complete", agentId: "agent-1", timestamp: 13, data: { toolCallId: "review-1", success: true } }),
+  ].join("\n"));
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_MAX_LEARNERS: "0", CAIRN_SKILLS: "1" };
+  const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  expect(invoke("post-tool", { sessionId: "session-1", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
+  expect(invoke("post-tool", { sessionId: "session-1", agentId: "agent-1", toolName: "cairn-skill_search", toolArgs: {} }).status).toBe(0);
+  const run = invoke("subagent-stop", { sessionId: "session-1", agentId: "agent-1", transcriptPath });
+  expect(run.status).toBe(0);
+  const d = new Database(dbPath);
+  const jobs = d.query("SELECT skill_id, status FROM review_jobs").all() as { skill_id: string; status: string }[];
+  d.close();
+  expect(jobs).toEqual([{ skill_id: "skill-1", status: "pending" }]);
+  expect(invoke("agent-stop", { sessionId: "session-1" }).stdout.toString()).toBe("{}");
+});
+
+test("an accepted queued review satisfies agentStop even with no worker capacity", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-review-stop-${id}.db`);
+  const home = join(tmpdir(), `cairn-review-home-${id}`);
+  const transcriptPath = join(tmpdir(), `cairn-review-stop-${id}.jsonl`);
+  writeFileSync(transcriptPath, JSON.stringify({
+    type: "tool.execution_start",
+    timestamp: 20,
+    data: { toolCallId: "review-2", toolName: "cairn-skill_review", arguments: { id: "skill-2" } },
+  }) + "\n" + JSON.stringify({
+    type: "tool.execution_complete",
+    timestamp: 21,
+    data: { toolCallId: "review-2", success: true },
+  }));
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_MAX_LEARNERS: "0", CAIRN_SKILLS: "1" };
+  const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+
+  expect(invoke("post-tool", { sessionId: "session-2", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
+  expect(invoke("post-tool", { sessionId: "session-2", toolName: "cairn-skill_review", toolArgs: { id: "skill-2" }, transcriptPath }).status).toBe(0);
+  const stop = invoke("agent-stop", { sessionId: "session-2" });
+  expect(stop.status).toBe(0);
+  expect(stop.stdout.toString()).toBe("{}");
+});
+
+test("stop nudge cap resets for the next genuine user turn", () => {
+  const id = randomUUID();
+  const home = join(tmpdir(), `cairn-stop-cap-home-${id}`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_SKILLS: "0" };
+  const invoke = (mode: string, payload: object = { sessionId: "session-cap" }) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+
+  expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "first" }).status).toBe(0);
+  expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
+  expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "continuation-1" }).status).toBe(0);
+  expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
+  expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "continuation-2" }).status).toBe(0);
+  expect(invoke("agent-stop").stdout.toString()).toBe("{}");
+
+  expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "second" }).status).toBe(0);
+  expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
 });

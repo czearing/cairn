@@ -159,7 +159,7 @@ function renderDiff(oldT, newT) {
   return changed ? `<div class="diff">${rows.join("")}</div>` : `<div class="diff"><div class="dl ctx">(no textual change)</div></div>`;
 }
 
-let SKILLS = [], ACTIVITY = [], FILTERED = null, q = "", tab = "skills", modalId = null, urlApplied = false;
+let SKILLS = [], ACTIVITY = [], JOBS = [], FILTERED = null, q = "", tab = "skills", modalId = null, urlApplied = false;
 // Deep-link / screenshot aid: ?tab=activity opens that tab; ?skill=<name> opens that skill's modal.
 function applyUrl() {
   if (urlApplied || !SKILLS.length) return; urlApplied = true;
@@ -169,7 +169,7 @@ function applyUrl() {
 }
 const skillBy = (id) => SKILLS.find((s) => s.id === id);
 const skillByLabel = (l) => SKILLS.find((s) => s.task === l);
-const isRunning = () => ACTIVITY.some((e) => e.phase === "start" && !ACTIVITY.some((x) => x.phase !== "start" && x.ts === e.ts));
+const isRunning = () => JOBS.some((j) => j.status === "pending" || j.status === "running") || ACTIVITY.some((e) => e.phase === "start" && !ACTIVITY.some((x) => x.phase !== "start" && x.ts === e.ts));
 
 function skillRow(s) {
   const scores = s.runs.map((r) => r.quality), last = scores.length ? scores[scores.length - 1] : null;
@@ -182,10 +182,14 @@ function activityRow(e) {
   const tag = `${e.created ? `<span class="tag new">new</span>` : `<span class="tag">updated</span>`}${e.label && !exists ? `<span class="tag gone">removed</span>` : ""}`;
   return `<div class="row${exists ? "" : " flat"}" ${exists ? `data-label="${esc(e.label)}"` : ""}><span class="chip ${tier(s)}">${s.toFixed(2)}</span><span class="name">${esc(e.label || "?")}</span>${tag}<span class="right"><span class="when" title="${fullTs(e.ts)}">${rel(e.ts)}</span>${exists ? '<span class="chev">›</span>' : ""}</span></div>`;
 }
+function queueRow(j) {
+  const s = skillBy(j.skillId), cls = j.status === "failed" ? "lo" : j.status === "running" ? "hi" : j.status === "pending" ? "mid" : "";
+  return `<div class="row flat"><span class="chip ${cls}">${esc(j.status)}</span><span class="name">${esc(s ? s.task : j.skillId)}</span><span class="tag">attempt ${j.attempts}</span><span class="right"><span class="when" title="${fullTs(j.updatedTs)}">${rel(j.updatedTs)}</span></span></div>`;
+}
 
 let listKey = "";
 function renderTabs() {
-  const done = ACTIVITY.filter((e) => e.phase !== "start").length;
+  const done = ACTIVITY.filter((e) => e.phase !== "start").length + JOBS.length;
   document.getElementById("tabs").innerHTML =
     `<button class="tab ${tab === "skills" ? "on" : ""}" data-tab="skills">Skills <span class="n">${SKILLS.length}</span></button>` +
     `<button class="tab ${tab === "activity" ? "on" : ""}" data-tab="activity">Activity <span class="n">${done}</span>${isRunning() ? '<span class="live" title="reviewing now"></span>' : ""}</button>`;
@@ -197,9 +201,16 @@ function renderList() {
     rows = list.length ? list.map(skillRow).join("") : `<div class="empty">${q ? "No skills match that search." : "No skills yet."}</div>`;
   } else {
     const done = ACTIVITY.filter((e) => e.phase !== "start");
-    rows = done.length ? done.map(activityRow).join("") : '<div class="empty">No activity yet.</div>';
+    const combined = [
+      ...JOBS.map((j) => ({ ts: j.updatedTs, html: queueRow(j) })),
+      ...done.map((e) => ({ ts: e.ts, html: activityRow(e) })),
+    ].sort((a, b) => b.ts - a.ts);
+    rows = combined.length ? combined.map((x) => x.html).join("") : '<div class="empty">No activity yet.</div>';
   }
-  const key = JSON.stringify({ tab, q, rows: rows.length, ids: (tab === "skills" ? (FILTERED || SKILLS) : ACTIVITY).map((x) => x.id || x.ts + x.label) });
+  const ids = tab === "skills"
+    ? (FILTERED || SKILLS).map((x) => x.id)
+    : [...JOBS.map((j) => `${j.id}:${j.status}:${j.attempts}:${j.updatedTs}`), ...ACTIVITY.map((e) => e.id || e.ts + e.label)];
+  const key = JSON.stringify({ tab, q, rows: rows.length, ids });
   if (key === listKey) return; // dedup: no jitter when the visible tab's data is unchanged
   listKey = key;
   document.getElementById("list").innerHTML = rows.startsWith('<div class="empty"') ? rows : `<div class="list">${rows}</div>`;
@@ -235,9 +246,10 @@ function renderModal() {
 
 async function load() {
   try {
-    [SKILLS, ACTIVITY] = await Promise.all([
+    [SKILLS, ACTIVITY, JOBS] = await Promise.all([
       (await fetch("/api/skills")).json().then((d) => d.skills || []),
       (await fetch("/api/activity")).json().then((d) => d.activity || []),
+      (await fetch("/api/review-jobs")).json().then((d) => d.jobs || []),
     ]);
     FILTERED = q ? await (await fetch("/api/skills?q=" + encodeURIComponent(q))).json().then((d) => d.skills || []) : null;
   } catch { return; }

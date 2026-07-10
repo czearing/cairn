@@ -34,6 +34,27 @@ test("serves the app.js asset", async () => {
   expect(res.headers.get("content-type")).toContain("javascript");
 });
 
+test("/api/review-jobs exposes queue status", async () => {
+  const { clearReviewJobs, enqueueReview } = await import("../src/skill/review-queue");
+  clearReviewJobs();
+  enqueueReview({ id: "ui-job", skillId: "ui-skill", transcriptPath: "C:\\ui.jsonl", backend: "copilot", now: 123 });
+  const res = await fetch(`http://localhost:${server.port}/api/review-jobs`);
+  const data = (await res.json()) as { jobs: { id: string; status: string }[] };
+  expect(data.jobs).toContainEqual(expect.objectContaining({ id: "ui-job", status: "pending" }));
+});
+
+test("/api/skills hides pending skills", async () => {
+  const { deleteSkill, putSkill } = await import("../src/skill/store");
+  putSkill({ id: "ui-learned", task: "learned", masterPrompt: "1. do the work", ts: 1 }, [1, 0]);
+  putSkill({ id: "ui-pending", task: "pending", masterPrompt: "", ts: 2 }, [0, 1]);
+  const res = await fetch(`http://localhost:${server.port}/api/skills`);
+  const data = (await res.json()) as { skills: { id: string }[] };
+  expect(data.skills.some((skill) => skill.id === "ui-learned")).toBe(true);
+  expect(data.skills.some((skill) => skill.id === "ui-pending")).toBe(false);
+  deleteSkill("ui-learned");
+  deleteSkill("ui-pending");
+});
+
 test("write endpoints: create, edit, link/unlink, delete", async () => {
   const base = `http://localhost:${server.port}`;
   const j = (r: Response) => r.json() as Promise<any>;

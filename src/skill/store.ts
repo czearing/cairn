@@ -105,7 +105,7 @@ export function setMasterPrompt(id: string, masterPrompt: string, explanation?: 
 /** Every skill's label (the `task` field), for biasing the labeler toward reuse. */
 export function skillLabels(): string[] {
   ensure();
-  return (db().query("SELECT task FROM skills").all() as { task: string }[]).map((r) => r.task);
+  return (db().query("SELECT task FROM skills WHERE master_prompt <> ''").all() as { task: string }[]).map((r) => r.task);
 }
 
 /** Every skill as `{id, label, gist}`, so the agent can see WHAT each existing skill is AND has its stable
@@ -113,7 +113,7 @@ export function skillLabels(): string[] {
  *  master (what the skill produces), falling back to the explanation. Capped so the prompt stays small. */
 export function skillCatalog(): { id: string; label: string; gist: string }[] {
   ensure();
-  const rows = db().query("SELECT id, task, master_prompt, explanation FROM skills").all() as { id: string; task: string; master_prompt: string; explanation: string }[];
+  const rows = db().query("SELECT id, task, master_prompt, explanation FROM skills WHERE master_prompt <> ''").all() as { id: string; task: string; master_prompt: string; explanation: string }[];
   return rows.map((r) => {
     const firstLine = (r.master_prompt || "").split("\n").map((l) => l.trim()).find((l) => l.length > 0);
     return { id: r.id, label: r.task, gist: (firstLine || r.explanation || "").slice(0, 140) };
@@ -126,7 +126,7 @@ export function skillCatalog(): { id: string; label: string; gist: string }[] {
 export function skillVectors(): { id: string; task: string; vec: number[]; rich: number[] }[] {
   ensure();
   try {
-    return (db().query("SELECT id, task, embedding, rich FROM skills").all() as { id: string; task: string; embedding: unknown; rich: unknown }[])
+    return (db().query("SELECT id, task, embedding, rich FROM skills WHERE master_prompt <> ''").all() as { id: string; task: string; embedding: unknown; rich: unknown }[])
       .map((r) => ({ id: r.id, task: r.task, vec: decodeVector(r.embedding) ?? [], rich: decodeVector(r.rich) ?? [] }));
   } catch { return []; }
 }
@@ -208,7 +208,9 @@ export function topRuns(skillId: string, n = 10): SkillRun[] {
 export function listSkills(): (Skill & { runs: SkillRun[]; versions: { master: string; explanation: string; score: number; ts: number }[] })[] {
   ensure();
   try {
-    const skills = db().query("SELECT id, task, master_prompt AS masterPrompt, explanation, ts FROM skills ORDER BY ts DESC").all() as Skill[];
+    const skills = db().query(
+      "SELECT id, task, master_prompt AS masterPrompt, explanation, ts FROM skills WHERE TRIM(master_prompt) <> '' ORDER BY ts DESC"
+    ).all() as Skill[];
     return skills.map((s) => ({
       ...s,
       runs: db().query("SELECT id, skill_id AS skillId, recipe, quality, review, ts FROM skill_runs WHERE skill_id = ? ORDER BY ts ASC").all(s.id) as SkillRun[],

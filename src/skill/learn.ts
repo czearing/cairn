@@ -1,9 +1,6 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { mkdirSync, readdirSync, statSync, writeFileSync, rmSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { claimReviewJobs, enqueueReview, failReviewJob, latestCopilotReview, transcriptReviewKey, type ReviewJob } from "./review-queue";
 
 // The async learn trigger. After a turn finishes, the WHOLE skill-forming process (extract the run ->
 // learn: label + grade + master, with the raw transcript as context -> categorize -> store) runs in a
@@ -13,53 +10,79 @@ import { randomUUID } from "node:crypto";
 // forever. Two layers stop it: the spawned worker runs `claude -p --setting-sources project` so cairn's
 // hooks do not fire inside it, AND CAIRN_SKILL_WORKER=1 is set on the worker so any nested trigger no-ops.
 //
-// Concurrency cap: each learner run spends real `claude -p` time (classify + grade). When many fire at once
-// (a burst of turns plus subagent stops) they saturate the CLI and time out (measured: ~12 concurrent
-// claude.exe failed). So we cap how many learners run at once via lock files; over the cap, this turn's learn
-// is skipped (a later turn re-learns the skill) rather than piling on and timing out.
+// Review submission is durable: callers enqueue first, then a bounded worker pool drains pending jobs.
+// Capacity delays a review but never drops it or makes agentStop claim the turn was not reviewed.
 
 export function isSkillWorker(): boolean {
   return process.env.CAIRN_SKILL_WORKER === "1";
 }
 
 const WORKER = () => process.env.CAIRN_SKILL_WORKER_PATH || fileURLToPath(new URL("../../scripts/skill-learn-worker.ts", import.meta.url));
+const MAX_LEARNERS = () => Number(process.env.CAIRN_MAX_LEARNERS || "4");
 
-const LEARNERS_DIR = () => process.env.CAIRN_LEARNERS_DIR || join(homedir(), ".cairn", "learners");
-const MAX_LEARNERS = () => Number(process.env.CAIRN_MAX_LEARNERS || "4"); // concurrent claude -p learners allowed (read at call time)
-const STALE_MS = 6 * 60 * 1000; // a lock older than this is a crashed worker; ignore it so the cap can't wedge
-
-/** How many learner workers are currently running (lock files touched within STALE_MS). */
-function activeLearners(): number {
+function spawnJob(job: ReviewJob): boolean {
   try {
-    const now = Date.now();
-    return readdirSync(LEARNERS_DIR()).filter((f) => {
-      try { return now - statSync(join(LEARNERS_DIR(), f)).mtimeMs < STALE_MS; } catch { return false; }
-    }).length;
-  } catch { return 0; }
-}
-
-// Fire-and-forget the learner over a turn's transcript for the agent-DECLARED skill `skillId`, detached. No-op
-// (false) inside a worker (loop guard), with no transcript or id, or when the concurrency cap is reached.
-// Never throws. The id rides to the worker as env; the lock file is created here (so the count is
-// accurate immediately) and removed by the worker on exit.
-export function learnFromTranscript(transcriptPath: string, skillId: string): boolean {
-  if (isSkillWorker() || !transcriptPath || !skillId.trim()) return false;
-  if (activeLearners() >= MAX_LEARNERS()) return false; // too many running: skip this turn, a later one re-learns
-  const lock = join(LEARNERS_DIR(), `${randomUUID()}.lock`);
-  try { mkdirSync(LEARNERS_DIR(), { recursive: true }); writeFileSync(lock, String(Date.now())); } catch { /* proceed without a lock */ }
-  // The run records its progress to the activity log; watch it live in the web UI at /skills (cairn ui).
-  // No terminal is spawned (that was unreliable across Windows default-terminal setups).
-  try {
-    const child = spawn(process.platform === "win32" ? "bun.exe" : "bun", [WORKER(), transcriptPath], {
+    const child = spawn(process.platform === "win32" ? "bun.exe" : "bun", [WORKER(), job.transcriptPath], {
       detached: true,
       stdio: "ignore",
-      windowsHide: true, // no console window pops up on Windows (the detached worker is invisible)
-      // CAIRN_SKILL_WORKER blocks recursion; CAIRN_READONLY is cleared because the worker WRITES skills
-      // (the hook that spawns it runs read-only). CAIRN_LEARNER_LOCK tells the worker which lock to release.
-      // CAIRN_REVIEW_ID carries the id of the agent-declared skill the worker grades against.
-      env: { ...process.env, CAIRN_SKILL_WORKER: "1", CAIRN_READONLY: "", CAIRN_LEARNER_LOCK: lock, CAIRN_REVIEW_ID: skillId },
+      windowsHide: true,
+      env: {
+        ...process.env,
+        CAIRN_SKILL_WORKER: "1",
+        CAIRN_READONLY: "",
+        CAIRN_REVIEW_JOB_ID: job.id,
+        CAIRN_REVIEW_ATTEMPT: String(job.attempts),
+        CAIRN_REVIEW_ID: job.skillId,
+        CAIRN_LEARN_BACKEND: job.backend,
+      },
     });
-    child.unref(); // let the parent (the Stop hook) exit immediately
+    child.unref();
     return true;
-  } catch { try { rmSync(lock, { force: true }); } catch { /* ignore */ } return false; }
+  } catch (error) {
+    failReviewJob(job.id, error instanceof Error ? error.message : String(error), job.attempts);
+    return false;
+  }
+}
+
+export function drainReviewQueue(): number {
+  if (isSkillWorker() && !process.env.CAIRN_REVIEW_JOB_ID) return 0;
+  let started = 0;
+  for (const job of claimReviewJobs(MAX_LEARNERS())) if (spawnJob(job)) started++;
+  return started;
+}
+
+export function learnFromTranscript(
+  transcriptPath: string,
+  skillId: string,
+  options: { id?: string; sessionId?: string; backend?: string } = {}
+): boolean {
+  if (isSkillWorker() || !transcriptPath || !skillId.trim()) return false;
+  try {
+    const sessionId = options.sessionId ?? "";
+    const id = options.id ?? transcriptReviewKey(transcriptPath, skillId, sessionId);
+    const accepted = enqueueReview({
+      id,
+      sessionId,
+      skillId,
+      transcriptPath,
+      backend: options.backend ?? process.env.CAIRN_LEARN_BACKEND ?? "copilot",
+    }).accepted;
+    if (!accepted) return false;
+    drainReviewQueue();
+    return true;
+  } catch { return false; }
+}
+
+export function learnLatestCopilotReview(
+  transcriptPath: string,
+  sessionId: string,
+  options: { skillId?: string; agentId?: string; subagentOnly?: boolean } = {}
+): boolean {
+  const event = latestCopilotReview(transcriptPath, sessionId, options);
+  if (!event) return false;
+  return learnFromTranscript(transcriptPath, event.skillId, {
+    id: event.id,
+    sessionId,
+    backend: "copilot",
+  });
 }

@@ -46,6 +46,10 @@ async function handler(req: Request): Promise<Response> {
   if (pathname === "/skills") return asset("skills.html", "text/html; charset=utf-8");
   // Live activity feed data, consumed by the unified /skills dashboard (newest first).
   if (pathname === "/api/activity" && m === "GET") { const { readActivity } = await import("../skill/activity"); return Response.json({ activity: readActivity().slice(-100).reverse() }); }
+  if (pathname === "/api/review-jobs" && m === "GET") {
+    const { listReviewJobs } = await import("../skill/review-queue");
+    return Response.json({ jobs: listReviewJobs(100) });
+  }
   // /activity converged into /skills (one dashboard: skills + live feed). Redirect old links there.
   if (pathname === "/activity") return new Response(null, { status: 302, headers: { location: "/skills" } });
 

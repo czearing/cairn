@@ -59,19 +59,22 @@ test("addVersion records each CHANGED master (dedup unchanged), skillVersions re
 
 test("listSkills includes the master-version timeline", () => {
   putSkill({ id: "v2", task: "t2", masterPrompt: "B", ts: 1 }, [1, 0]);
+  putSkill({ id: "pending", task: "pending", masterPrompt: "", ts: 2 }, [0, 1]);
   addVersion("v2", "A", "wA", 0.6, 1);
   addVersion("v2", "B", "wB", 0.8, 2);
-  const sk = listSkills().find((x) => x.id === "v2")!;
+  const listed = listSkills();
+  const sk = listed.find((x) => x.id === "v2")!;
   expect(sk.versions.length).toBe(2);
   expect(sk.versions[0]!.master).toBe("A"); // oldest first
+  expect(listed.some((x) => x.id === "pending")).toBe(false);
 });
 
-test("skillCatalog lists each skill as {id, label, gist} from the master's first line", () => {
+test("skillCatalog lists learned skills and hides pending skills without a master", () => {
   putSkill({ id: "c1", task: "haiku", masterPrompt: "1. count 5-7-5 syllables\n2. sharpen the cut", ts: 1 }, [1, 0]);
   putSkill({ id: "c2", task: "blank", masterPrompt: "", ts: 2 }, [0, 1]);
   const cat = skillCatalog();
   expect(cat).toContainEqual({ id: "c1", label: "haiku", gist: "1. count 5-7-5 syllables" }); // gist = first non-empty master line
-  expect(cat).toContainEqual({ id: "c2", label: "blank", gist: "" });                          // no master -> empty gist, never crashes
+  expect(cat.some((s) => s.id === "c2")).toBe(false);
 });
 
 test("putSkill/getSkill round-trips, vector decodes back", () => {
@@ -121,7 +124,7 @@ test("insertSkillIfAbsent is idempotent on the normalized label (no duplicate sk
   insertSkillIfAbsent({ id: "A", task: "haiku", masterPrompt: "", ts: 1 }, [1, 0]);
   insertSkillIfAbsent({ id: "B", task: "Write a Haiku", masterPrompt: "", ts: 2 }, [0, 1]); // same normalized label
   expect(skillByLabel("haiku")!.id).toBe("A"); // first writer wins
-  expect(skillVectors().length).toBe(1);       // exactly one skill, no duplicate
+  expect(skillCatalog().length).toBe(0);       // pending skill stays hidden until its first master
 });
 
 test("skillByLabel resolves the exact restore key, null when absent", () => {

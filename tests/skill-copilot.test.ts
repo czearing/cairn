@@ -211,6 +211,18 @@ test("extractRunCopilot returns null when the only user message is a system enve
   expect(extractRunCopilot(p)).toBeNull();                  // nothing the human actually asked for: skip learning
 });
 
+test("extractRunCopilot excludes Cairn's structured internal reminder envelope", () => {
+  const p = events([
+    userMsg("review this change"),
+    asstMsg("The change is correct."),
+    userMsg("<cairn-internal>\nYou used a skill but have not reviewed it.\n</cairn-internal>"),
+    asstMsg("Review already submitted."),
+  ]);
+  const run = extractRunCopilot(p);
+  expect(run?.request).toBe("review this change");
+  expect(run?.request).not.toContain("cairn-internal");
+});
+
 test("extractRunCopilot captures a subagent-produced deliverable that the main agent only narrates", () => {
   // The backgrounded-subagent bug: the main agent ends on a status line, but the STORY was written by a
   // subagent and is interleaved in the same log (agentId-tagged). The graded output must be the story.

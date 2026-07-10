@@ -10,6 +10,7 @@
 // stable wrapper tags here; cairn's own injected brain/workflow reminders are plain prose and are left to the
 // segmenter to recognize, so this list never has to track prompt wording.
 const ENVELOPE_PREFIXES = [
+  "<cairn-internal",
   "<task-notification",
   "<system_reminder",
   "<system-reminder",

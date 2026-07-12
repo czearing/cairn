@@ -50,9 +50,10 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   const cfg: McpConfig = existsSync(path) ? JSON.parse(await readFile(path, "utf8")) : {};
   const servers = cfg.mcpServers ?? (cfg.mcpServers = {});
   const env = libsqlEnv();
-  // --hot: the server re-loads changed source in-place (same process/session), so a push reaches every live
-  // Copilot session without a restart. See src/mcp/server.ts for the connect-once guard that makes it safe.
-  const wantArgs = ["--hot", SERVER];
+  // Copilot launches the stdio server without a Cairn cwd. Bun --hot then repeatedly warns that imported
+  // files are outside its project and can enter a reload-warning loop. Tool schemas are session-scoped
+  // anyway, so use one stable process and let /restart pick up source or schema changes.
+  const wantArgs = [SERVER];
   const existing = servers[mcpName()] as { command?: string; args?: string[]; env?: Record<string, string> } | undefined;
   if (existing) {
     const cur = existing.env ?? (existing.env = {});
@@ -62,7 +63,7 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
     if (!envMissing.length && !argsStale && !cmdStale) return "already";
     if (dryRun) return "would-add";
     for (const [k, v] of envMissing) cur[k] = v;
-    if (argsStale) existing.args = wantArgs; // upgrade an older install to --hot in place
+    if (argsStale) existing.args = wantArgs;
     if (cmdStale) existing.command = bunExe();
     await writeFile(path, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
     return "added";

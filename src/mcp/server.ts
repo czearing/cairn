@@ -8,15 +8,11 @@ import type { Neuron } from "../core/neurons.types";
 import type { ScoredResult } from "../core/search.types";
 
 // The bridge that lets an agent read and write the brain. THREE tools, each a thin wrapper
-// over src/core (the same code the tests cover). Run: bun --hot src/mcp/server.ts
+// over src/core (the same code the tests cover). Run: bun src/mcp/server.ts
 //
-// HOT-RELOAD: installed as `bun --hot`, so a `git pull` / source edit is picked up by every LIVE server
-// process (one per Copilot session) WITHOUT restarting the session. --hot re-runs THIS entry file in the
-// same process on each change; two rules make that safe: (1) every tool handler resolves its logic via a
-// dynamic import() so it serves freshly-reloaded code, and (2) the stdio transport is bound exactly once
-// (guarded at the bottom) — a second bind on the same stdin would corrupt the protocol. Tool NAMES and
-// SCHEMAS are sent to the client once at connect, so changing those still needs a new session; handler
-// BEHAVIOR updates live.
+// Tool handlers resolve their logic through dynamic imports. Hosts that deliberately run this file with
+// Bun hot reload can refresh handler behavior, while Copilot uses a stable stdio process because it starts
+// the command without a Cairn project cwd. Tool names and schemas are session-scoped in either mode.
 
 const server = new McpServer({ name: "cairn", version: "1.0.0" });
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
@@ -228,10 +224,8 @@ server.tool(
   }
 );
 
-// Bind the stdio transport exactly once. `bun --hot` re-runs this file in the same process on every source
-// change; the live server (and its stdin listeners) from the first run keep serving, and its handlers pull
-// reloaded logic via dynamic import(). A second connect() on the same stdin would corrupt the protocol, so a
-// globalThis flag makes every hot re-run a no-op here.
+// Bind the stdio transport exactly once. This guard also keeps optional hot-reload hosts from binding a
+// second listener to the same stdin.
 const hotState = globalThis as typeof globalThis & { __cairnConnected?: boolean };
 if (!hotState.__cairnConnected) {
   hotState.__cairnConnected = true;

@@ -92,6 +92,7 @@ test("install registers cairn in the Copilot mcp-config and writes the sessionSt
   expect(mcp.mcpServers.cairn.type).toBe("local"); // Copilot CLI's local-stdio type
   expect(mcp.mcpServers.cairn.tools).toEqual(["*"]); // required to enable the tools
   expect(JSON.stringify(mcp.mcpServers.cairn.args)).toContain("server.ts");
+  expect(mcp.mcpServers.cairn.args).not.toContain("--hot"); // stable stdio; Copilot has no Cairn cwd
   const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
   expect(hook.hooks.sessionStart[0].type).toBe("command"); // workflow injected once per session
   expect(hook.hooks.userPromptSubmitted[0].type).toBe("command"); // per-turn latch reset

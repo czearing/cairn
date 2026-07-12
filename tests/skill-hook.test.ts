@@ -252,6 +252,17 @@ test("skill_search returns several candidate masters plus the catalog, so the ag
   expect(res.catalog.some((c) => c.label === "short story" && typeof c.id === "string" && c.id.length > 0)).toBe(true); // the full catalog rides along, each with an id
 });
 
+test("skill_search promotes declared bare URL handlers above unrelated semantic matches", async () => {
+  const handler = await categorize("url reconstruction", 1);
+  setMasterPrompt(handler.skill.id, "1. Treat any bare URL as a reconstruction request.\n2. Capture exact structured evidence.");
+  const unrelated = await categorize("localhost debugging", 2);
+  setMasterPrompt(unrelated.skill.id, "1. Diagnose localhost server failures.");
+  const prev = process.env.CAIRN_SKILLS; process.env.CAIRN_SKILLS = "1";
+  const res = await skillSearch("http://localhost:3000");
+  if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
+  expect(res.matches[0]?.id).toBe(handler.skill.id);
+});
+
 test("skillsExist is false on an empty store, true once a skill exists (gates the search-first reminder)", async () => {
   const prev = process.env.CAIRN_SKILLS; process.env.CAIRN_SKILLS = "1";
   expect(skillsExist()).toBe(false);                               // nothing learned yet -> no reminder

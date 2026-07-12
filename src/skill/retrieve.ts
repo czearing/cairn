@@ -14,6 +14,17 @@ export const RETRIEVE_THRESHOLD = Number(process.env.CAIRN_RETRIEVE_THRESHOLD ||
 // CAIRN_RETRIEVE_K to pull a cluster again.
 export const RETRIEVE_K = Number(process.env.CAIRN_RETRIEVE_K || "1");
 
+const BARE_URL =
+  /^(?:(?:https?|file):\/\/\S+|localhost(?::\d+)?(?:\/\S*)?|127\.0\.0\.1(?::\d+)?(?:\/\S*)?)$/i;
+
+export function isBareUrlQuery(query: string): boolean {
+  return BARE_URL.test(query.trim());
+}
+
+function handlesBareUrls(skill: Skill): boolean {
+  return /\bbare url\b/i.test(skill.masterPrompt);
+}
+
 // Condense a turn's user messages into ONE query, so a 10-message turn does ONE search, not ten. The most
 // recent messages carry the current ask; a little prior context disambiguates. Bounded so a long turn
 // cannot blow up the embed input.
@@ -28,19 +39,23 @@ export async function retrieveSkills(query: string, k = RETRIEVE_K): Promise<{ s
   if (!query.trim()) return [];
   const vecs = skillVectors();
   if (!vecs.length) return []; // empty store: skip the embed entirely (the common default-on case early on)
-  let q: number[];
-  try { q = await embed(query); } catch { return []; }
-  const scored: { id: string; score: number }[] = [];
+  const bareUrl = isBareUrlQuery(query);
+  let q: number[] = [];
+  try { q = await embed(query); } catch { if (!bareUrl) return []; }
+  const scored: { skill: Skill; score: number; urlHandler: boolean }[] = [];
   for (const s of vecs) {
     // max over the clean label vector and the rich (label+master) vector, so a query phrased with domain
     // vocabulary ("pull request description") still matches a skill labeled "pr description".
     let score = -1;
     if (s.vec.length === q.length) score = cosine(q, s.vec);
     if (s.rich.length === q.length) score = Math.max(score, cosine(q, s.rich));
-    if (score >= RETRIEVE_THRESHOLD) scored.push({ id: s.id, score });
+    const skill = getSkill(s.id);
+    if (!skill) continue;
+    const urlHandler = bareUrl && handlesBareUrls(skill);
+    if (score >= RETRIEVE_THRESHOLD || urlHandler) scored.push({ skill, score, urlHandler });
   }
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, k).map((x) => ({ skill: getSkill(x.id), score: x.score })).filter((x): x is { skill: Skill; score: number } => x.skill != null);
+  scored.sort((a, b) => Number(b.urlHandler) - Number(a.urlHandler) || b.score - a.score);
+  return scored.slice(0, k).map(({ skill, score }) => ({ skill, score }));
 }
 
 // Rank EVERY skill by semantic similarity to a query (no threshold), most-relevant first. For the UI search

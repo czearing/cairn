@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { condenseMessages, injectionText, skillInstructions, explainInjection } from "../src/skill/retrieve";
+import { condenseMessages, injectionText, skillInstructions, explainInjection, isBareUrlQuery } from "../src/skill/retrieve";
 import { isSkillWorker, learnFromTranscript } from "../src/skill/learn";
 import type { Skill } from "../src/skill/types";
 
@@ -9,6 +9,15 @@ test("condenseMessages turns many messages into ONE bounded query (no per-messag
   expect(condenseMessages(["  ", "", "haiku"])).toBe("haiku");        // blanks dropped
   expect(condenseMessages([])).toBe("");
   expect(condenseMessages(["x".repeat(5000)]).length).toBe(2000);     // bounded
+});
+
+test("bare URL detection is strict and supports browser, localhost, and file targets", () => {
+  expect(isBareUrlQuery("https://example.com/path?q=1")).toBe(true);
+  expect(isBareUrlQuery("http://localhost:3000")).toBe(true);
+  expect(isBareUrlQuery("localhost:4173/story")).toBe(true);
+  expect(isBareUrlQuery("file:///C:/Code/prototype/index.html")).toBe(true);
+  expect(isBareUrlQuery("recreate https://example.com")).toBe(false);
+  expect(isBareUrlQuery("not a url")).toBe(false);
 });
 
 test("instructions and explanation are separate inputs; injecting instructions alone omits the framing", () => {

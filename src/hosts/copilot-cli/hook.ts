@@ -34,6 +34,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { isSystemEnvelope } from "../../skill/noise";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 const emit = (obj: object) => process.stdout.write(JSON.stringify(obj));
@@ -179,16 +180,30 @@ function latestUserMarker(transcriptPath: string): string {
     const length = Math.min(size, 1024 * 1024);
     const buffer = Buffer.alloc(length);
     readSync(fd, buffer, 0, length, size - length);
-    const lines = buffer.toString("utf8").split(/\r?\n/).reverse();
-    for (const line of lines) {
-      if (!line.includes('"type":"user.message"')) continue;
-      const event = JSON.parse(line) as { id?: string; timestamp?: string };
-      return event.id || event.timestamp || "";
-    }
+    return latestHumanUserMarker(
+      buffer.toString("utf8").split(/\r?\n/),
+    );
   } catch {
     return "";
   } finally {
     if (fd !== undefined) closeSync(fd);
+  }
+}
+
+export function latestHumanUserMarker(lines: string[]): string {
+  for (const line of [...lines].reverse()) {
+    if (!line.includes('"type":"user.message"')) continue;
+    try {
+      const event = JSON.parse(line) as {
+        id?: string;
+        timestamp?: string;
+        data?: { content?: string };
+      };
+      if (isSystemEnvelope(event.data?.content || "")) continue;
+      return event.id || event.timestamp || "";
+    } catch {
+      continue;
+    }
   }
   return "";
 }

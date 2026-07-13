@@ -9,6 +9,7 @@ import {
   gateDecision,
   internalContext,
   isTool,
+  latestHumanUserMarker,
   postToolFiles,
   STOP_CAP,
   stopDecision,
@@ -77,7 +78,22 @@ test("a new transcript user marker resets stale turn compliance", () => {
     stopBlocked: false,
     userMarker: "new-user",
   });
+
   expect(synchronizeTurnState(previous, "old-user")).toBe(previous);
+});
+
+test("latest user marker ignores cairn and host reminder envelopes", () => {
+  const human = JSON.stringify({
+    type: "user.message",
+    id: "human-1",
+    data: { content: "fix the component" },
+  });
+  const reminder = JSON.stringify({
+    type: "user.message",
+    id: "reminder-1",
+    data: { content: "<cairn-internal>record this turn</cairn-internal>" },
+  });
+  expect(latestHumanUserMarker([human, reminder])).toBe("human-1");
 });
 
 // ── gateDecision: the preToolUse brain_create gate (pure; deps injected) ──────────────────────────

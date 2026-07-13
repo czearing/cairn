@@ -223,6 +223,7 @@ interface Payload {
   args: Record<string, unknown>;
   transcriptPath: string;
   prompt: string;
+  eventId: string;
 }
 function parsePayload(raw: string): Payload {
   try {
@@ -236,9 +237,10 @@ function parsePayload(raw: string): Payload {
       args: args ?? {},
       transcriptPath: (j.transcriptPath as string) ?? (j.transcript_path as string) ?? "",
       prompt: (j.prompt as string) ?? "",
+      eventId: j.timestamp == null ? "" : String(j.timestamp),
     };
   } catch {
-    return { sessionId: "", agentId: "", toolName: "", args: {}, transcriptPath: "", prompt: "" };
+    return { sessionId: "", agentId: "", toolName: "", args: {}, transcriptPath: "", prompt: "", eventId: "" };
   }
 }
 
@@ -250,13 +252,23 @@ export const shouldStartUserTurn = (prompt: string): boolean =>
 async function queueLatestReview(
   transcriptPath: string,
   sessionId: string,
-  options: { skillId?: string; agentId?: string; subagentOnly?: boolean } = {}
+  options: { skillId?: string; agentId?: string; subagentOnly?: boolean; eventId?: string } = {}
 ): Promise<boolean> {
   if (!transcriptPath || !sessionId) return false;
   try {
     const { skillsEnabled } = await import("../../core/config");
     if (!skillsEnabled()) return false;
-    const { learnLatestCopilotReview } = await import("../../skill/learn");
+    const { learnFromTranscript, learnLatestCopilotReview } = await import("../../skill/learn");
+    if (options.skillId && !options.subagentOnly) {
+      const { transcriptReviewKey } = await import("../../skill/review-queue");
+      return learnFromTranscript(transcriptPath, options.skillId, {
+        id: options.eventId
+          ? `${sessionId}:${options.agentId || "main"}:${options.eventId}:${options.skillId}`
+          : transcriptReviewKey(transcriptPath, options.skillId, sessionId),
+        sessionId,
+        backend: "copilot",
+      });
+    }
     return learnLatestCopilotReview(transcriptPath, sessionId, options);
   } catch {
     return false; // skills are best-effort
@@ -306,7 +318,7 @@ async function main(): Promise<void> {
 
   const raw = await readStdin();
   debugLog(mode ?? "", raw);
-  const { sessionId, agentId, toolName, args, transcriptPath, prompt } = parsePayload(raw);
+  const { sessionId, agentId, toolName, args, transcriptPath, prompt, eventId } = parsePayload(raw);
 
   if (mode === "subagent-stop") {
     const path = transcriptPath || eventsPathForSession(sessionId);
@@ -381,7 +393,11 @@ async function main(): Promise<void> {
     if (isTool(toolName, "skill_review")) {
       const id = typeof args.id === "string" ? args.id : "";
       st.skillUsed = true;
-      if (await queueLatestReview(path, sessionId, { skillId: id, agentId: agentId || undefined })) st.reviewed = true;
+      if (await queueLatestReview(path, sessionId, {
+        skillId: id,
+        agentId: agentId || undefined,
+        eventId,
+      })) st.reviewed = true;
     }
 
     const answer = typeof args.answer === "string" ? args.answer : "";

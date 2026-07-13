@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -170,26 +170,34 @@ test("subagentStop durably queues the subagent's latest skill_review", () => {
   expect(invoke("agent-stop", { sessionId: "session-1" }).stdout.toString()).toBe("{}");
 });
 
-test("an accepted queued review satisfies agentStop even with no worker capacity", () => {
+test("successful postToolUse queues review before tool completion is written and survives hook restart", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-review-stop-${id}.db`);
   const home = join(tmpdir(), `cairn-review-home-${id}`);
-  const transcriptPath = join(tmpdir(), `cairn-review-stop-${id}.jsonl`);
+  const transcriptPath = join(home, ".copilot", "session-state", "session-2", "events.jsonl");
+  mkdirSync(join(home, ".copilot", "session-state", "session-2"), { recursive: true });
   writeFileSync(transcriptPath, JSON.stringify({
     type: "tool.execution_start",
     timestamp: 20,
     data: { toolCallId: "review-2", toolName: "cairn-skill_review", arguments: { id: "skill-2" } },
-  }) + "\n" + JSON.stringify({
-    type: "tool.execution_complete",
-    timestamp: 21,
-    data: { toolCallId: "review-2", success: true },
   }));
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
   const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_MAX_LEARNERS: "0", CAIRN_SKILLS: "1" };
   const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
 
   expect(invoke("post-tool", { sessionId: "session-2", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
-  expect(invoke("post-tool", { sessionId: "session-2", toolName: "cairn-skill_review", toolArgs: { id: "skill-2" }, transcriptPath }).status).toBe(0);
+  const reviewPayload = {
+    sessionId: "session-2",
+    timestamp: 21,
+    toolName: "cairn-skill_review",
+    toolArgs: { id: "skill-2" },
+  };
+  expect(invoke("post-tool", reviewPayload).status).toBe(0);
+  expect(invoke("post-tool", reviewPayload).status).toBe(0);
+  const d = new Database(dbPath);
+  const jobs = d.query("SELECT skill_id, status FROM review_jobs").all() as { skill_id: string; status: string }[];
+  d.close();
+  expect(jobs).toEqual([{ skill_id: "skill-2", status: "pending" }]);
   const stop = invoke("agent-stop", { sessionId: "session-2" });
   expect(stop.status).toBe(0);
   expect(stop.stdout.toString()).toBe("{}");

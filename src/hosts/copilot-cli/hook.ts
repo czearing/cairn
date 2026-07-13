@@ -22,7 +22,16 @@
 //
 // Per-event context on PreToolUse remains unreachable; the brain_create gate enforces the format intent instead.
 import { readFile } from "node:fs/promises";
-import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -88,6 +97,7 @@ export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; review
   file: string;
 } {
   if (s.stopNudges >= STOP_CAP) return { file: "" };
+  if (!s.skillUsed) return { file: "skill-search-reminder.md" };
   if (!s.brainUsed) return { file: "turn-reminder.md" };
   if (s.skillUsed && !s.reviewed) return { file: "skill-review.md" };
   return { file: "" };
@@ -122,8 +132,16 @@ interface TurnState {
   reviewed: boolean;
   stopNudges: number;
   stopBlocked: boolean;
+  userMarker: string;
 }
-const freshTurn = (): TurnState => ({ brainUsed: false, skillUsed: false, reviewed: false, stopNudges: 0, stopBlocked: false });
+const freshTurn = (): TurnState => ({
+  brainUsed: false,
+  skillUsed: false,
+  reviewed: false,
+  stopNudges: 0,
+  stopBlocked: false,
+  userMarker: "",
+});
 const turnDir = () => join(homedir(), ".cairn", "copilot-turn");
 const turnPath = (sid: string) =>
   join(turnDir(), `${(sid || "default").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128)}.json`);
@@ -142,6 +160,37 @@ function writeTurn(sid: string, s: TurnState): void {
   } catch {
     /* state is best-effort: a miss only weakens a nudge, never breaks the turn */
   }
+}
+
+export function synchronizeTurnState(
+  state: TurnState,
+  userMarker: string,
+): TurnState {
+  if (!userMarker || state.userMarker === userMarker) return state;
+  return { ...freshTurn(), userMarker };
+}
+
+function latestUserMarker(transcriptPath: string): string {
+  if (!transcriptPath) return "";
+  let fd: number | undefined;
+  try {
+    fd = openSync(transcriptPath, "r");
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, 1024 * 1024);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    const lines = buffer.toString("utf8").split(/\r?\n/).reverse();
+    for (const line of lines) {
+      if (!line.includes('"type":"user.message"')) continue;
+      const event = JSON.parse(line) as { id?: string; timestamp?: string };
+      return event.id || event.timestamp || "";
+    }
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  return "";
 }
 
 // ── stdin payload parsing (camelCase config ⇒ camelCase payloads; snake_case tolerated) ─────────
@@ -241,7 +290,15 @@ async function main(): Promise<void> {
 
   if (mode === "subagent-stop") {
     const path = transcriptPath || eventsPathForSession(sessionId);
-    await queueLatestReview(path, sessionId, { agentId: agentId || undefined, subagentOnly: true });
+    if (await queueLatestReview(path, sessionId, { agentId: agentId || undefined, subagentOnly: true })) {
+      const st = synchronizeTurnState(
+        readTurn(sessionId),
+        latestUserMarker(path),
+      );
+      st.skillUsed = true;
+      st.reviewed = true;
+      writeTurn(sessionId, st);
+    }
     emit({});
     return;
   }
@@ -286,7 +343,11 @@ async function main(): Promise<void> {
   if (mode === "post-tool") {
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const stateId = turnScope(sessionId, agentId);
-    const st = readTurn(stateId);
+    const path = transcriptPath || eventsPathForSession(sessionId);
+    const st = synchronizeTurnState(
+      readTurn(stateId),
+      latestUserMarker(path),
+    );
     if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) st.brainUsed = true;
     // skill_search / skill_create mean the agent is doing skill work: the turn now OWES a skill_review, which
     // the agentStop gate enforces.
@@ -299,7 +360,6 @@ async function main(): Promise<void> {
     if (isTool(toolName, "skill_review")) {
       const id = typeof args.id === "string" ? args.id : "";
       st.skillUsed = true;
-      const path = transcriptPath || eventsPathForSession(sessionId);
       if (await queueLatestReview(path, sessionId, { skillId: id, agentId: agentId || undefined })) st.reviewed = true;
     }
 
@@ -317,7 +377,11 @@ async function main(): Promise<void> {
     // no longer auto-learns (there is no label to grade against here) — it only NAGS: brain unused, or a skill
     // was used but the deliverable was not submitted via skill_review. Bounded to STOP_CAP nudges/turn.
     if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
-    const st = readTurn(sessionId);
+    const path = transcriptPath || eventsPathForSession(sessionId);
+    const st = synchronizeTurnState(
+      readTurn(sessionId),
+      latestUserMarker(path),
+    );
     const { file } = stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, reviewed: st.reviewed, stopNudges: st.stopNudges });
     const text = file ? internalContext(await promptText(file)) : "";
     if (text) {

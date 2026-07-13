@@ -1,10 +1,20 @@
 import { test, expect, beforeEach } from "bun:test";
+import { readFileSync } from "node:fs";
 import { fromCapture } from "../src/skill/reviewer";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
   try { db().run("DELETE FROM skills"); } catch { /* not created yet */ }
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created yet */ }
+});
+
+test("learner prompt never adds reviewer subagents by default", () => {
+  const prompt = readFileSync(
+    new URL("../src/skill/prompts/learn-system.md", import.meta.url),
+    "utf8",
+  );
+  expect(prompt).toContain("Reviewer spawning is not a default quality method");
+  expect(prompt).not.toContain("or add a subagent reviewer");
 });
 
 test("fromCapture accepts a complete labeled submission, splitting master from explanation", () => {

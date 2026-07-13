@@ -5,7 +5,15 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { postToolFiles, stopDecision, gateDecision, internalContext, isTool, STOP_CAP } from "../src/hosts/copilot-cli/hook";
+import {
+  gateDecision,
+  internalContext,
+  isTool,
+  postToolFiles,
+  STOP_CAP,
+  stopDecision,
+  synchronizeTurnState,
+} from "../src/hosts/copilot-cli/hook";
 
 // ── postToolFiles: which prompts a COMPLETED Copilot tool delivers, mirroring Claude's after-tool set ──
 
@@ -32,8 +40,8 @@ test("postToolFiles is empty for unrelated tools", () => {
 
 // ── stopDecision: the agentStop gate, bounded so it can never loop forever ────────────────────────
 
-test("stopDecision nudges turn-reminder when the brain was not used this turn", () => {
-  expect(stopDecision({ brainUsed: false, skillUsed: false, reviewed: false, stopNudges: 0 })).toEqual({ file: "turn-reminder.md" });
+test("stopDecision requires skill search before brain use", () => {
+  expect(stopDecision({ brainUsed: false, skillUsed: false, reviewed: false, stopNudges: 0 })).toEqual({ file: "skill-search-reminder.md" });
 });
 
 test("stopDecision nudges skill-review when a skill was used but not reviewed before ending", () => {
@@ -44,12 +52,32 @@ test("stopDecision allows the turn to end when the skill was reviewed", () => {
   expect(stopDecision({ brainUsed: true, skillUsed: true, reviewed: true, stopNudges: 0 })).toEqual({ file: "" });
 });
 
-test("stopDecision allows the turn to end when no skill was used", () => {
-  expect(stopDecision({ brainUsed: true, skillUsed: false, reviewed: false, stopNudges: 0 })).toEqual({ file: "" });
+test("stopDecision requires skill search even when the brain was used", () => {
+  expect(stopDecision({ brainUsed: true, skillUsed: false, reviewed: false, stopNudges: 0 })).toEqual({ file: "skill-search-reminder.md" });
 });
 
 test("stopDecision stops nudging once the per-turn cap is reached (no infinite loop)", () => {
   expect(stopDecision({ brainUsed: false, skillUsed: true, reviewed: false, stopNudges: STOP_CAP })).toEqual({ file: "" });
+});
+
+test("a new transcript user marker resets stale turn compliance", () => {
+  const previous = {
+    brainUsed: true,
+    skillUsed: true,
+    reviewed: true,
+    stopNudges: 1,
+    stopBlocked: false,
+    userMarker: "old-user",
+  };
+  expect(synchronizeTurnState(previous, "new-user")).toEqual({
+    brainUsed: false,
+    skillUsed: false,
+    reviewed: false,
+    stopNudges: 0,
+    stopBlocked: false,
+    userMarker: "new-user",
+  });
+  expect(synchronizeTurnState(previous, "old-user")).toBe(previous);
 });
 
 // ── gateDecision: the preToolUse brain_create gate (pure; deps injected) ──────────────────────────

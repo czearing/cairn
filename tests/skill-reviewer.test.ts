@@ -8,13 +8,13 @@ beforeEach(() => {
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created yet */ }
 });
 
-test("learner prompt never adds reviewer subagents by default", () => {
+test("learner prompt does not suggest reviewer subagents", () => {
   const prompt = readFileSync(
     new URL("../src/skill/prompts/learn-system.md", import.meta.url),
     "utf8",
   );
-  expect(prompt).toContain("Reviewer spawning is not a default quality method");
   expect(prompt).not.toContain("or add a subagent reviewer");
+  expect(prompt).not.toContain("Reviewer spawning");
 });
 
 test("fromCapture accepts a complete labeled submission, splitting master from explanation", () => {

@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   gateDecision,
+  eventsPathForSession,
+  harnessStopDecision,
   internalContext,
   isTool,
   latestHumanUserMarker,
@@ -60,6 +62,12 @@ test("stopDecision requires skill search even when the brain was used", () => {
 
 test("stopDecision stops nudging once the per-turn cap is reached (no infinite loop)", () => {
   expect(stopDecision({ brainUsed: false, skillUsed: true, reviewed: false, stopNudges: STOP_CAP })).toEqual({ file: "" });
+});
+
+test("harness stop requires skill lifecycle but not brain use", () => {
+  expect(harnessStopDecision({ skillUsed: false, reviewed: false, stopNudges: 0 })).toEqual({ file: "skill-search-reminder.md" });
+  expect(harnessStopDecision({ skillUsed: true, reviewed: false, stopNudges: 0 })).toEqual({ file: "skill-review.md" });
+  expect(harnessStopDecision({ skillUsed: true, reviewed: true, stopNudges: 0 })).toEqual({ file: "" });
 });
 
 test("a new transcript user marker resets stale turn compliance", () => {
@@ -143,6 +151,14 @@ test("isTool matches across naming conventions", () => {
 test("internalContext gives injected reminders one structural envelope", () => {
   expect(internalContext("remember this")).toBe("<cairn-internal>\nremember this\n</cairn-internal>");
   expect(internalContext("")).toBe("");
+});
+
+test("eventsPathForSession honors isolated COPILOT_HOME", () => {
+  const previous = process.env.COPILOT_HOME;
+  process.env.COPILOT_HOME = "C:\\isolated";
+  expect(eventsPathForSession("abc")).toBe(join("C:\\isolated", "session-state", "abc", "events.jsonl"));
+  if (previous === undefined) delete process.env.COPILOT_HOME;
+  else process.env.COPILOT_HOME = previous;
 });
 
 test("subagentStop durably queues the subagent's latest skill_review", () => {

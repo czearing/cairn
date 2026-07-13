@@ -66,6 +66,8 @@ const promptText = async (file: string): Promise<string> => {
     return "";
   }
 };
+const workflowPrompt = (): Promise<string> =>
+  promptText(process.env.AGENT_HARNESS === "1" ? "harness-agent.md" : "user-message.md");
 
 // MCP tools arrive server-prefixed ("cairn-brain_search") or bare/namespaced ("brain_search" /
 // "mcp__cairn__brain_search"); accept any of those forms.
@@ -101,6 +103,15 @@ export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; review
   if (!s.skillUsed) return { file: "skill-search-reminder.md" };
   if (!s.brainUsed) return { file: "turn-reminder.md" };
   if (s.skillUsed && !s.reviewed) return { file: "skill-review.md" };
+  return { file: "" };
+}
+
+export function harnessStopDecision(s: { skillUsed: boolean; reviewed: boolean; stopNudges: number }): {
+  file: string;
+} {
+  if (s.stopNudges >= STOP_CAP) return { file: "" };
+  if (!s.skillUsed) return { file: "skill-search-reminder.md" };
+  if (!s.reviewed) return { file: "skill-review.md" };
   return { file: "" };
 }
 
@@ -278,8 +289,9 @@ async function queueLatestReview(
 // Copilot writes each session's turn log to ~/.copilot/session-state/<sessionId>/events.jsonl. postToolUse
 // (where skill_review is detected) carries only the sessionId, not a transcript path, so we reconstruct the
 // events-log path from it to review the whole turn — including any subagent output already written there.
-function eventsPathForSession(sessionId: string): string {
-  return join(homedir(), ".copilot", "session-state", sessionId, "events.jsonl");
+export function eventsPathForSession(sessionId: string): string {
+  const home = process.env.COPILOT_HOME || join(homedir(), ".copilot");
+  return join(home, "session-state", sessionId, "events.jsonl");
 }
 
 function debugLog(mode: string, raw: string): void {
@@ -306,7 +318,7 @@ async function main(): Promise<void> {
   const mode = process.argv[2];
 
   if (mode === "session-start") {
-    const text = await promptText("user-message.md");
+    const text = await workflowPrompt();
     emit(text ? { additionalContext: internalContext(text) } : {});
     return;
   }
@@ -348,7 +360,7 @@ async function main(): Promise<void> {
     if (!shouldStartUserTurn(prompt)) return void emit({});
     const prev = readTurn(sessionId);
     writeTurn(sessionId, { ...freshTurn(), stopNudges: prev.stopBlocked ? prev.stopNudges : 0 });
-    const wf = await promptText("user-message.md");
+    const wf = await workflowPrompt();
     emit(wf ? { additionalContext: internalContext(wf) } : {});
     return;
   }
@@ -419,7 +431,9 @@ async function main(): Promise<void> {
       readTurn(sessionId),
       latestUserMarker(path),
     );
-    const { file } = stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, reviewed: st.reviewed, stopNudges: st.stopNudges });
+    const file = process.env.AGENT_HARNESS === "1"
+      ? harnessStopDecision(st).file
+      : stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, reviewed: st.reviewed, stopNudges: st.stopNudges }).file;
     const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
       writeTurn(sessionId, { ...st, stopNudges: st.stopNudges + 1, stopBlocked: true });

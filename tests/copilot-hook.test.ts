@@ -12,6 +12,7 @@ import {
   latestHumanUserMarker,
   postToolFiles,
   STOP_CAP,
+  shouldStartUserTurn,
   stopDecision,
   synchronizeTurnState,
 } from "../src/hosts/copilot-cli/hook";
@@ -88,12 +89,23 @@ test("latest user marker ignores cairn and host reminder envelopes", () => {
     id: "human-1",
     data: { content: "fix the component" },
   });
+
   const reminder = JSON.stringify({
     type: "user.message",
     id: "reminder-1",
     data: { content: "<cairn-internal>record this turn</cairn-internal>" },
   });
   expect(latestHumanUserMarker([human, reminder])).toBe("human-1");
+});
+
+test("user-prompt reset runs only for real human prompts", () => {
+  expect(shouldStartUserTurn("fix the component")).toBe(true);
+  expect(shouldStartUserTurn(
+    "<cairn-internal>You are ending a turn</cairn-internal>",
+  )).toBe(false);
+  expect(shouldStartUserTurn(
+    "<system_reminder>check todos</system_reminder>",
+  )).toBe(false);
 });
 
 // ── gateDecision: the preToolUse brain_create gate (pure; deps injected) ──────────────────────────
@@ -183,7 +195,7 @@ test("an accepted queued review satisfies agentStop even with no worker capacity
   expect(stop.stdout.toString()).toBe("{}");
 });
 
-test("stop nudge cap resets for the next genuine user turn", () => {
+test("system reminder prompts preserve the turn and a genuine user prompt resets it", () => {
   const id = randomUUID();
   const home = join(tmpdir(), `cairn-stop-cap-home-${id}`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
@@ -193,9 +205,15 @@ test("stop nudge cap resets for the next genuine user turn", () => {
 
   expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "first" }).status).toBe(0);
   expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
-  expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "continuation-1" }).status).toBe(0);
+  expect(invoke("user-prompt", {
+    sessionId: "session-cap",
+    prompt: "<cairn-internal>continue required workflow</cairn-internal>",
+  }).stdout.toString()).toBe("{}");
   expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
-  expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "continuation-2" }).status).toBe(0);
+  expect(invoke("user-prompt", {
+    sessionId: "session-cap",
+    prompt: "<system_reminder>continue required workflow</system_reminder>",
+  }).stdout.toString()).toBe("{}");
   expect(invoke("agent-stop").stdout.toString()).toBe("{}");
 
   expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "second" }).status).toBe(0);

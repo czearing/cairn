@@ -222,6 +222,7 @@ interface Payload {
   toolName: string;
   args: Record<string, unknown>;
   transcriptPath: string;
+  prompt: string;
 }
 function parsePayload(raw: string): Payload {
   try {
@@ -234,11 +235,15 @@ function parsePayload(raw: string): Payload {
       toolName: (j.toolName as string) ?? (j.tool_name as string) ?? "",
       args: args ?? {},
       transcriptPath: (j.transcriptPath as string) ?? (j.transcript_path as string) ?? "",
+      prompt: (j.prompt as string) ?? "",
     };
   } catch {
-    return { sessionId: "", agentId: "", toolName: "", args: {}, transcriptPath: "" };
+    return { sessionId: "", agentId: "", toolName: "", args: {}, transcriptPath: "", prompt: "" };
   }
 }
+
+export const shouldStartUserTurn = (prompt: string): boolean =>
+  !isSystemEnvelope(prompt);
 
 // Durably enqueue the latest matching skill_review event. Capacity only delays the queued job; acceptance
 // marks the turn reviewed immediately so agentStop never asks the agent to resubmit work it already submitted.
@@ -301,7 +306,7 @@ async function main(): Promise<void> {
 
   const raw = await readStdin();
   debugLog(mode ?? "", raw);
-  const { sessionId, agentId, toolName, args, transcriptPath } = parsePayload(raw);
+  const { sessionId, agentId, toolName, args, transcriptPath, prompt } = parsePayload(raw);
 
   if (mode === "subagent-stop") {
     const path = transcriptPath || eventsPathForSession(sessionId);
@@ -328,6 +333,7 @@ async function main(): Promise<void> {
     //
     // Copilot can re-fire this hook for a blocked continuation. Preserve the cap only for that continuation,
     // then let the next genuine user turn start with a fresh budget.
+    if (!shouldStartUserTurn(prompt)) return void emit({});
     const prev = readTurn(sessionId);
     writeTurn(sessionId, { ...freshTurn(), stopNudges: prev.stopBlocked ? prev.stopNudges : 0 });
     const wf = await promptText("user-message.md");

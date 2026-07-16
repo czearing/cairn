@@ -17,11 +17,12 @@ export async function processReviewJob(job: ReviewJob): Promise<boolean> {
   const heartbeat = setInterval(() => heartbeatReviewJob(job.id, job.attempts), reviewHeartbeatMs());
   try {
     const copilot = job.backend.startsWith("copilot");
+    const automatic = job.backend.endsWith("-auto") || job.backend === "copilot-fallback";
     const input = copilot
-      ? extractRunCopilot(job.transcriptPath, job.backend === "copilot-fallback" ? "" : job.skillId, {
-          latestTurn: job.backend === "copilot-fallback",
+      ? extractRunCopilot(job.transcriptPath, automatic ? "" : job.skillId, {
+          latestTurn: automatic,
         })
-      : extractRun(job.transcriptPath, job.skillId);
+      : extractRun(job.transcriptPath, automatic ? "" : job.skillId, { latestTurn: automatic });
     if (!input) error = "transcript contained no reviewable deliverable";
     else completed = Boolean(await withLearnerBackend((copilot ? "copilot" : "claude") as Backend, () =>
       reviewDeclared(input, job.skillId, Date.now())

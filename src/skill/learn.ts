@@ -23,7 +23,7 @@ export function isSkillWorker(): boolean {
 
 const SUPERVISOR = () => process.env.CAIRN_REVIEW_SUPERVISOR_PATH || fileURLToPath(new URL("../../scripts/skill-review-supervisor.ts", import.meta.url));
 const MAX_LEARNERS = () => Number(process.env.CAIRN_MAX_LEARNERS || "4");
-const snapshotDir = () => join(homedir(), ".cairn", "inflight", "reviews");
+const snapshotDir = () => join(process.env.CAIRN_INFLIGHT_DIR || join(homedir(), ".cairn", "inflight"), "reviews");
 function snapshotTranscript(transcriptPath: string, id: string): string {
   const name = `${createHash("sha256").update(id).digest("hex")}.jsonl`;
   const destination = join(snapshotDir(), name);

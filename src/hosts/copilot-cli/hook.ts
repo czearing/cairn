@@ -11,10 +11,9 @@
 //                                          orchestrate.md cannot be injected here — only allow/deny/modify.
 //   post-tool      (postToolUse)         : after a brain_* or Task tool, inject the matching reminder, record
 //                                          brain/skill usage, and persist successful skill_review declarations.
-//   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn. Used
-//                                          for turn-reminder.md (brain unused) and skill-review.md (a skill
-//                                          was used but not submitted via skill_review). Once all gates pass,
-//                                          enqueue declared reviews over the complete turn transcript.
+//   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn. Once
+//                                          workflow gates pass and the visible response exists, automatically
+//                                          enqueue every selected skill over the complete turn transcript.
 //   subagent-start (subagentStart)       : additionalContext is PREPENDED to the subagent's own prompt —
 //                                          the one channel that reaches a subagent's window (subagent-protocol.md).
 //
@@ -102,8 +101,7 @@ export function postToolFiles(toolName: string, answer: string): string[] {
 
 // Whether agentStop should force another turn, and with which prompt. Bounded to STOP_CAP nudges per
 // turn so a stubborn agent can never be looped forever (Copilot sends no stop_hook_active flag).
-// If the agent used a skill this turn but is ending WITHOUT submitting the result via skill_review, block
-// and inject the skill-review reminder so the finished work is actually graded.
+// Selected skills are reviewed automatically after these workflow gates pass.
 export const STOP_CAP = 2;
 export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; pendingReviewCount: number; stopNudges: number }): {
   file: string;
@@ -111,7 +109,6 @@ export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; pendin
   if (s.stopNudges >= STOP_CAP) return { file: "" };
   if (!s.skillUsed) return { file: "skill-search-reminder.md" };
   if (!s.brainUsed) return { file: "turn-reminder.md" };
-  if (s.pendingReviewCount > 0) return { file: "skill-review.md" };
   return { file: "" };
 }
 
@@ -120,7 +117,6 @@ export function harnessStopDecision(s: { skillUsed: boolean; pendingReviewCount:
 } {
   if (s.stopNudges >= STOP_CAP) return { file: "" };
   if (!s.skillUsed) return { file: "skill-search-reminder.md" };
-  if (s.pendingReviewCount > 0) return { file: "skill-review.md" };
   return { file: "" };
 }
 
@@ -377,8 +373,11 @@ async function main(): Promise<void> {
         next.pendingReviewIds = [...new Set([...next.pendingReviewIds, skillResultId(result) || "__created__"])];
       }
       if (isTool(toolName, "skill_search")) {
-        next.skillUsed = true;
-        next.pendingReviewIds = [...new Set([...next.pendingReviewIds, "__legacy__"])];
+        const id = skillResultId(result);
+        if (id) {
+          next.skillUsed = true;
+          next.pendingReviewIds = [...new Set([...next.pendingReviewIds, id])];
+        }
       }
       if (isTool(toolName, "skill_load")) {
         const id = typeof args.id === "string" ? args.id : "";
@@ -412,8 +411,8 @@ async function main(): Promise<void> {
   }
 
   if (mode === "agent-stop") {
-    // skill_review declares which skill owns the deliverable. agentStop enforces the required workflow first,
-    // then queues each declaration over the complete transcript, including the final visible answer.
+    // agentStop enforces the required workflow first, then queues automatic and legacy-declared reviews over
+    // the complete transcript, including the final visible answer.
     if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
     const path = transcriptPath || eventsPathForSession(sessionId);
     const stateId = turnScope(sessionId);
@@ -421,15 +420,10 @@ async function main(): Promise<void> {
     const file = process.env.AGENT_HARNESS === "1"
       ? harnessStopDecision({ skillUsed: st.skillUsed, pendingReviewCount: st.pendingReviewIds.length, stopNudges: st.stopNudges }).file
       : stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, pendingReviewCount: st.pendingReviewIds.length, stopNudges: st.stopNudges }).file;
-    const reminder = file ? await promptText(file) : "";
-    const exactPendingIds = st.pendingReviewIds.filter((id) => id && !id.startsWith("__"));
-    const exactReviewReminder = file === "skill-review.md" && exactPendingIds.length
-      ? `${reminder}\nPending exact skill ids: ${exactPendingIds.join(", ")}.\nCall skill_review once for every id in that list.`
-      : reminder;
-    const text = exactReviewReminder ? internalContext(exactReviewReminder) : "";
+    const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
       updateLifecycle(stateId, () => ({ ...st, stopNudges: st.stopNudges + 1, stopBlocked: true }));
-      emit({ decision: "block", reason: text }); // nudge the agent to review before ending
+      emit({ decision: "block", reason: text });
       return;
     }
     for (const review of st.pendingReviews) {
@@ -469,10 +463,38 @@ async function main(): Promise<void> {
       }
     }
     if (st.pendingReviewIds.length) {
-      recordMissedReviews(stateId, st.turnSeq, st.pendingReviewIds, path);
-      updateLifecycle(stateId, () => ({ ...st, stopBlocked: false }));
-      emit({});
-      return;
+      const { extractRunCopilot } = await import("../../skill/transcript-copilot");
+      if (!extractRunCopilot(path, "", { latestTurn: true })) {
+        if (st.reviewNudges < STOP_CAP) {
+          updateLifecycle(stateId, () => ({ ...st, reviewNudges: st.reviewNudges + 1, stopBlocked: true }));
+          emit({
+            decision: "block",
+            reason: internalContext("No visible deliverable exists yet. Deliver the finished result now; Cairn will review the selected skills automatically after it is present."),
+          });
+          return;
+        }
+        recordMissedReviews(stateId, st.turnSeq, st.pendingReviewIds, path);
+      } else {
+        for (const skillId of st.pendingReviewIds.filter((id) => id && !id.startsWith("__"))) {
+          const accepted = await queueLatestReview(path, sessionId, {
+            skillId,
+            eventId: `auto-${st.turnSeq}-${skillId}`,
+            backend: "copilot-auto",
+          });
+          if (!accepted) {
+            if (st.reviewNudges >= STOP_CAP) {
+              recordMissedReviews(stateId, st.turnSeq, [skillId], path);
+              continue;
+            }
+            updateLifecycle(stateId, () => ({ ...st, reviewNudges: st.reviewNudges + 1, stopBlocked: true }));
+            emit({
+              decision: "block",
+              reason: internalContext("Cairn could not durably queue the automatic skill review. Keep the turn open and retry ending it."),
+            });
+            return;
+          }
+        }
+      }
     }
     updateLifecycle(stateId, () => ({ ...st, pendingReviewIds: [], pendingReviews: [], stopBlocked: false }));
     releaseDelegation(sessionId);

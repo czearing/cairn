@@ -33,8 +33,6 @@ export async function normalizeClaudeCode(payload: unknown): Promise<NormalizedE
   }
 
   if (eventName === "Stop") {
-    // stop_hook_active means we already nudged once this turn — don't loop.
-    if (payload.stop_hook_active) return null;
     const tp = payload.transcript_path;
     if (typeof tp !== "string") return null;
     return { kind: "turn_finished", usedBrain: await brainUsedThisTurn(tp) };

@@ -1,8 +1,11 @@
 // End-to-end: spawn the REAL hook with a payload on stdin, exactly as Claude Code invokes it.
 // Proves the entry-format prompt is injected when a write tool is called — with NO rejection
 // and NO length limit.
-import { test, expect } from "bun:test";
+import { beforeAll, test, expect } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 async function fire(payload: object): Promise<string> {
   const proc = Bun.spawn(["bun", "src/hosts/claude-code/dispatch.ts"], {
@@ -15,6 +18,10 @@ async function fire(payload: object): Promise<string> {
   await proc.exited;
   return out.trim();
 }
+
+beforeAll(async () => {
+  (await import("../src/core/db")).db();
+});
 
 test("PreToolUse on a brain write injects the format and ALLOWS", async () => {
   const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "anything" } });
@@ -98,4 +105,90 @@ test("Claude delegates only skills selected in host-owned lifecycle state", asyn
     tool_input: { prompt: `CAIRN_SKILL_IDS: ${skillId}\nWrite a haiku.` },
   });
   expect(JSON.parse(out).hookSpecificOutput.updatedInput.prompt).toContain(`Selected skill: poetry writing (${skillId})`);
+});
+
+test("Claude Stop defers automatic skill review until all stop gates pass", async () => {
+  const { listReviewJobs } = await import("../src/skill/review-queue");
+  const skillId = randomUUID();
+  const sessionId = `claude-auto-review-${randomUUID()}`;
+  const transcriptPath = join(tmpdir(), `${sessionId}.jsonl`);
+  writeFileSync(
+    transcriptPath,
+    [
+      JSON.stringify({ type: "user", message: { content: "Fix the bug." } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "The bug is fixed." }] } }),
+    ].join("\n") + "\n"
+  );
+  await fire({
+    hook_event_name: "PostToolUse",
+    session_id: sessionId,
+    tool_name: "skill_select",
+    tool_input: { ids: [skillId] },
+    tool_output: {},
+  });
+
+  const blocked = JSON.parse(await fire({
+    hook_event_name: "Stop",
+    session_id: sessionId,
+    transcript_path: transcriptPath,
+  }));
+  expect(blocked.reason).toContain("brain");
+  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
+
+  writeFileSync(
+    transcriptPath,
+    [
+      JSON.stringify({ type: "user", message: { content: "Fix the bug." } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "brain_search", input: { query: "bug" } }] } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "The bug is fixed." }] } }),
+    ].join("\n") + "\n"
+  );
+  expect(await fire({
+    hook_event_name: "Stop",
+    session_id: sessionId,
+    transcript_path: transcriptPath,
+    stop_hook_active: true,
+  })).toBe("");
+  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toEqual([
+    expect.objectContaining({
+      skillId,
+      transcriptPath: expect.stringContaining(join(process.env.CAIRN_INFLIGHT_DIR!, "reviews")),
+      backend: "claude-auto",
+      status: "pending",
+    }),
+  ]);
+  rmSync(transcriptPath, { force: true });
+});
+
+test("Claude legacy skill_review declarations are queued only at terminal Stop", async () => {
+  const { listReviewJobs } = await import("../src/skill/review-queue");
+  const skillId = randomUUID();
+  const sessionId = `claude-legacy-review-${randomUUID()}`;
+  const transcriptPath = join(tmpdir(), `${sessionId}.jsonl`);
+  writeFileSync(
+    transcriptPath,
+    [
+      JSON.stringify({ type: "user", message: { content: "Fix the bug." } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "brain_search", input: { query: "bug" } }] } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "The bug is fixed." }] } }),
+    ].join("\n") + "\n"
+  );
+  await fire({
+    hook_event_name: "PostToolUse",
+    session_id: sessionId,
+    tool_name: "skill_review",
+    tool_input: { id: skillId },
+    tool_output: { ok: true },
+  });
+  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
+
+  expect(await fire({
+    hook_event_name: "Stop",
+    session_id: sessionId,
+    transcript_path: transcriptPath,
+  })).toBe("");
+  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toEqual([
+    expect.objectContaining({ skillId, backend: "claude-auto", status: "pending" }),
+  ]);
+  rmSync(transcriptPath, { force: true });
 });

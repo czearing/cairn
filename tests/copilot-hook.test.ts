@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -70,8 +70,8 @@ test("stopDecision requires skill selection before brain use", () => {
   expect(stopDecision({ brainUsed: false, skillUsed: false, pendingReviewCount: 0, stopNudges: 0 })).toEqual({ file: "skill-search-reminder.md" });
 });
 
-test("stopDecision nudges skill-review while selected skills remain pending", () => {
-  expect(stopDecision({ brainUsed: true, skillUsed: true, pendingReviewCount: 2, stopNudges: 0 })).toEqual({ file: "skill-review.md" });
+test("stopDecision lets agentStop auto-review selected skills after the final response", () => {
+  expect(stopDecision({ brainUsed: true, skillUsed: true, pendingReviewCount: 2, stopNudges: 0 })).toEqual({ file: "" });
 });
 
 test("stopDecision allows the turn to end when every selected skill was reviewed", () => {
@@ -88,7 +88,7 @@ test("stopDecision stops nudging once the per-turn cap is reached (no infinite l
 
 test("harness stop requires skill lifecycle but not brain use", () => {
   expect(harnessStopDecision({ skillUsed: false, pendingReviewCount: 0, stopNudges: 0 })).toEqual({ file: "skill-search-reminder.md" });
-  expect(harnessStopDecision({ skillUsed: true, pendingReviewCount: 1, stopNudges: 0 })).toEqual({ file: "skill-review.md" });
+  expect(harnessStopDecision({ skillUsed: true, pendingReviewCount: 1, stopNudges: 0 })).toEqual({ file: "" });
   expect(harnessStopDecision({ skillUsed: true, pendingReviewCount: 0, stopNudges: 0 })).toEqual({ file: "" });
 });
 
@@ -297,12 +297,6 @@ test("skill_select requires one review declaration per selected skill", () => {
 
   expect(invoke({ sessionId: "session-multi", toolName: "cairn-skill_select", toolArgs: { ids: ["skill-a", "skill-b"] } }).status).toBe(0);
   expect(lifecycleState(dbPath, "copilot:session-multi").pendingReviewIds).toEqual(["skill-a", "skill-b"]);
-  expect(invoke({ sessionId: "session-multi", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
-  const reminder = spawnSync(process.execPath, [hook, "agent-stop"], {
-    input: JSON.stringify({ sessionId: "session-multi" }),
-    env,
-  }).stdout.toString();
-  expect(reminder).toContain("Pending exact skill ids: skill-a, skill-b");
   expect(invoke({ sessionId: "session-multi", timestamp: 20, toolName: "cairn-skill_review", toolArgs: { id: "skill-a" } }).status).toBe(0);
   expect(lifecycleState(dbPath, "copilot:session-multi").pendingReviewIds).toEqual(["skill-b"]);
   expect(invoke({ sessionId: "session-multi", timestamp: 21, toolName: "cairn-skill_review", toolArgs: { id: "skill-b" } }).status).toBe(0);
@@ -311,7 +305,7 @@ test("skill_select requires one review declaration per selected skill", () => {
   expect(state.pendingReviews).toHaveLength(2);
 });
 
-test("review reminders never expose legacy placeholder ids as exact targets", () => {
+test("legacy search without an exact loaded skill creates no review obligation", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-legacy-reminder-${id}.db`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
@@ -323,15 +317,9 @@ test("review reminders never expose legacy placeholder ids as exact targets", ()
     toolName: "cairn-skill_search",
     toolArgs: { task: "legacy" },
   }).status).toBe(0);
-  expect(invoke("post-tool", {
-    sessionId: "legacy-reminder",
-    toolName: "cairn-brain_search",
-    toolArgs: {},
-  }).status).toBe(0);
   const reminder = invoke("agent-stop", { sessionId: "legacy-reminder" }).stdout.toString();
-  expect(reminder).toContain("skill_review");
+  expect(reminder).toContain("skill_select");
   expect(reminder).not.toContain("__legacy__");
-  expect(reminder).not.toContain("Pending exact skill ids:");
 });
 
 test("postToolUse records the exact created skill id from the tool result", () => {
@@ -627,7 +615,7 @@ test("a user-controlled delegated marker cannot satisfy the stop gate", () => {
   expect(invoke("agent-stop", { sessionId: "untrusted-child" }).stdout.toString()).toContain("skill_select");
 });
 
-test("the stop cap preserves unreviewed selected skills without fabricating reviews", () => {
+test("agentStop automatically reviews selected skills after the visible deliverable", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-fallback-review-${id}.db`);
   const home = join(tmpdir(), `cairn-fallback-review-home-${id}`);
@@ -659,25 +647,58 @@ test("the stop cap preserves unreviewed selected skills without fabricating revi
     toolName: "cairn-brain_search",
     toolArgs: {},
   }).status).toBe(0);
-  expect(invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString()).toContain('"decision":"block"');
-  expect(invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString()).toContain('"decision":"block"');
   expect(invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString()).toBe("{}");
-  expect(reviewJobs(dbPath)).toEqual([]);
+  const reviewDatabase = new Database(dbPath);
+  expect(reviewDatabase.query("SELECT skill_id AS skillId,backend,status FROM review_jobs").all()).toEqual([
+    { skillId: "selected-skill", backend: "copilot-auto", status: "pending" },
+  ]);
+  reviewDatabase.close();
   const database = new Database(dbPath);
   const state = database.query("SELECT pending_review_ids AS pending FROM lifecycle_turns WHERE scope = ?")
     .get("copilot:fallback-session") as { pending: string };
-  expect(JSON.parse(state.pending)).toEqual(["selected-skill"]);
+  expect(JSON.parse(state.pending)).toEqual([]);
   database.close();
-  expect(invoke("user-prompt", {
-    sessionId: "fallback-session",
-    prompt: "Next user turn.",
+});
+
+test("automatic review enqueue failure respects the stop continuation cap", () => {
+  const id = randomUUID();
+  const home = join(tmpdir(), `cairn-auto-review-failure-home-${id}`);
+  const dbPath = join(tmpdir(), `cairn-auto-review-failure-${id}.db`);
+  const blockedInflight = join(tmpdir(), `cairn-auto-review-inflight-${id}`);
+  const transcriptPath = join(home, ".copilot", "session-state", "auto-failure", "events.jsonl");
+  mkdirSync(join(home, ".copilot", "session-state", "auto-failure"), { recursive: true });
+  writeFileSync(blockedInflight, "not a directory");
+  writeFileSync(transcriptPath, [
+    JSON.stringify({ type: "user.message", id: "user-1", timestamp: 10, data: { content: "Fix the bug." } }),
+    JSON.stringify({ type: "assistant.message", timestamp: 30, data: { content: "The bug is fixed." } }),
+  ].join("\n"));
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    USERPROFILE: home,
+    HOME: home,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_INFLIGHT_DIR: blockedInflight,
+    CAIRN_MAX_LEARNERS: "0",
+    CAIRN_SKILLS: "1",
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+
+  expect(invoke("post-tool", {
+    sessionId: "auto-failure",
+    toolName: "cairn-skill_select",
+    toolArgs: { ids: ["skill-auto-failure"] },
   }).status).toBe(0);
-  const afterReset = new Database(dbPath);
-  expect(afterReset.query(`SELECT skill_id AS skillId,transcript_path AS transcriptPath
-    FROM missed_skill_reviews WHERE scope = ?`).all("copilot:fallback-session")).toEqual([
-    { skillId: "selected-skill", transcriptPath },
-  ]);
-  afterReset.close();
+  expect(invoke("post-tool", {
+    sessionId: "auto-failure",
+    toolName: "cairn-brain_search",
+    toolArgs: {},
+  }).status).toBe(0);
+  expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString()).toContain('"decision":"block"');
+  expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString()).toContain('"decision":"block"');
+  expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString()).toBe("{}");
+  rmSync(blockedInflight, { force: true });
 });
 
 test("subagentStart injects only the delegated protocol, not the full catalog", () => {

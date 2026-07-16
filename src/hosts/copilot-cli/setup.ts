@@ -89,12 +89,10 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
 //   sessionStart        → workflow fallback only on Copilot versions older than v1.0.66, where
 //                         userPromptSubmitted output is not delivered to the model.
 //   preToolUse          → gate brain_create and prepend the Cairn protocol to general-purpose Task prompts.
-//   postToolUse         → entry-format/orchestrate + per-tool reminders after a brain_* or Task call; also
-//                         the skill_review trigger (review the whole turn log when the agent signals a
-//                         finished deliverable — catches backgrounded subagent output).
+//   postToolUse         → entry-format/orchestrate + per-tool reminders after a brain_* or Task call; records
+//                         skill selection and accepts legacy skill_review declarations.
 //   agentStop           → the Stop equivalent: decision:"block" re-runs the turn (turn-reminder when brain
-//                         unused; skill-review when a skill was used but not submitted via skill_review).
-//                         Auto-learns the turn as a FALLBACK unless skill_review already reviewed it.
+//                         unused). After the final visible response, automatically reviews selected skills.
 //   subagentStart       → additionalContext prepended to a spawned subagent's own prompt.
 // hook.ts picks the mode from its argv.
 function supportsPerPromptContext(): boolean {

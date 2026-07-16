@@ -5,7 +5,7 @@ Run this on every task, including trivial/creative ones (yes, a haiku). Reason: 
 Before work, choose one:
 - Reuse: `skill_select({"ids":["<id>"]})`; execute the returned `steps`.
 - New: `skill_create({"title":"api debugging","description":"Use for recurring API request, response, authentication, and server failures across projects.","plan":"1. Reproduce the failure\n2. Trace the first incorrect boundary","whyExistingSkillsDoNotFit":"No catalog skill covers reusable API protocol debugging across projects."})`.
-After delivery, call `skill_review({"id":"<id>"})` for each used skill. Use `skill_edit` only to permanently correct reusable steps.
+Cairn reviews every selected skill automatically after your final visible response. Do not call `skill_review`. Use `skill_edit` only to permanently correct reusable steps.
 
 ## Read the Shared Brain First
 1. Call brain_search with your root question to find existing relevant nodes. For creative tasks DO NOT repeat existing outputs.
@@ -53,4 +53,4 @@ Every node is an open question. If a node can be answered yes or no, it is too c
 4. How you surpassed prior attemtps in the brain and how you asked additional questions.
 5. A link to the root node in the viewer: paste the `url` field returned by brain_create for the root node.
 
-After ALL output is done call `skill_review`
+After the final visible response, stop normally; the host queues reviews automatically.

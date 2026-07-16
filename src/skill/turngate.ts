@@ -1,7 +1,7 @@
 import { skillResultId } from "./tool-result";
 import { lifecycleScope, readLifecycle, resetLifecycle, updateLifecycle } from "./lifecycle";
 
-interface TurnState { selected: boolean; pendingReviewIds: string[]; reminded: boolean }
+interface TurnState { selected: boolean; pendingReviewIds: string[]; reminded: boolean; turnSeq: number }
 const scope = (session: string) => lifecycleScope("claude", session);
 
 // A new user turn: clear the latch so the one reminder can fire again this turn.
@@ -32,9 +32,20 @@ export function noteSkillReviewed(session: string, id: string): void {
   }));
 }
 
+export function noteLegacySkillReview(session: string, id: string): void {
+  updateLifecycle(scope(session), (state) => ({
+    ...state,
+    skillUsed: true,
+    pendingReviewIds: [...new Set([
+      ...state.pendingReviewIds.filter((pendingId) => pendingId !== "__created__" && pendingId !== "__legacy__"),
+      id,
+    ])],
+  }));
+}
+
 export function skillTurnState(session: string): TurnState {
   const state = readLifecycle(scope(session));
-  return { selected: state.skillUsed, pendingReviewIds: state.pendingReviewIds, reminded: state.reminded };
+  return { selected: state.skillUsed, pendingReviewIds: state.pendingReviewIds, reminded: state.reminded, turnSeq: state.turnSeq };
 }
 
 // Tools that DO or CHANGE something, as opposed to reading/searching or brain bookkeeping. The reminder fires

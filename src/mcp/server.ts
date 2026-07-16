@@ -211,7 +211,7 @@ if (process.env.CAIRN_SKILL_OUTPUT_PATH) {
 // enqueues it at agentStop, after required continuations and the final visible answer.
 server.tool(
   "skill_review",
-  "Declare the exact skill id for the finished deliverable. Call after substantive work and after delegated results return. The host grades the complete turn at agentStop. Once per deliverable; never for chit-chat or status-only output.",
+  "Legacy compatibility only. Current hosts review selected skills automatically after the final visible response; do not call this tool in new sessions.",
   {
     id: z.string().describe("The selected or created skill id this deliverable belongs to."),
   },

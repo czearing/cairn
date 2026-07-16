@@ -50,12 +50,13 @@ function clock(ts: unknown): string { return typeof ts === "string" && ts.length
 
 const isReviewTool = (name: string): boolean => name === "skill_review" || name.endsWith("skill_review");
 
-interface Event { role: "user" | "assistant"; text: string; thinking: string; tools: Tool[]; ts: string }
+interface Event { role: "user" | "assistant"; text: string; thinking: string; tools: Tool[]; systemTurn: boolean; ts: string }
 
-export function extractRun(path: string, targetSkillId = ""): RunInput | null {
+export function extractRun(path: string, targetSkillId = "", options: { latestTurn?: boolean } = {}): RunInput | null {
   let lines: string[];
   try { lines = readFileSync(path, "utf8").split("\n").filter(Boolean); } catch { return null; }
   const events: Event[] = [];
+  let systemTurn = false;
   for (const line of lines) {
     let o: { type?: string; message?: { content?: unknown }; timestamp?: unknown };
     try { o = JSON.parse(line); } catch { continue; }
@@ -64,12 +65,24 @@ export function extractRun(path: string, targetSkillId = ""): RunInput | null {
     if (role === "user" && isToolResult(o.message?.content)) continue; // tool output, not a human prompt
     const p = partsOf(o.message?.content);
     if (!p.text && !p.thinking && !p.tools.length) continue;          // skip empty/system frames
-    events.push({ role, text: p.text, thinking: p.thinking, tools: p.tools, ts: clock(o.timestamp) });
+    if (role === "user") systemTurn = isSystemEnvelope(p.text);
+    events.push({ role, text: p.text, thinking: p.thinking, tools: p.tools, systemTurn, ts: clock(o.timestamp) });
   }
   if (events.length === 0) return null;
 
   const reviewIdxs = events.map((e, i) => (e.tools.some((t) => isReviewTool(t.name)) ? i : -1)).filter((i) => i >= 0);
   const genuineUser = (e: Event) => e.role === "user" && e.text && !isSystemEnvelope(e.text);
+  if (options.latestTurn) {
+    const lastUser = events.findLastIndex(genuineUser);
+    if (lastUser < 0) return null;
+    let start = lastUser;
+    while (start > 0 && genuineUser(events[start - 1]!)) start--;
+    const cycle = events.slice(start).filter((event) => !event.systemTurn);
+    const request = cycle.filter(genuineUser).map((event) => event.text).join("\n").trim();
+    const output = cycle.filter((event) => event.role === "assistant" && event.text).map((event) => event.text).join("\n\n").trim();
+    if (!request || !output) return null;
+    return { request, output, transcript: renderTranscript(cycle) };
+  }
   const targetReview = targetSkillId
     ? reviewIdxs.filter((index) => events[index]!.tools.some((tool) => isReviewTool(tool.name) && tool.hint === targetSkillId)).at(-1)
     : reviewIdxs.at(-1);
@@ -78,16 +91,7 @@ export function extractRun(path: string, targetSkillId = ""): RunInput | null {
     const request = events.filter(genuineUser).map((event) => event.text).join("\n").trim();
     const output = events.filter((event) => event.role === "assistant" && event.text).map((event) => event.text).join("\n\n").trim();
     if (!request || !output) return null;
-    const rows = events.flatMap((event) => {
-      const time = event.ts ? `[${event.ts}] ` : "";
-      const role = event.role === "user" ? "USER" : "ASSISTANT";
-      const result: string[] = [];
-      if (event.thinking) result.push(`${time}[${role} THINKING] ${event.thinking}`);
-      if (event.text) result.push(`${time}[${role}] ${event.text}`);
-      for (const tool of event.tools) result.push(`${time}[TOOL] ${tool.name}${tool.hint ? ` "${tool.hint}"` : ""}`);
-      return result;
-    });
-    return { request, output, transcript: `TRANSCRIPT (oldest first):\n${rows.join("\n")}` };
+    return { request, output, transcript: renderTranscript(events) };
   }
   let detailStart = 0;
   for (const previous of reviewIdxs.filter((index) => index < targetReview).reverse()) {
@@ -103,15 +107,17 @@ export function extractRun(path: string, targetSkillId = ""): RunInput | null {
 
   // ONE chronological transcript of the review cycle: user messages, the agent's thinking, its messages, and
   // its tool calls (skill label/query inline). One section, not dissected — simpler and clearer for the reviewer.
-  const rows: string[] = [];
-  for (const e of cycle) {
-    const time = e.ts ? `[${e.ts}] ` : "";
-    const role = e.role === "user" ? "USER" : "ASSISTANT";
-    if (e.thinking) rows.push(`${time}[${role} THINKING] ${e.thinking}`);
-    if (e.text) rows.push(`${time}[${role}] ${e.text}`);
-    for (const t of e.tools) rows.push(`${time}[TOOL] ${t.name}${t.hint ? ` "${t.hint}"` : ""}`);
-  }
-  const transcript = `TRANSCRIPT (oldest first):\n${rows.join("\n")}`;
+  return { request, transcript: renderTranscript(cycle), output };
+}
 
-  return { request, transcript, output };
+function renderTranscript(events: Event[]): string {
+  const rows: string[] = [];
+  for (const event of events) {
+    const time = event.ts ? `[${event.ts}] ` : "";
+    const role = event.role === "user" ? "USER" : "ASSISTANT";
+    if (event.thinking) rows.push(`${time}[${role} THINKING] ${event.thinking}`);
+    if (event.text) rows.push(`${time}[${role}] ${event.text}`);
+    for (const tool of event.tools) rows.push(`${time}[TOOL] ${tool.name}${tool.hint ? ` "${tool.hint}"` : ""}`);
+  }
+  return `TRANSCRIPT (oldest first):\n${rows.join("\n")}`;
 }

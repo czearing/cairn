@@ -170,8 +170,12 @@ export function skillsExist(): boolean {
 
 // Fire the background learner over a finished turn's transcript, for the skill the agent DECLARED via
 // skill_review. `skillId` is the id of that skill (from skill_search or skill_create). Returns whether it fired.
-export function skillLearn(transcriptPath: string | undefined, skillId: string): boolean {
+export function skillLearn(
+  transcriptPath: string | undefined,
+  skillId: string,
+  backend = "claude",
+  sessionId = ""
+): boolean {
   if (!skillsEnabled() || !transcriptPath || !skillId.trim()) return false;
-  process.env.CAIRN_LEARN_BACKEND = "claude"; // Claude host: parse the Claude transcript AND grade via `claude -p`
-  try { return learnFromTranscript(transcriptPath, skillId); } catch { return false; }
+  try { return learnFromTranscript(transcriptPath, skillId, { backend, sessionId }); } catch { return false; }
 }

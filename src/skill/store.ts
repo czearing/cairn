@@ -30,6 +30,7 @@ function ensure(): void {
     // wins); this table is what the UI timeline reads to show how the master evolved and why.
     db().run("CREATE TABLE IF NOT EXISTS skill_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, master TEXT NOT NULL DEFAULT '', explanation TEXT NOT NULL DEFAULT '', score REAL NOT NULL DEFAULT 0, ts INTEGER NOT NULL)");
     db().run("CREATE INDEX IF NOT EXISTS skill_versions_skill ON skill_versions (skill_id, ts)");
+    db().run("CREATE TABLE IF NOT EXISTS skill_redirects (source_id TEXT PRIMARY KEY, target_id TEXT NOT NULL, ts INTEGER NOT NULL)");
     const cols = db().query("PRAGMA table_info(skills)").all() as { name: string }[]; // backfill older skills tables
     if (!cols.some((c) => c.name === "rich")) db().run("ALTER TABLE skills ADD COLUMN rich BLOB"); // domain-vocab vector
     if (!cols.some((c) => c.name === "explanation")) db().run("ALTER TABLE skills ADD COLUMN explanation TEXT NOT NULL DEFAULT ''"); // reviewer-only rationale, split out of master_prompt
@@ -82,6 +83,37 @@ export function getSkill(id: string): Skill | null {
   } catch { return null; }
 }
 
+export function visibleSkill(id: string): Skill | null {
+  const skill = getSkill(id);
+  return skill?.masterPrompt.trim() && skill.description?.trim() ? skill : null;
+}
+
+export function reviewableSkill(id: string): Skill | null {
+  const skill = getSkill(id);
+  return skill && (skill.description?.trim() || !skill.masterPrompt.trim()) ? skill : null;
+}
+
+export function setSkillRedirect(sourceId: string, targetId: string, ts = Date.now()): void {
+  ensure();
+  db().run(`INSERT INTO skill_redirects(source_id,target_id,ts) VALUES (?,?,?)
+    ON CONFLICT(source_id) DO UPDATE SET target_id=excluded.target_id,ts=excluded.ts`,
+  sourceId, targetId, ts);
+}
+
+export function resolveSkillId(id: string): string {
+  ensure();
+  let current = id;
+  const seen = new Set<string>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const row = db().query("SELECT target_id AS targetId FROM skill_redirects WHERE source_id=?")
+      .get(current) as { targetId: string } | undefined;
+    if (!row) return current;
+    current = row.targetId;
+  }
+  return id;
+}
+
 /** The skill owning a normalized label, or null. The exact-match restore key, indexed and unique. */
 export function skillByLabel(labelNorm: string): Skill | null {
   ensure();
@@ -95,6 +127,7 @@ export function deleteSkill(id: string): boolean {
   if (!id || !getSkill(id)) return false;
   db().run("DELETE FROM skill_runs WHERE skill_id = ?", id);
   db().run("DELETE FROM skill_versions WHERE skill_id = ?", id);
+  db().run("DELETE FROM skill_redirects WHERE source_id = ? OR target_id = ?", id, id);
   db().run("DELETE FROM skills WHERE id = ?", id);
   return true;
 }

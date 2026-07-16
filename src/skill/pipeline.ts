@@ -7,7 +7,8 @@ import {
   setMasterPromptIfBlank,
   skillLabels,
   topRuns,
-  getSkill,
+  resolveSkillId,
+  reviewableSkill,
 } from "./store";
 import { recordActivity } from "./activity";
 import type { SkillRun } from "./types";
@@ -33,7 +34,8 @@ export interface PipelineDeps {
 // it or skill_create minted it), so nothing is auto-created here — an unknown id simply no-ops. The skill's own
 // label is forced into the learner, so the reviewer only iterates the master; it never re-labels the work.
 export async function reviewDeclared(input: RunInput, skillId: string, now: number, deps: PipelineDeps = {}): Promise<SkillResult | null> {
-  const skill = skillId.trim() ? getSkill(skillId.trim()) : null;
+  const resolvedSkillId = skillId.trim() ? resolveSkillId(skillId.trim()) : "";
+  const skill = resolvedSkillId ? reviewableSkill(resolvedSkillId) : null;
   if (!skill) { recordActivity({ ts: now, phase: "skipped", request: input.request }); return null; } // unknown/blank id ⇒ nothing to iterate
   const learn = deps.learn ?? ((req, out, tx, ex, pr, pm, pe, fl) => reviewAndLearn(req, out, tx, ex, pr, pm, pe, undefined, fl));
 
@@ -45,32 +47,38 @@ export async function reviewDeclared(input: RunInput, skillId: string, now: numb
     recordActivity({ ts: now, phase: result.failed ? "failed" : "skipped", request: input.request, error: result.error });
     return null;
   }
+  const finalSkillId = resolveSkillId(skillId.trim());
+  const finalSkill = reviewableSkill(finalSkillId);
+  if (!finalSkill) {
+    recordActivity({ ts: now, phase: "skipped", request: input.request });
+    return null;
+  }
 
   const score = review.score;
   // Store the raw transcript as the run's process record + a CONCISE review (never review.raw: it holds the
   // whole master and the priors feed the next learner call, which ballooned every prompt).
   const conciseReview = JSON.stringify({ right: review.right, wrong: review.wrong, improve: review.improve });
-  addRun({ skillId: skill.id, recipe: input.transcript, quality: score, review: conciseReview, ts: now });
+  addRun({ skillId: finalSkill.id, recipe: input.transcript, quality: score, review: conciseReview, ts: now });
   let promoted = false;
   if (master) {
-    addVersion(skill.id, master, explanation ?? "", score, now); // append to the master-version timeline (if it changed)
+    addVersion(finalSkill.id, master, explanation ?? "", score, now); // append to the master-version timeline (if it changed)
     // A run score grades the deliverable, not the candidate master. Automatically replacing an established
     // reusable method with every run caused broad skills to drift into the latest project-specific workflow.
     // Keep candidates in version history; bootstrap only a blank legacy skill, or allow an explicit opt-in
     // while a proper held-out master evaluator is developed. User corrections still use skill_edit directly.
     if (process.env.CAIRN_AUTO_PROMOTE_MASTERS === "1") {
-      setMasterPrompt(skill.id, master, explanation ?? "");
-      await reindexSkill(skill.id, skill.task, master);
+      setMasterPrompt(finalSkill.id, master, explanation ?? "");
+      await reindexSkill(finalSkill.id, finalSkill.task, master);
       promoted = true;
-    } else if (!skill.masterPrompt.trim() && setMasterPromptIfBlank(skill.id, master, explanation ?? "")) {
-      await reindexSkill(skill.id, skill.task, master);
+    } else if (!finalSkill.masterPrompt.trim() && setMasterPromptIfBlank(finalSkill.id, master, explanation ?? "")) {
+      await reindexSkill(finalSkill.id, finalSkill.task, master);
       promoted = true;
     }
   }
   recordActivity({
-    ts: now, phase: "learned", request: input.request, label: skill.task, score, created: priors.length === 0, master: promoted,
+    ts: now, phase: "learned", request: input.request, label: finalSkill.task, score, created: priors.length === 0, master: promoted,
     review: { right: review.right, wrong: review.wrong, improve: review.improve },
     output: input.output.slice(0, 400), // a short preview of what the agent delivered, for the feed
   });
-  return { skillId: skill.id, task: skill.task, score };
+  return { skillId: finalSkill.id, task: finalSkill.task, score };
 }

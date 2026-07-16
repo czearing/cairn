@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { getSkill, skillCatalogDetails, type SkillCatalogEntry } from "./store";
+import { skillCatalogDetails, visibleSkill, type SkillCatalogEntry } from "./store";
 
 export interface SkillCatalogSnapshot {
   version: string;
@@ -22,7 +22,7 @@ export function formatSkillCatalog(): string {
 }
 
 export function selectedSkillBlock(ids: string[]): string {
-  const selected = ids.map((id) => getSkill(id)).filter((skill) => skill?.masterPrompt.trim());
+  const selected = ids.map((id) => visibleSkill(id)).filter(Boolean);
   if (selected.length !== ids.length) return "[cairn] Skill selection failed: unknown or unlearned skill id.";
   return selected.map((skill) =>
     `## Selected skill: ${skill!.task} (${skill!.id})\n${skill!.masterPrompt}`

@@ -217,8 +217,8 @@ server.tool(
   },
   async ({ id }) => {
     if (!id.trim()) return fail("id is required (pass the selected or created skill id)");
-    const { getSkill } = await import("../skill/store");
-    if (!getSkill(id.trim())) return fail("unknown skill id; pass an id from the injected catalog or skill_create");
+    const { reviewableSkill } = await import("../skill/store");
+    if (!reviewableSkill(id.trim())) return fail("unknown or retired skill id; pass an id from the current injected catalog or skill_create");
     // The transcript path lives with the host hook, not here, so this tool only acknowledges the declaration.
     return json({ ok: true });
   }

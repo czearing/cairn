@@ -1,7 +1,7 @@
 import { test, expect, beforeEach } from "bun:test";
 import { putSkill, getSkill, setMasterPrompt, setSkillMetadata, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector, deleteSkillByLabel, deleteSkill, skillCatalog, addVersion, skillVersions } from "../src/skill/store";
 import { db } from "../src/core/db";
-import { formatSkillCatalog, skillCatalogSnapshot } from "../src/skill/catalog";
+import { formatSkillCatalog, selectedSkillBlock, skillCatalogSnapshot } from "../src/skill/catalog";
 
 beforeEach(() => {
   try { db().run("DELETE FROM skills"); } catch { /* not created yet */ }
@@ -115,6 +115,17 @@ test("setMasterPrompt replaces the instructions; explanation is set only when pa
   setMasterPrompt("s1", "newer steps", "new why");             // explanation passed: replace both
   expect(getSkill("s1")!.masterPrompt).toBe("newer steps");
   expect(getSkill("s1")!.explanation).toBe("new why");
+});
+
+test("delegated skill blocks reject hidden retired ids", () => {
+  putSkill({
+    id: "hidden-delegation",
+    task: "hidden delegation",
+    masterPrompt: "1. should not load",
+    description: "",
+    ts: 1,
+  }, [1, 0]);
+  expect(selectedSkillBlock(["hidden-delegation"])).toContain("Skill selection failed");
 });
 
 test("addRun preserves complete history while topRuns returns the requested best subset", () => {

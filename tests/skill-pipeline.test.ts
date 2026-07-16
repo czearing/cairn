@@ -1,6 +1,13 @@
 import { test, expect, beforeEach } from "bun:test";
 import { reviewDeclared } from "../src/skill/pipeline";
-import { getSkill, putSkill, skillVersions, topRuns } from "../src/skill/store";
+import {
+  getSkill,
+  putSkill,
+  setSkillMetadata,
+  setSkillRedirect,
+  skillVersions,
+  topRuns,
+} from "../src/skill/store";
 import { categorize } from "../src/skill/match";
 import { db } from "../src/core/db";
 
@@ -149,4 +156,98 @@ test("concurrent blank-skill reviews bootstrap exactly one master", async () => 
     "1. Candidate A",
     "1. Candidate B",
   ]);
+});
+
+test("in-flight reviews follow durable skill redirects after a catalog merge", async () => {
+  putSkill({
+    id: "merge-target",
+    task: "merge target",
+    masterPrompt: "1. Stable target",
+    description: "Use for merged review tests.",
+    ts: 1,
+  }, [1, 0]);
+  putSkill({
+    id: "merge-source",
+    task: "merge source",
+    masterPrompt: "1. Retired source",
+    description: "",
+    ts: 1,
+  }, [0, 1]);
+  setSkillRedirect("merge-source", "merge-target", 2);
+  const result = await reviewDeclared(
+    { request: "task", transcript: "trace", output: "result" },
+    "merge-source",
+    3,
+    {
+      learn: async (_request, _output, _transcript, _existing, _priors, _master, _explanation, label) => ({
+        label,
+        review: { score: 0.7, right: "", wrong: "", improve: "", raw: "" },
+        master: null,
+        explanation: null,
+      }),
+    }
+  );
+  expect(result?.skillId).toBe("merge-target");
+  expect(topRuns("merge-target")).toHaveLength(1);
+  expect(topRuns("merge-source")).toHaveLength(0);
+});
+
+test("a redirect installed during grading controls final persistence", async () => {
+  putSkill({
+    id: "late-target",
+    task: "late target",
+    masterPrompt: "1. Target",
+    description: "Use for late redirect tests.",
+    ts: 1,
+  }, [1, 0]);
+  putSkill({
+    id: "late-source",
+    task: "late source",
+    masterPrompt: "1. Source",
+    description: "Use before the merge.",
+    ts: 1,
+  }, [0, 1]);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const pending = reviewDeclared(
+    { request: "task", transcript: "trace", output: "result" },
+    "late-source",
+    3,
+    {
+      learn: async () => {
+        await gate;
+        return {
+          label: "late source",
+          review: { score: 0.7, right: "", wrong: "", improve: "", raw: "" },
+          master: "1. Candidate",
+          explanation: "candidate",
+        };
+      },
+    }
+  );
+  setSkillRedirect("late-source", "late-target", 2);
+  setSkillMetadata("late-source", "late source", "");
+  release();
+  expect((await pending)?.skillId).toBe("late-target");
+  expect(topRuns("late-target")).toHaveLength(1);
+  expect(topRuns("late-source")).toHaveLength(0);
+});
+
+test("retired skills without redirects reject queued review persistence", async () => {
+  putSkill({
+    id: "retired-review",
+    task: "retired review",
+    masterPrompt: "1. Retired",
+    description: "",
+    ts: 1,
+  }, [1, 0]);
+  let called = false;
+  const result = await reviewDeclared(
+    { request: "task", transcript: "trace", output: "result" },
+    "retired-review",
+    2,
+    { learn: async () => { called = true; throw new Error("must not run"); } }
+  );
+  expect(result).toBeNull();
+  expect(called).toBe(false);
 });

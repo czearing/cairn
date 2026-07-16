@@ -254,6 +254,14 @@ test("skill_search returns the same compact catalog for every query and skill_lo
   expect(skillSearch("short story").matches?.[0]?.steps).toContain("two-paragraph story");
 });
 
+test("hidden retired skills cannot be loaded by exact legacy id", async () => {
+  const retired = await categorize("retired test skill", 1);
+  setMasterPrompt(retired.skill.id, "1. old test workflow");
+  setSkillMetadata(retired.skill.id, "retired test skill", "");
+  expect(skillLoad(retired.skill.id)).toBeNull();
+  expect(skillSearch(`load:${retired.skill.id}`).loaded).toBeNull();
+});
+
 test("skill_select binds injected ids to the exact catalog version", async () => {
   const created = await categorize("cli troubleshooting", 1);
   setMasterPrompt(created.skill.id, "1. reproduce the CLI failure\n2. fix the earliest broken boundary");

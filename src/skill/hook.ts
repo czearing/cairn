@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { skillsEnabled } from "../core/config";
 import { learnFromTranscript } from "./learn";
-import { getSkill, skillCatalog } from "./store";
+import { getSkill, skillCatalog, visibleSkill } from "./store";
 import { skillCatalogSnapshot } from "./catalog";
 
 // Entry points the Claude Code dispatch calls. The skill feature is ON by default; turn it OFF per machine
@@ -59,8 +59,8 @@ export function skillSearch(query: string): {
 
 export function skillLoad(id: string): { id: string; title: string; description: string; steps: string } | null {
   if (!skillsEnabled() || !id.trim()) return null;
-  const skill = getSkill(id.trim());
-  if (!skill?.masterPrompt.trim()) return null;
+  const skill = visibleSkill(id.trim());
+  if (!skill) return null;
   return {
     id: skill.id,
     title: skill.task,

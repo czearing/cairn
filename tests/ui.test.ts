@@ -44,8 +44,9 @@ test("/api/review-jobs exposes queue status", async () => {
 });
 
 test("/api/skills hides pending skills", async () => {
-  const { deleteSkill, putSkill } = await import("../src/skill/store");
+  const { deleteSkill, putSkill, setSkillMetadata } = await import("../src/skill/store");
   putSkill({ id: "ui-learned", task: "learned", masterPrompt: "1. do the work", ts: 1 }, [1, 0]);
+  setSkillMetadata("ui-learned", "learned", "Use for testing that curated learned skills appear in the skill viewer API.");
   putSkill({ id: "ui-pending", task: "pending", masterPrompt: "", ts: 2 }, [0, 1]);
   const res = await fetch(`http://localhost:${server.port}/api/skills`);
   const data = (await res.json()) as { skills: { id: string }[] };

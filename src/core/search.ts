@@ -1,8 +1,11 @@
 import { db, changeToken } from "./db";
 import { config } from "./config";
 import { embed, embedModel, cosine } from "./embed";
+import { edgesForSources } from "./graph";
 import { toNeuron, vecText, SELECT } from "./neurons";
 import { encodeVector, decodeVector } from "./vector";
+import { exactVectorCandidates } from "./vector-index";
+import { prepareVectorIndex, writeNeuronVector } from "./vector-store";
 import type { Neuron, Row } from "./neurons.types";
 import type { NeuronVector, ScoredNeuron, ScoredResult } from "./search.types";
 
@@ -22,6 +25,16 @@ import type { NeuronVector, ScoredNeuron, ScoredResult } from "./search.types";
 // (measured ~25x). A one-shot hook process just pays the same single load as before.
 let _cache: { token: string; model: string; dim: number; vecs: NeuronVector[] } | null = null;
 
+function persistVector(id: string, vector: number[], model: string): void {
+  const encoded = encodeVector(vector);
+  db().transaction(() => {
+    prepareVectorIndex(model, vector.length);
+    db().query("UPDATE neurons SET embedding = ?, embedding_model = ? WHERE id = ?")
+      .run(encoded, model, id);
+    writeNeuronVector(id, model, encoded);
+  });
+}
+
 async function vectors(expectDim: number): Promise<NeuronVector[]> {
   const current = embedModel();
   const token = changeToken();
@@ -29,6 +42,7 @@ async function vectors(expectDim: number): Promise<NeuronVector[]> {
     return _cache.vecs;
   }
   const rows = db().query(SELECT).all() as Row[];
+  const graphEdges = edgesForSources(rows.map((row) => row.id));
   const out: NeuronVector[] = [];
   for (const r of rows) {
     // decodeVector reads both the current BLOB format and the legacy JSON string, so an un-migrated
@@ -38,25 +52,22 @@ async function vectors(expectDim: number): Promise<NeuronVector[]> {
     const dimOk = !!vec && vec.length === expectDim;
     if (!dimOk) {
       vec = await embed(vecText(r.text, r.answer));
-      db().query("UPDATE neurons SET embedding = ?, embedding_model = ? WHERE id = ?")
-        .run(encodeVector(vec), current, r.id);
+      persistVector(r.id, vec, current);
     } else if (r.embedding_model !== current) {
       if (r.embedding_model == null) {
         // legacy NULL-labeled row from the previous default: adopt the vector (keep it, stamp the
         // model) and, if it was the old JSON string, upgrade its storage to a BLOB in the same write.
-        if (legacy) db().query("UPDATE neurons SET embedding = ?, embedding_model = ? WHERE id = ?").run(encodeVector(vec!), current, r.id);
-        else db().query("UPDATE neurons SET embedding_model = ? WHERE id = ?").run(current, r.id);
+        persistVector(r.id, vec!, current);
       } else {
         vec = await embed(vecText(r.text, r.answer));
-        db().query("UPDATE neurons SET embedding = ?, embedding_model = ? WHERE id = ?")
-          .run(encodeVector(vec), current, r.id);
+        persistVector(r.id, vec, current);
       }
     } else if (legacy) {
       // Steady state but still JSON: rewrite the SAME vector as a BLOB in place (no re-embed), so an
       // existing brain migrates itself gradually as it is searched.
-      try { db().query("UPDATE neurons SET embedding = ? WHERE id = ?").run(encodeVector(vec!), r.id); } catch { /* read-only context: skip */ }
+      try { persistVector(r.id, vec!, current); } catch { /* read-only context: skip */ }
     }
-    out.push({ neuron: toNeuron(r), vec: vec! });
+    out.push({ neuron: toNeuron(r, graphEdges.get(r.id) ?? []), vec: vec! });
   }
   // Read the token AFTER building: the self-heal UPDATEs above may have bumped it, and we want the
   // cache to reflect the post-rebuild state so the very next query is a hit rather than a rebuild.
@@ -74,7 +85,33 @@ async function vectors(expectDim: number): Promise<NeuronVector[]> {
 export async function search(query: string): Promise<ScoredResult[]> {
   if (!query.trim()) return [];
   const qv = await embed(query);
-  const scored: ScoredNeuron[] = (await vectors(qv.length)).map((d) => ({ ...d, sim: cosine(qv, d.vec) }));
+  if (!config.expandSubtree) {
+    try {
+      const total = (db().query("SELECT COUNT(*) AS count FROM neurons").get() as { count: number }).count;
+      if (total >= config.vectorIndexThreshold) prepareVectorIndex(embedModel(), qv.length);
+    } catch { /* read-only consumers use the exact linear fallback */ }
+    const indexed = exactVectorCandidates(
+      qv,
+      embedModel(),
+      config.relevanceThreshold,
+      config.relativeFloor,
+      config.vectorIndexThreshold
+    );
+    if (indexed) {
+      const byId = new Map<string, Neuron>();
+      const allIds = indexed.map((item) => item.id);
+      const graphEdges = edgesForSources(allIds);
+      for (let start = 0; start < indexed.length; start += 500) {
+        const ids = indexed.slice(start, start + 500).map((item) => item.id);
+        const rows = db().query(`${SELECT} WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Row[];
+        for (const row of rows) byId.set(row.id, toNeuron(row, graphEdges.get(row.id) ?? []));
+      }
+      return indexed
+        .map((item) => ({ ...byId.get(item.id)!, score: Math.round(item.score * 1000) / 1000 }))
+        .filter((item) => item.id);
+    }
+  }
+  const scored: ScoredNeuron[] = (await vectors(qv.length)).map((entry) => ({ ...entry, sim: cosine(qv, entry.vec) }));
   const byId = new Map(scored.map((s) => [s.neuron.id, s]));
 
   // Effective relevance floor. With CAIRN_RELATIVE_FLOOR off (0) this is just the absolute threshold,

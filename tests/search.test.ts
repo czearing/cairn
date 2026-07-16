@@ -12,7 +12,12 @@ beforeAll(async () => {
   DB = await import("../src/core/db");
   C = await import("../src/core/config");
 });
-beforeEach(() => { DB.db().run("DELETE FROM neurons"); C.config.expandSubtree = false; C.config.relativeFloor = 0; });
+beforeEach(() => {
+  DB.db().run("DELETE FROM neurons");
+  C.config.expandSubtree = false;
+  C.config.relativeFloor = 0;
+  C.config.vectorIndexThreshold = 50_000;
+});
 
 const ids = (ns: { id: string }[]) => ns.map((n) => n.id);
 const texts = (ns: { text: string }[]) => ns.map((n) => n.text);
@@ -134,4 +139,15 @@ test("E9 results interleaved by relevance, not hop distance", async () => {
   expect(ids(res)).toContain(bridge.id);
   expect(rank(res, a.id)).toBeLessThan(rank(res, bridge.id));
   expect(rank(res, c.id)).toBeLessThan(rank(res, bridge.id));
+});
+
+test("indexed and linear search return identical ranked results", async () => {
+  for (let index = 0; index < 30; index++) {
+    await N.create(`distributed lifecycle state and vector retrieval case ${index}`);
+  }
+  C.config.vectorIndexThreshold = 50_000;
+  const linear = await S.search("durable lifecycle vector search");
+  C.config.vectorIndexThreshold = 1;
+  const indexed = await S.search("durable lifecycle vector search");
+  expect(indexed).toEqual(linear);
 });

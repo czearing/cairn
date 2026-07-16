@@ -53,13 +53,7 @@ server.tool(
     // The result set is kept tight by the adaptive relevance floor (CAIRN_RELATIVE_FLOOR, default 0.85 of the
     // top score) rather than a character cap — only genuinely-relevant thoughts qualify, so the payload stays
     // small without ever truncating a node's answer. Tighten the floor (or set CAIRN_SEARCH_LIMIT) to trim more.
-    // Piggyback: when the skill layer is enabled (skillsEnabled, off by default), surface the matching skill's
-    // curated steps as a SEPARATE blob (top-2); skillBlob returns [] when it is off.
-    // Threshold-gated so an unrelated search returns none. Shape is unchanged (the bare array) unless a skill
-    // actually matches, so default consumers are untouched.
-    const { skillBlob } = await import("../skill/hook");
-    const skills = await skillBlob(query);
-    return json(skills.length ? { thoughts, skills } : thoughts);
+    return json(thoughts);
   }
 );
 
@@ -111,32 +105,43 @@ server.tool(
   }
 );
 
-// Agent-facing skill retrieval. Before doing a task, the agent calls this with a description of it and gets
-// back curated step-by-step "masters" distilled from past runs of that task, plus the catalog of all skills.
-// The agent picks the matching one and follows its steps. Returning several candidates (not force-injecting
-// one) is deliberate: it lets the agent disambiguate near-duplicate skills (writing vs reviewing a story) with
-// full context, which a cosine auto-injection cannot. Returns empty arrays when the skill layer is off/empty.
 server.tool(
-  "skill_search",
-  "Search your learned skills BEFORE a task, with a short description of it. Returns matching skills (each an `id` + curated steps) and the full catalog (each an `id`). If one fits, follow its steps and keep its `id` for skill_review. This reuses hard-won process.",
-  { task: z.string().describe("A short description of the task you are about to do (e.g. 'write a short story', 'review a PR', 'debug a flaky test').") },
-  async ({ task }) => {
-    const { skillSearch } = await import("../skill/hook");
-    return json(await skillSearch(task));
+  "skill_select",
+  "Before starting work, select every injected catalog skill you will use. Pass the exact injected catalog version so selection cannot race a catalog update. Returns exact reusable steps. Choose by title and usage description, never by wording similarity.",
+  {
+    ids: z.array(z.string()).min(1).max(4).describe("Exact skill ids from the auto-injected catalog."),
+    catalogVersion: z.string().optional().describe("Exact Catalog version value from the injected catalog."),
+  },
+  async ({ ids, catalogVersion }) => {
+    const { skillSelect } = await import("../skill/hook");
+    const result = skillSelect(ids, catalogVersion);
+    return result.error ? fail(JSON.stringify(result)) : json(result);
   }
 );
 
-// Agent-facing skill creation. When skill_search turns up nothing that fits (or nothing SPECIFIC enough), the
-// agent mints a new skill with this tool and gets back its `id`, does the work, then iterates it with
-// skill_review(id). Creating up front makes the new skill discoverable to other sessions immediately.
+server.tool(
+  "skill_search",
+  "Legacy compatibility bridge. Current agents receive the catalog automatically and should call skill_select. Returns the catalog, or loads an exact id when task is `load:<id>`.",
+  { task: z.string() },
+  async ({ task }) => {
+    const { skillSearch } = await import("../skill/hook");
+    return json(skillSearch(task));
+  }
+);
+
 server.tool(
   "skill_create",
-  "Create a NEW skill when skill_search found nothing fitting. Label it 1-4 lowercase words by what it produces (e.g. 'short story', 'pr review'). Returns its `id`: do the work, deliver the result, then call skill_review with that `id` (last).",
-  { label: z.string().describe("A short label (1-4 lowercase words) naming the task by what it produces.") },
-  async ({ label }) => {
-    if (!label.trim()) return fail("label is required");
+  "Create a broad reusable capability only after comparing the complete catalog. The description must state the distinct situations where it should be used; never create one for a user's mood, wording, one-off state, specific bug, handoff, wait, or response.",
+  {
+    title: z.string().describe("Broad capability title, 1-4 words."),
+    description: z.string().describe("When this reusable capability should be used, including its method and boundaries."),
+    plan: z.string().describe("Initial reusable master plan: numbered imperative steps only."),
+    whyExistingSkillsDoNotFit: z.string().describe("Why none of the catalog entries covers this method."),
+  },
+  async ({ title, description, plan, whyExistingSkillsDoNotFit }) => {
     const { skillCreate } = await import("../skill/hook");
-    return json(await skillCreate(label));
+    const result = await skillCreate(title, description, plan, whyExistingSkillsDoNotFit);
+    return result.error ? fail(result.error) : json(result);
   }
 );
 
@@ -145,9 +150,9 @@ server.tool(
 // immediately and the very next run uses it, instead of waiting for the background grader to catch up.
 server.tool(
   "skill_edit",
-  "Refine a skill's master prompt directly when you've learned to do it better — e.g. the user corrected you. Pass the skill `id` (from skill_search) and the rewritten master (numbered imperative steps only). Folds the fix in immediately so the next run uses it, without waiting for the background grader.",
+  "Refine a selected or created skill's master prompt directly when the user corrects the method. Pass its exact id and numbered imperative steps.",
   {
-    id: z.string().describe("The id of the skill to refine (from skill_search or skill_create)."),
+    id: z.string().describe("The exact selected or created skill id."),
     master: z.string().describe("The rewritten master: numbered imperative steps only, no rationale/preamble."),
     explanation: z.string().optional().describe("Optional rationale for the next reviewer (why this is better); never shown to the doer."),
   },
@@ -161,7 +166,7 @@ server.tool(
 // The LEARNER's submission tool. It is registered ONLY in the learner context (when CAIRN_SKILL_OUTPUT_PATH
 // is set — the background `copilot -p`/`claude -p` learner bakes that env into its own cairn server). The
 // MAIN agent's cairn server has no such env, so skill_output is NEVER exposed to it — the agent uses
-// skill_search / skill_create / skill_review, and can no longer mistakenly call this internal tool.
+// skill_select / skill_create / skill_review, and can no longer mistakenly call this internal tool.
 if (process.env.CAIRN_SKILL_OUTPUT_PATH) {
   server.tool(
     "skill_output",
@@ -196,30 +201,25 @@ if (process.env.CAIRN_SKILL_OUTPUT_PATH) {
   );
 }
 
-// The SEGMENTER's submission tool has been removed: the agent now declares the skill directly (skill_search /
-// skill_create + skill_review), so the reviewer never classifies a turn and no segmentation is needed.
+// The agent declares exact selected or created skill ids, so the reviewer never classifies a turn.
 
 // The AGENT's "this deliverable is finished, review it as skill <id>" signal. The agent knows what it just
-// did — it reused a skill it found with skill_search, or minted one with skill_create — so it declares that
+// did — it selected an injected catalog skill, or minted one with skill_create — so it declares that
 // skill's ID here and the reviewer's only job is to grade this deliverable against that skill and iterate its
 // master. Referencing the concrete id (not a re-typed label) means the run can never drift onto a near-
-// duplicate. TIMING MATTERS: the postToolUse hook fires the learner immediately over the transcript UP TO this
-// call, so the agent must DELIVER its finished result first and call skill_review last (and, if it delegated,
-// only after the subagent has returned) — otherwise the grader sees an unfinished turn with no deliverable.
-// The tool validates the id and acknowledges; the host's postToolUse hook reads the id and reviews the whole
-// turn log, so this is a no-op when skills are off or run outside a hooked host.
+// duplicate. The tool validates the id and acknowledges. The host records the declaration at postToolUse and
+// enqueues it at agentStop, after required continuations and the final visible answer.
 server.tool(
   "skill_review",
-  "Call LAST, after delivering the finished result — it grades the turn up to this call, so reviewing before you deliver grades nothing. Pass the skill `id` (from skill_search or skill_create). If you delegated, call only after the subagent returned. Once per deliverable; never for chit-chat or a status update.",
+  "Declare the exact skill id for the finished deliverable. Call after substantive work and after delegated results return. The host grades the complete turn at agentStop. Once per deliverable; never for chit-chat or status-only output.",
   {
-    id: z.string().describe("The id of the skill this deliverable belongs to, as returned by skill_search or skill_create."),
+    id: z.string().describe("The selected or created skill id this deliverable belongs to."),
   },
   async ({ id }) => {
-    if (!id.trim()) return fail("id is required (pass the skill id from skill_search or skill_create)");
+    if (!id.trim()) return fail("id is required (pass the selected or created skill id)");
     const { getSkill } = await import("../skill/store");
-    if (!getSkill(id.trim())) return fail("unknown skill id; pass an id returned by skill_search or skill_create");
-    // The transcript path lives with the host hook, not here, so this tool cannot fire the learner itself; it
-    // just acknowledges. The postToolUse hook sees this call, reads the id, and reviews the turn log.
+    if (!getSkill(id.trim())) return fail("unknown skill id; pass an id from the injected catalog or skill_create");
+    // The transcript path lives with the host hook, not here, so this tool only acknowledges the declaration.
     return json({ ok: true });
   }
 );

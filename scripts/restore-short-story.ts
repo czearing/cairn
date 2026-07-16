@@ -33,7 +33,7 @@ else {
     .map((l) => { try { return JSON.parse(l); } catch { return null; } })
     .filter((o) => o && o.event === "round") as any[];
   for (const r of rounds) {
-    addRun({ skillId: skill.id, recipe: String(r.story ?? "").slice(0, 4000), quality: Number(r.score) || 0, review: `round ${r.round}, master ${r.masterChars} chars`, ts: 1000 + Number(r.round) }, 20);
+    addRun({ skillId: skill.id, recipe: String(r.story ?? "").slice(0, 4000), quality: Number(r.score) || 0, review: `round ${r.round}, master ${r.masterChars} chars`, ts: 1000 + Number(r.round) });
   }
   console.log(`restored "short story": master ${master.length} chars, ${rounds.length} runs (${rounds.map((r) => r.score).join(", ")})`);
 }

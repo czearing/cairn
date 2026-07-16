@@ -28,7 +28,14 @@ export interface ClaudeResult { ok: boolean; text: string; error?: string }
  *  `masterPrompt` is the instructions a doer agent loads (the only part injected). `explanation` is the
  *  rationale (why the best runs beat the weak ones, what excellent looks like) kept for FUTURE REVIEWER
  *  sessions to reference when they refine the skill; it is never injected into a doer agent. */
-export interface Skill { id: string; task: string; masterPrompt: string; explanation?: string; ts: number }
+export interface Skill {
+  id: string;
+  task: string;
+  masterPrompt: string;
+  description?: string;
+  explanation?: string;
+  ts: number;
+}
 
 /** One graded run under a skill: the raw run transcript (the process), its quality, and the reviewer's
  *  notes. The field is named `recipe` for the existing db column it maps to. */

@@ -4,10 +4,10 @@
 // idempotent. Paths are env-overridable (CAIRN_COPILOT_MCP_PATH / CAIRN_COPILOT_HOOK_PATH) so tests
 // and sandboxes never touch the real ~/.copilot.
 //
-// Two channels, matching what Copilot CLI actually honors (verified on v1.0.62):
+// Two channels, matching what Copilot CLI actually honors:
 //   • mcp-config.json   → exposes brain_search/brain_create/brain_mutate as agent-invoked tools.
-//   • hooks/cairn.json  → a sessionStart hook whose additionalContext is injected every session,
-//     forcing the "call brain_search first" policy (userPromptSubmitted output is ignored by Copilot).
+//   • hooks/cairn.json  → userPromptSubmitted injects the workflow once after Copilot has collected
+//     the messages for the next model turn.
 import { existsSync, mkdirSync } from "node:fs";
 import { readFile, writeFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -81,14 +81,14 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   return "added";
 }
 
-// Six events — the full set Copilot CLI (v1.0.66+) honors for Cairn's brain workflow:
-//   sessionStart        → a baseline workflow copy, once per session.
+// Events Cairn needs for its brain workflow:
 //   userPromptSubmitted → the full workflow at TURN START, on every prompt (Claude UserPromptSubmit parity).
 //                         NOTE: the published hooks reference says this event's output is "not processed",
 //                         but a live marker test on v1.0.66 proved additionalContext here DOES reach the
-//                         model. sessionStart stays as a fallback in case a future version regresses.
-//   preToolUse          → gate a brain_create (deny closed-question / root-only-branch); matcher-scoped
-//                         to brain_create so it never fires on ordinary tools.
+//                         model. Do not also inject at sessionStart: both events fire on the first turn.
+//   sessionStart        → workflow fallback only on Copilot versions older than v1.0.66, where
+//                         userPromptSubmitted output is not delivered to the model.
+//   preToolUse          → gate brain_create and prepend the Cairn protocol to general-purpose Task prompts.
 //   postToolUse         → entry-format/orchestrate + per-tool reminders after a brain_* or Task call; also
 //                         the skill_review trigger (review the whole turn log when the agent signals a
 //                         finished deliverable — catches backgrounded subagent output).
@@ -97,6 +97,20 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
 //                         Auto-learns the turn as a FALLBACK unless skill_review already reviewed it.
 //   subagentStart       → additionalContext prepended to a spawned subagent's own prompt.
 // hook.ts picks the mode from its argv.
+function supportsPerPromptContext(): boolean {
+  const override = process.env.CAIRN_COPILOT_VERSION;
+  const executable = Bun.which("copilot");
+  const output = override ?? (executable
+    ? `${Bun.spawnSync([executable, "--version"], { stdout: "pipe", stderr: "pipe" }).stdout?.toString() ?? ""}`
+    : "");
+  const match = output.match(/\b(\d+)\.(\d+)\.(\d+)\b/);
+  if (!match) return true;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  return major > 1 || (major === 1 && (minor > 0 || patch >= 66));
+}
+
 function hookConfig(): object {
   const win = (p: string) => p.replace(/\//g, "\\");
   const nix = (p: string) => p.replace(/\\/g, "/");
@@ -110,29 +124,30 @@ function hookConfig(): object {
     if (matcher) entry.matcher = matcher; // regex on toolName, anchored ^(?:…)$ by Copilot CLI
     return entry;
   };
+  const hooks: Record<string, unknown> = {
+    userPromptSubmitted: [cmd("user-prompt")],
+    preToolUse: [cmd("pre-tool", "(?:.*brain_create|task)")],
+    postToolUse: [cmd("post-tool")],
+    agentStop: [cmd("agent-stop")],
+    subagentStop: [cmd("subagent-stop")],
+    subagentStart: [cmd("subagent-start")],
+  };
+  if (!supportsPerPromptContext()) hooks.sessionStart = [cmd("session-start")];
   return {
     version: 1,
-    hooks: {
-      sessionStart: [cmd("session-start")],
-      userPromptSubmitted: [cmd("user-prompt")],
-      preToolUse: [cmd("pre-tool", ".*brain_create")],
-      postToolUse: [cmd("post-tool")],
-      agentStop: [cmd("agent-stop")],
-      subagentStop: [cmd("subagent-stop")],
-      subagentStart: [cmd("subagent-start")],
-    },
+    hooks,
   };
 }
 
-// Write the cairn hook file (its own file, so it never collides with the user's other hooks). The
-// idempotency marker is "subagent-stop": a file written before the skill-learning events were added lacks
-// it and is upgraded in place.
+// Write the Cairn-owned hook file. Compare the complete desired config so existing installs are upgraded
+// when events are added or removed instead of being left stale by an old string marker.
 export async function installCopilotHook(dryRun: boolean): Promise<Result> {
   const path = copilotHookPath();
-  if (existsSync(path) && (await readFile(path, "utf8")).includes("subagent-stop")) return "already";
+  const desired = `${JSON.stringify(hookConfig(), null, 2)}\n`;
+  if (existsSync(path) && (await readFile(path, "utf8")) === desired) return "already";
   if (dryRun) return "would-add";
   mkdirSync(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(hookConfig(), null, 2)}\n`, "utf8");
+  await writeFile(path, desired, "utf8");
   return "added";
 }
 

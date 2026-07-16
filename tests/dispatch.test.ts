@@ -2,6 +2,7 @@
 // Proves the entry-format prompt is injected when a write tool is called — with NO rejection
 // and NO length limit.
 import { test, expect } from "bun:test";
+import { randomUUID } from "node:crypto";
 
 async function fire(payload: object): Promise<string> {
   const proc = Bun.spawn(["bun", "src/hosts/claude-code/dispatch.ts"], {
@@ -69,4 +70,32 @@ test("PostToolUse praises depth (non-root parent), not a flat root-child", async
 
   const flat = await fire({ hook_event_name: "PostToolUse", tool_name: "brain_create", tool_input: { text: "root child", edges: [root.id] }, tool_output: {} });
   expect(JSON.parse(flat).hookSpecificOutput.additionalContext).not.toContain("a level deeper");
+});
+
+test("Claude delegates only skills selected in host-owned lifecycle state", async () => {
+  const { putSkill } = await import("../src/skill/store");
+  const skillId = randomUUID();
+  const sessionId = `claude-delegation-${randomUUID()}`;
+  putSkill({
+    id: skillId,
+    task: "poetry writing",
+    masterPrompt: "1. Draft three lines",
+    description: "Use for poems.",
+    ts: 1,
+  }, [1, 0]);
+  await fire({
+    hook_event_name: "PostToolUse",
+    session_id: sessionId,
+    tool_name: "skill_select",
+    tool_input: { ids: [skillId] },
+    tool_output: {},
+  });
+  const out = await fire({
+    hook_event_name: "PreToolUse",
+    session_id: sessionId,
+    tool_use_id: "claude-task-1",
+    tool_name: "Task",
+    tool_input: { prompt: `CAIRN_SKILL_IDS: ${skillId}\nWrite a haiku.` },
+  });
+  expect(JSON.parse(out).hookSpecificOutput.updatedInput.prompt).toContain(`Selected skill: poetry writing (${skillId})`);
 });

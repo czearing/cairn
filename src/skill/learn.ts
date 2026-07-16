@@ -1,6 +1,10 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { claimReviewJobs, enqueueReview, failReviewJob, latestCopilotReview, transcriptReviewKey, type ReviewJob } from "./review-queue";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { copilotReviews, enqueueReview, latestCopilotReview, reviewSupervisorActive, transcriptReviewKey } from "./review-queue";
 
 // The async learn trigger. After a turn finishes, the WHOLE skill-forming process (extract the run ->
 // learn: label + grade + master, with the raw transcript as context -> categorize -> store) runs in a
@@ -17,38 +21,41 @@ export function isSkillWorker(): boolean {
   return process.env.CAIRN_SKILL_WORKER === "1";
 }
 
-const WORKER = () => process.env.CAIRN_SKILL_WORKER_PATH || fileURLToPath(new URL("../../scripts/skill-learn-worker.ts", import.meta.url));
+const SUPERVISOR = () => process.env.CAIRN_REVIEW_SUPERVISOR_PATH || fileURLToPath(new URL("../../scripts/skill-review-supervisor.ts", import.meta.url));
 const MAX_LEARNERS = () => Number(process.env.CAIRN_MAX_LEARNERS || "4");
+const snapshotDir = () => join(homedir(), ".cairn", "inflight", "reviews");
+function snapshotTranscript(transcriptPath: string, id: string): string {
+  const name = `${createHash("sha256").update(id).digest("hex")}.jsonl`;
+  const destination = join(snapshotDir(), name);
+  if (!existsSync(destination)) {
+    mkdirSync(snapshotDir(), { recursive: true });
+    copyFileSync(transcriptPath, destination);
+  }
+  return destination;
+}
 
-function spawnJob(job: ReviewJob): boolean {
+function spawnSupervisor(): boolean {
   try {
-    const child = spawn(process.platform === "win32" ? "bun.exe" : "bun", [WORKER(), job.transcriptPath], {
+    const child = spawn(process.platform === "win32" ? "bun.exe" : "bun", [SUPERVISOR()], {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
       env: {
         ...process.env,
         CAIRN_SKILL_WORKER: "1",
+        CAIRN_WARM_LEARNER: "1",
         CAIRN_READONLY: "",
-        CAIRN_REVIEW_JOB_ID: job.id,
-        CAIRN_REVIEW_ATTEMPT: String(job.attempts),
-        CAIRN_REVIEW_ID: job.skillId,
-        CAIRN_LEARN_BACKEND: job.backend,
+        CAIRN_REVIEW_SNAPSHOT: "1",
       },
     });
     child.unref();
     return true;
-  } catch (error) {
-    failReviewJob(job.id, error instanceof Error ? error.message : String(error), job.attempts);
-    return false;
-  }
+  } catch { return false; }
 }
 
 export function drainReviewQueue(): number {
-  if (isSkillWorker() && !process.env.CAIRN_REVIEW_JOB_ID) return 0;
-  let started = 0;
-  for (const job of claimReviewJobs(MAX_LEARNERS())) if (spawnJob(job)) started++;
-  return started;
+  if (MAX_LEARNERS() <= 0 || reviewSupervisorActive()) return 0;
+  return spawnSupervisor() ? 1 : 0;
 }
 
 export function learnFromTranscript(
@@ -60,11 +67,12 @@ export function learnFromTranscript(
   try {
     const sessionId = options.sessionId ?? "";
     const id = options.id ?? transcriptReviewKey(transcriptPath, skillId, sessionId);
+    const jobTranscriptPath = snapshotTranscript(transcriptPath, id);
     const accepted = enqueueReview({
       id,
       sessionId,
       skillId,
-      transcriptPath,
+      transcriptPath: jobTranscriptPath,
       backend: options.backend ?? process.env.CAIRN_LEARN_BACKEND ?? "copilot",
     }).accepted;
     if (!accepted) return false;
@@ -76,7 +84,7 @@ export function learnFromTranscript(
 export function learnLatestCopilotReview(
   transcriptPath: string,
   sessionId: string,
-  options: { skillId?: string; agentId?: string; subagentOnly?: boolean } = {}
+  options: { skillId?: string; agentId?: string; agentName?: string; subagentOnly?: boolean } = {}
 ): boolean {
   const event = latestCopilotReview(transcriptPath, sessionId, options);
   if (!event) return false;
@@ -85,4 +93,18 @@ export function learnLatestCopilotReview(
     sessionId,
     backend: "copilot",
   });
+}
+
+export function learnCopilotReviews(
+  transcriptPath: string,
+  sessionId: string,
+  options: { skillId?: string; agentId?: string; agentName?: string; subagentOnly?: boolean } = {}
+): boolean {
+  const reviews = copilotReviews(transcriptPath, sessionId, options);
+  if (!reviews.length) return false;
+  return reviews.every((review) => learnFromTranscript(transcriptPath, review.skillId, {
+    id: review.id,
+    sessionId,
+    backend: "copilot",
+  }));
 }

@@ -5,9 +5,11 @@
     "": {
       "name": "cairn",
       "dependencies": {
+        "@github/copilot-sdk": "^1.0.6",
         "@huggingface/transformers": "^4.2.0",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "libsql": "^0.5.29",
+        "sqlite-vec": "^0.1.9",
         "zod": "^4.4.3",
       },
       "devDependencies": {
@@ -18,6 +20,26 @@
   },
   "packages": {
     "@emnapi/runtime": ["@emnapi/runtime@1.10.0", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA=="],
+
+    "@github/copilot": ["@github/copilot@1.0.70", "", { "dependencies": { "detect-libc": "^2.1.2" }, "optionalDependencies": { "@github/copilot-darwin-arm64": "1.0.70", "@github/copilot-darwin-x64": "1.0.70", "@github/copilot-linux-arm64": "1.0.70", "@github/copilot-linux-x64": "1.0.70", "@github/copilot-linuxmusl-arm64": "1.0.70", "@github/copilot-linuxmusl-x64": "1.0.70", "@github/copilot-win32-arm64": "1.0.70", "@github/copilot-win32-x64": "1.0.70" }, "bin": { "copilot": "npm-loader.js" } }, "sha512-onEwx5tod9t31Lc2rT5ns6s/fY6jtdwVWS3Fzs8hKUjCv7LFIMGf71MLcikl4GBXn6cq44+HVdNzCMWnLjYl3g=="],
+
+    "@github/copilot-darwin-arm64": ["@github/copilot-darwin-arm64@1.0.70", "", { "os": "darwin", "cpu": "arm64", "bin": { "copilot-darwin-arm64": "copilot" } }, "sha512-NewReqBmTxtAzApZNmUsY4Xqy8N086MiQm7k35i9i+WrGyRiHxdZ/n/lMLCkqWoelr7pZhcZ7gQ7fHbEq1KdoQ=="],
+
+    "@github/copilot-darwin-x64": ["@github/copilot-darwin-x64@1.0.70", "", { "os": "darwin", "cpu": "x64", "bin": { "copilot-darwin-x64": "copilot" } }, "sha512-ydUEYI3udNAjdMsLPFQLH/JG9YFKcxuAUxYIyOK+F/m/Of9nODKdYa2hw2mlLanP4cNyuxGLflu+rtIqIb+cPw=="],
+
+    "@github/copilot-linux-arm64": ["@github/copilot-linux-arm64@1.0.70", "", { "os": "linux", "cpu": "arm64", "bin": { "copilot-linux-arm64": "copilot" } }, "sha512-EpR3VEEqMy5M9t3cs+6FtjX/AhyfoefzmcMAjBls+RGv1fILjaAby+rhKHzX5YVSxOu9OyQDlQVHK3kxznTU5Q=="],
+
+    "@github/copilot-linux-x64": ["@github/copilot-linux-x64@1.0.70", "", { "os": "linux", "cpu": "x64", "bin": { "copilot-linux-x64": "copilot" } }, "sha512-4pyNKunm7GEzQZ+09Dwr4BwixJVNcQGBeqiZPKWBGxcSipwj90t8tidLYdNjgmXJoLerANhXZcY52wJW/HubEA=="],
+
+    "@github/copilot-linuxmusl-arm64": ["@github/copilot-linuxmusl-arm64@1.0.70", "", { "os": "linux", "cpu": "arm64", "bin": { "copilot-linuxmusl-arm64": "copilot" } }, "sha512-Xy3tDjIMmMkZZzJjCrK5aDCLLV5+pyOfIcT1lWLmqVWJG0erpHXL6KU82nGW+0nc0TPqGZFHvOyQeLuXl+s3ZA=="],
+
+    "@github/copilot-linuxmusl-x64": ["@github/copilot-linuxmusl-x64@1.0.70", "", { "os": "linux", "cpu": "x64", "bin": { "copilot-linuxmusl-x64": "copilot" } }, "sha512-AHWayI1lVTzxYkNkKrCBOo3XPG+Fb67zcqFivRjGaXG5tr9Bt870LIjIAWoJqQ1Clc3K2PsxyYZ1d8T6vjpWnA=="],
+
+    "@github/copilot-sdk": ["@github/copilot-sdk@1.0.6", "", { "dependencies": { "@github/copilot": "^1.0.69", "vscode-jsonrpc": "^8.2.1", "zod": "^4.3.6" } }, "sha512-24eI5UNY3dWjGBNTLhNJf8ki3dNIE2o2jlEZv2F79N5MHzVpnDWbpM8vUI8L1furBXqc9dWRhLPJG/4Z7Me8Ow=="],
+
+    "@github/copilot-win32-arm64": ["@github/copilot-win32-arm64@1.0.70", "", { "os": "win32", "cpu": "arm64", "bin": { "copilot-win32-arm64": "copilot.exe" } }, "sha512-oWsWCTlUyIv4S3FdYoBNCscndLrUv+C3qgbfJ9mf+5igPqbIYL8alkc8FBHWPB/cornDNj65yd4s8dZrSkFPpg=="],
+
+    "@github/copilot-win32-x64": ["@github/copilot-win32-x64@1.0.70", "", { "os": "win32", "cpu": "x64", "bin": { "copilot-win32-x64": "copilot.exe" } }, "sha512-KFDZ750CwhjKF6uATQ1pv1XrYHI+/qTQta954gYZaa+YJEXRstGd284uJ6NI3YXfshZwhTs64JdjN4xLodYwrA=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.14", "", { "peerDependencies": { "hono": "^4" } }, "sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw=="],
 
@@ -343,6 +365,18 @@
 
     "sprintf-js": ["sprintf-js@1.1.3", "", {}, "sha512-Oo+0REFV59/rz3gfJNKQiBlwfHaSESl1pcGyABQsnnIfWOFt6JNj5gCog2U6MLZ//IGYD+nA8nI+mTShREReaA=="],
 
+    "sqlite-vec": ["sqlite-vec@0.1.9", "", { "optionalDependencies": { "sqlite-vec-darwin-arm64": "0.1.9", "sqlite-vec-darwin-x64": "0.1.9", "sqlite-vec-linux-arm64": "0.1.9", "sqlite-vec-linux-x64": "0.1.9", "sqlite-vec-windows-x64": "0.1.9" } }, "sha512-L7XJWRIBNvR9O5+vh1FQ+IGkh/3D2AzVksW5gdtk28m78Hy8skFD0pqReKH1Yp0/BUKRGcffgKvyO/EON5JXpA=="],
+
+    "sqlite-vec-darwin-arm64": ["sqlite-vec-darwin-arm64@0.1.9", "", { "os": "darwin", "cpu": "arm64" }, "sha512-jSsZpE42OfBkGL/ItyJTVCUwl6o6Ka3U5rc4j+UBDIQzC1ulSSKMEhQLthsOnF/MdAf1MuAkYhkdKmmcjaIZQg=="],
+
+    "sqlite-vec-darwin-x64": ["sqlite-vec-darwin-x64@0.1.9", "", { "os": "darwin", "cpu": "x64" }, "sha512-KDlVyqQT7pnOhU1ymB9gs7dMbSoVmKHitT+k1/xkjarcX8bBqPxWrGlK/R+C5WmWkfvWwyq5FfXfiBYCBs6PlA=="],
+
+    "sqlite-vec-linux-arm64": ["sqlite-vec-linux-arm64@0.1.9", "", { "os": "linux", "cpu": "arm64" }, "sha512-5wXVJ9c9kR4CHm/wVqXb/R+XUHTdpZ4nWbPHlS+gc9qQFVHs92Km4bPnCKX4rtcPMzvNis+SIzMJR1SCEwpuUw=="],
+
+    "sqlite-vec-linux-x64": ["sqlite-vec-linux-x64@0.1.9", "", { "os": "linux", "cpu": "x64" }, "sha512-w3tCH8xK2finW8fQJ/m8uqKodXUZ9KAuAar2UIhz4BHILfpE0WM/MTGCRfa7RjYbrYim5Luk3guvMOGI7T7JQA=="],
+
+    "sqlite-vec-windows-x64": ["sqlite-vec-windows-x64@0.1.9", "", { "os": "win32", "cpu": "x64" }, "sha512-y3gEIyy/17bq2QFPQOWLE68TYWcRZkBQVA2XLrTPHNTOp55xJi/BBBmOm40tVMDMjtP+Elpk6UBUXdaq+46b0Q=="],
+
     "statuses": ["statuses@2.0.2", "", {}, "sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw=="],
 
     "toidentifier": ["toidentifier@1.0.1", "", {}, "sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA=="],
@@ -361,6 +395,8 @@
 
     "vary": ["vary@1.1.2", "", {}, "sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg=="],
 
+    "vscode-jsonrpc": ["vscode-jsonrpc@8.2.1", "", {}, "sha512-kdjOSJ2lLIn7r1rtrMbbNCHjyMPfRnowdKjBQ+mGq6NAW5QY2bEZC/khaC5OR8svbbjvLEaIXkOq45e2X9BIbQ=="],
+
     "which": ["which@2.0.2", "", { "dependencies": { "isexe": "^2.0.0" }, "bin": { "node-which": "./bin/node-which" } }, "sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA=="],
 
     "wrappy": ["wrappy@1.0.2", "", {}, "sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ=="],
@@ -368,6 +404,8 @@
     "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
+
+    "@github/copilot/detect-libc": ["detect-libc@2.1.2", "", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
 
     "onnxruntime-web/onnxruntime-common": ["onnxruntime-common@1.24.0-dev.20251116-b39e144322", "", {}, "sha512-BOoomdHYmNRL5r4iQ4bMvsl2t0/hzVQ3OM3PHD0gxeXu1PmggqBv3puZicEUVOA3AtHHYmqZtjMj9FOfGrATTw=="],
 

@@ -1,6 +1,14 @@
 import { reindexSkill } from "./match";
 import { reviewAndLearn, type LearnResult } from "./reviewer";
-import { addRun, addVersion, setMasterPrompt, skillLabels, topRuns, getSkill } from "./store";
+import {
+  addRun,
+  addVersion,
+  setMasterPrompt,
+  setMasterPromptIfBlank,
+  skillLabels,
+  topRuns,
+  getSkill,
+} from "./store";
 import { recordActivity } from "./activity";
 import type { SkillRun } from "./types";
 
@@ -43,13 +51,24 @@ export async function reviewDeclared(input: RunInput, skillId: string, now: numb
   // whole master and the priors feed the next learner call, which ballooned every prompt).
   const conciseReview = JSON.stringify({ right: review.right, wrong: review.wrong, improve: review.improve });
   addRun({ skillId: skill.id, recipe: input.transcript, quality: score, review: conciseReview, ts: now });
+  let promoted = false;
   if (master) {
-    setMasterPrompt(skill.id, master, explanation ?? "");
     addVersion(skill.id, master, explanation ?? "", score, now); // append to the master-version timeline (if it changed)
-    await reindexSkill(skill.id, skill.task, master);
+    // A run score grades the deliverable, not the candidate master. Automatically replacing an established
+    // reusable method with every run caused broad skills to drift into the latest project-specific workflow.
+    // Keep candidates in version history; bootstrap only a blank legacy skill, or allow an explicit opt-in
+    // while a proper held-out master evaluator is developed. User corrections still use skill_edit directly.
+    if (process.env.CAIRN_AUTO_PROMOTE_MASTERS === "1") {
+      setMasterPrompt(skill.id, master, explanation ?? "");
+      await reindexSkill(skill.id, skill.task, master);
+      promoted = true;
+    } else if (!skill.masterPrompt.trim() && setMasterPromptIfBlank(skill.id, master, explanation ?? "")) {
+      await reindexSkill(skill.id, skill.task, master);
+      promoted = true;
+    }
   }
   recordActivity({
-    ts: now, phase: "learned", request: input.request, label: skill.task, score, created: priors.length === 0, master: Boolean(master),
+    ts: now, phase: "learned", request: input.request, label: skill.task, score, created: priors.length === 0, master: promoted,
     review: { right: review.right, wrong: review.wrong, improve: review.improve },
     output: input.output.slice(0, 400), // a short preview of what the agent delivered, for the feed
   });

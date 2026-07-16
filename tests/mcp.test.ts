@@ -31,7 +31,7 @@ const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.t
 
 test("exposes the AGENT-facing tools (skill_output is learner-only, not exposed here)", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_edit", "skill_review", "skill_search"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_edit", "skill_review", "skill_search", "skill_select"]);
 });
 
 test("brain_create returns a neuron with an id and a viewer url", async () => {
@@ -193,11 +193,17 @@ test("skill_output bakes in the loop's forced label and HARD-rejects incomplete 
 });
 
 test("skill_create mints a new skill (idempotent, returns its id) and skill_review acks a valid id", async () => {
-  const created = parse(await call("skill_create", { label: "Flash Fiction" }));
-  expect(created).toMatchObject({ created: true, label: "Flash Fiction" }); // task keeps original casing
+  const metadata = {
+    title: "Flash Fiction",
+    description: "Use for writing complete 500-word stories and compact fictional scenes with a clear turn and deliberate ending.",
+    plan: "1. Define the dramatic turn\n2. Draft the complete scene\n3. Revise the ending",
+    whyExistingSkillsDoNotFit: "The current catalog has no general short-fiction writing capability.",
+  };
+  const created = parse(await call("skill_create", metadata));
+  expect(created).toMatchObject({ created: true, title: "Flash Fiction" });
   expect(typeof created.id).toBe("string");
   expect(created.id.length).toBeGreaterThan(0);
-  const again = parse(await call("skill_create", { label: "flash fiction" }));
+  const again = parse(await call("skill_create", { ...metadata, title: "flash fiction" }));
   expect(again).toMatchObject({ created: false, id: created.id }); // idempotent: same normalized label -> same id
 
   const rev = await call("skill_review", { id: created.id });
@@ -206,12 +212,36 @@ test("skill_create mints a new skill (idempotent, returns its id) and skill_revi
   expect(bad.isError).toBe(true); // an unknown id is rejected, never silently accepted (no drift onto a junk skill)
 });
 
+test("skill_create rejects narrow or unjustified capabilities", async () => {
+  const narrowDescription = await call("skill_create", {
+    title: "upset user response",
+    description: "Reply to one upset user.",
+    plan: "1. Reply politely\n2. Check tone",
+    whyExistingSkillsDoNotFit: "The catalog does not contain this exact emotional response.",
+  });
+  expect(narrowDescription.isError).toBe(true);
+
+  const noCatalogReason = await call("skill_create", {
+    title: "debugging",
+    description: "Use for debugging failing APIs and broken builds through evidence, hypotheses, and direct validation across reusable software failures.",
+    plan: "1. Reproduce the failure\n2. Test one causal hypothesis",
+    whyExistingSkillsDoNotFit: "none",
+  });
+  expect(noCatalogReason.isError).toBe(true);
+});
+
 test("skill_edit rewrites a skill's master directly (agent-driven fix, no grader needed)", async () => {
-  const created = parse(await call("skill_create", { label: "flash edit" }));
+  const created = parse(await call("skill_create", {
+    title: "flash edit",
+    description: "Use for editing short paragraphs and tightening concise interface copy while preserving intent and improving clarity.",
+    plan: "1. Identify the intended meaning\n2. Tighten the prose\n3. Verify the meaning remains",
+    whyExistingSkillsDoNotFit: "No existing catalog entry handles compact prose editing.",
+  }));
   const ok = parse(await call("skill_edit", { id: created.id, master: "1. do the thing better\n2. verify the result" }));
   expect(ok).toMatchObject({ ok: true, id: created.id, task: "flash edit" });
   const bad = await call("skill_edit", { id: "no-such-id", master: "1. x" });
   expect(bad.isError).toBe(true); // unknown id rejected
-  const found = parse(await call("skill_search", { task: "flash edit" }));
-  expect(JSON.stringify(found.matches)).toContain("do the thing better"); // the new master is stored + retrievable
+  const catalog = parse(await call("skill_search", { task: "flash edit" }));
+  const selected = parse(await call("skill_select", { ids: [created.id], catalogVersion: catalog.catalogVersion }));
+  expect(selected.selected[0].steps).toContain("do the thing better");
 });

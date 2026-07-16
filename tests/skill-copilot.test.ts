@@ -147,6 +147,17 @@ test("extractRunCopilot scopes the transcript to the current cycle (since the la
   expect(run?.transcript).not.toContain("first task");      // the earlier cycle is excluded entirely
 });
 
+test("extractRunCopilot gives every back-to-back selected skill the same deliverable cycle", () => {
+  const p = events([
+    userMsg("audit and test the lifecycle"),
+    asstMsg("FINAL DELIVERABLE"),
+    { type: "tool.execution_start", data: { toolName: "cairn-skill_review", arguments: { id: "skill-a" } } },
+    { type: "tool.execution_start", data: { toolName: "cairn-skill_review", arguments: { id: "skill-b" } } },
+  ]);
+  expect(extractRunCopilot(p, "skill-a")?.output).toContain("FINAL DELIVERABLE");
+  expect(extractRunCopilot(p, "skill-b")?.output).toContain("FINAL DELIVERABLE");
+});
+
 test("extractRunCopilot shows tool calls inline with their skill hint (no separate section)", () => {
   const p = events([
     userMsg("fix this PR description"),
@@ -255,4 +266,21 @@ test("extractRunCopilot tags a subagent's tool calls distinctly from the main ag
   expect(run!.transcript).toContain("[TOOL] brain_search");        // main-agent tool
   expect(run!.transcript).toContain("[SUBAGENT:Reviewer TOOL] view"); // subagent tool: tagged
   expect(run!.output).toContain("REVIEW: 3 real issues");          // subagent's critique is captured as output
+});
+
+test("extractRunCopilot can capture the latest turn without a skill_review marker", () => {
+  const path = join(tmpdir(), `cairn-copilot-fallback-${randomUUID()}.jsonl`);
+  writeFileSync(path, [
+    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Earlier task" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: 2, data: { content: "Earlier answer" } }),
+    JSON.stringify({ type: "user.message", timestamp: 3, data: { content: "Current task" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: 4, data: { content: "Current deliverable" } }),
+    JSON.stringify({ type: "user.message", timestamp: 5, data: { content: "<cairn-internal>reminder</cairn-internal>" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: 6, data: { content: "Reminder response that is not the deliverable" } }),
+  ].join("\n"));
+  const run = extractRunCopilot(path, "", { latestTurn: true })!;
+  expect(run.request).toBe("Current task");
+  expect(run.output).toBe("Current deliverable");
+  expect(run.transcript).not.toContain("Earlier answer");
+  expect(run.transcript).not.toContain("Reminder response");
 });

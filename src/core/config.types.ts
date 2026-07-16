@@ -43,6 +43,8 @@ export interface CairnConfig {
   relativeFloor: number;
   /** When true, a match also pulls in its descendant subtree. Off = return only direct matches. */
   expandSubtree: boolean;
+  /** Use the exact metric index at or above this many vectors. Smaller brains use a linear scan. */
+  vectorIndexThreshold: number;
   /** Max characters allowed in a neuron's answer. Generous room for a real thought, but a bound: an
    * answer past this is rejected so one bloated node can't dominate search payloads or smother the
    * atomic-node discipline. Callers are told to write concisely or split into child nodes. */

@@ -15,10 +15,10 @@ interface Parts { text: string; thinking: string; tools: Tool[] }
 // Pull the reusable label/query hint from a skill tool's input, so the "skills loaded" list can name what was
 // searched/created/reviewed. Empty for non-skill tools.
 function toolHint(name: string, input: unknown): string {
-  if (!/skill_(search|create|review)/.test(name) || !input || typeof input !== "object") return "";
-  const o = input as { label?: unknown; task?: unknown; query?: unknown; what?: unknown };
+  if (!/skill_(search|load|create|review)/.test(name) || !input || typeof input !== "object") return "";
+  const o = input as { title?: unknown; label?: unknown; task?: unknown; query?: unknown; what?: unknown; id?: unknown };
   const s = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-  return s(o.label) || s(o.task) || s(o.query) || s(o.what);
+  return s(o.title) || s(o.label) || s(o.task) || s(o.query) || s(o.what) || s(o.id);
 }
 
 // Split one message's content into the model's THINKING, its visible text, and the tools it invoked (name +
@@ -52,7 +52,7 @@ const isReviewTool = (name: string): boolean => name === "skill_review" || name.
 
 interface Event { role: "user" | "assistant"; text: string; thinking: string; tools: Tool[]; ts: string }
 
-export function extractRun(path: string): RunInput | null {
+export function extractRun(path: string, targetSkillId = ""): RunInput | null {
   let lines: string[];
   try { lines = readFileSync(path, "utf8").split("\n").filter(Boolean); } catch { return null; }
   const events: Event[] = [];
@@ -68,14 +68,34 @@ export function extractRun(path: string): RunInput | null {
   }
   if (events.length === 0) return null;
 
-  // The DETAIL window is the current review cycle: everything since the PREVIOUS skill_review call. The LAST
-  // skill_review in the log triggered this review, so we cut after the one BEFORE it; with only one (the first
-  // review ever) we take the whole session.
   const reviewIdxs = events.map((e, i) => (e.tools.some((t) => isReviewTool(t.name)) ? i : -1)).filter((i) => i >= 0);
-  const detailStart = reviewIdxs.length >= 2 ? reviewIdxs[reviewIdxs.length - 2]! + 1 : 0;
-  const cycle = events.slice(detailStart);
-
   const genuineUser = (e: Event) => e.role === "user" && e.text && !isSystemEnvelope(e.text);
+  const targetReview = targetSkillId
+    ? reviewIdxs.filter((index) => events[index]!.tools.some((tool) => isReviewTool(tool.name) && tool.hint === targetSkillId)).at(-1)
+    : reviewIdxs.at(-1);
+  if (targetReview === undefined && targetSkillId) return null;
+  if (targetReview === undefined) {
+    const request = events.filter(genuineUser).map((event) => event.text).join("\n").trim();
+    const output = events.filter((event) => event.role === "assistant" && event.text).map((event) => event.text).join("\n\n").trim();
+    if (!request || !output) return null;
+    const rows = events.flatMap((event) => {
+      const time = event.ts ? `[${event.ts}] ` : "";
+      const role = event.role === "user" ? "USER" : "ASSISTANT";
+      const result: string[] = [];
+      if (event.thinking) result.push(`${time}[${role} THINKING] ${event.thinking}`);
+      if (event.text) result.push(`${time}[${role}] ${event.text}`);
+      for (const tool of event.tools) result.push(`${time}[TOOL] ${tool.name}${tool.hint ? ` "${tool.hint}"` : ""}`);
+      return result;
+    });
+    return { request, output, transcript: `TRANSCRIPT (oldest first):\n${rows.join("\n")}` };
+  }
+  let detailStart = 0;
+  for (const previous of reviewIdxs.filter((index) => index < targetReview).reverse()) {
+    if (events.slice(previous + 1, targetReview).some(genuineUser)) { detailStart = previous + 1; break; }
+  }
+  const nextUser = events.findIndex((event, index) => index > targetReview && genuineUser(event));
+  const cycle = events.slice(detailStart, nextUser >= 0 ? nextUser : events.length);
+
   const request = cycle.filter(genuineUser).map((e) => e.text).join("\n").trim();
   // Deliverable = the agent's visible messages (thinking is process, shown in the transcript, not the deliverable).
   const output = cycle.filter((e) => e.role === "assistant" && e.text).map((e) => e.text).join("\n\n").trim();

@@ -222,7 +222,7 @@ function renderModal() {
   if (!modalId) { if (modalKey !== "") { modalKey = ""; el.innerHTML = ""; } return; }
   const s = skillBy(modalId);
   if (!s) { modalId = null; el.innerHTML = ""; modalKey = ""; return; }
-  const key = JSON.stringify({ id: s.id, runs: s.runs.length, m: (s.masterPrompt || "").length, v: (s.versions || []).length });
+  const key = JSON.stringify({ id: s.id, runs: s.runs.length, m: (s.masterPrompt || "").length, d: s.description, v: (s.versions || []).length });
   if (key === modalKey) return;
   modalKey = key;
   const scores = s.runs.map((r) => r.quality), last = scores.length ? scores[scores.length - 1] : null, vs = s.versions || [];
@@ -230,11 +230,13 @@ function renderModal() {
   // Lead with the CURRENT master prompt (what a future agent actually loads) — that is what you want to read
   // when you open a skill. The version-to-version diff is secondary, tucked into a collapsible below it.
   const masterBlock = `<div class="sect">current master prompt</div><pre>${esc(s.masterPrompt || "(no master yet — first run pending)")}</pre>`;
+  const catalogBlock = `<div class="sect">when to use</div><div class="why">${esc(s.description || "(no description)")}</div>`;
   const diffBlock = vs.length >= 2 ? `<details class="more"><summary>what changed &middot; v${vs.length - 1} &rarr; v${vs.length}</summary>${renderDiff(vs[vs.length - 2].master, vs[vs.length - 1].master)}</details>` : "";
   const history = vs.length >= 3 ? `<details class="more"><summary>full history &middot; ${vs.length} versions</summary>${vs.map((v, i) => ({ ...v, n: i + 1 })).reverse().map((v) => `<div class="version"><div class="vhead"><span class="chip ${tier(v.score || 0)}">${(v.score || 0).toFixed(2)}</span><b>v${v.n}</b><span class="when">${rel(v.ts)}</span></div>${v.explanation ? `<div class="why" style="margin-top:5px">${esc(v.explanation)}</div>` : ""}${vs[v.n - 2] ? `<details class="more"><summary>diff v${v.n - 1} &rarr; v${v.n}</summary>${renderDiff(vs[v.n - 2].master, v.master)}</details>` : ""}</div>`).join("")}</details>` : "";
   el.innerHTML = `<div class="backdrop"><div class="modal" role="dialog" aria-modal="true">
     <div class="mhead"><span class="chip ${last != null ? tier(last) : ""}">${last != null ? last.toFixed(2) : "—"}</span><span class="mtitle">${esc(s.task)}</span><span class="sub">${s.runs.length} run${s.runs.length === 1 ? "" : "s"}</span><button class="mclose" data-close="1" aria-label="close">×</button></div>
     <div class="mbody">
+      ${catalogBlock}
       ${masterBlock}
       ${diffBlock}
       ${s.explanation ? `<details class="more"><summary>why this works</summary><div class="why">${esc(s.explanation)}</div></details>` : ""}

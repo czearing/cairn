@@ -20,7 +20,9 @@ const isBrainCreate = (t: string) => t === "brain_create" || t.endsWith("__brain
 
 // Fired once per turn (PreToolUse) if the agent reaches for an action tool without having called skill_search.
 const SKILL_REMINDER =
-  "Before acting, search your learned skills: call skill_search with a short description of this task. If a curated skill matches, follow its steps instead of redoing the work. You will not be reminded again this turn.";
+  "Before acting, read the injected catalog and call skill_select with every skill id you will use, or skill_create with a broad description and initial numbered plan. You will not be reminded again this turn.";
+const SKILL_REVIEW_REMINDER =
+  "Deliver the finished result, then call skill_review once for every selected or created skill id before ending.";
 
 // Awaited write so the buffer is fully flushed before we force-exit (a bare process.exit() right
 // after process.stdout.write() can truncate piped output).
@@ -42,6 +44,15 @@ async function main(): Promise<void> {
   } catch {
     return;
   }
+  try {
+    const { recordHostEvent } = await import("../../core/host-events");
+    recordHostEvent(
+      "claude",
+      String((payload as { hook_event_name?: unknown }).hook_event_name ?? ""),
+      raw,
+      payload
+    );
+  } catch { /* event indexing never blocks the host */ }
 
   // Subagent lifecycle: a spawned subagent runs this same dispatch via its definition's frontmatter
   // hooks, so it gets the identical injected prompts. Two events need mapping. SessionStart is the
@@ -85,9 +96,18 @@ async function main(): Promise<void> {
     try {
       const orig = typeof event.input.prompt === "string" ? event.input.prompt : "";
       if (orig.trim()) {
-        const proto = (await import("node:fs")).readFileSync(new URL("../../../prompts/subagent-protocol.md", import.meta.url), "utf8").trim();
+        const fs = await import("node:fs");
+        const { formatSkillCatalog, selectedSkillBlock, skillIdsFromTask } = await import("../../skill/catalog");
+        const { lifecycleScope, readLifecycle, registerDelegation } = await import("../../skill/lifecycle");
         const orchestrate = await inject(event); // parent-facing disjoint-coordination reminder (or null)
-        await emit(modifyPreTool({ ...event.input, prompt: `${proto}\n${orig}` }, orchestrate ?? ""));
+        const parentScope = lifecycleScope("claude", (payload as { session_id?: string }).session_id ?? "");
+        const selected = readLifecycle(parentScope).pendingReviewIds.filter((id) => !id.startsWith("__"));
+        const delegated = skillIdsFromTask(event.input).filter((id) => selected.includes(id));
+        const protoFile = delegated.length ? "delegated-skill-protocol.md" : "subagent-protocol.md";
+        const proto = fs.readFileSync(new URL(`../../../prompts/${protoFile}`, import.meta.url), "utf8").trim();
+        if (delegated.length && event.callId) registerDelegation(parentScope, event.callId, delegated);
+        const context = delegated.length ? selectedSkillBlock(delegated) : formatSkillCatalog();
+        await emit(modifyPreTool({ ...event.input, prompt: `${proto}\n\n${context}\n${orig}` }, orchestrate ?? ""));
         return;
       }
     } catch { /* fall through to normal handling */ }
@@ -118,17 +138,23 @@ async function main(): Promise<void> {
   if ((await import("../../core/config")).skillsEnabled()) {
     try {
       const { skillInject, skillLearn, skillsExist } = await import("../../skill/hook");
-      const { resetSkillTurn, noteSkillSearched, claimSkillReminder, isActionTool, isSkillSearch, isSkillReview } = await import("../../skill/turngate");
+      const { resetSkillTurn, noteSkillReviewed, noteSkillSelection, skillTurnState, claimSkillReminder, isActionTool, isSkillSelection, isSkillReview } = await import("../../skill/turngate");
       if (event.kind === "user_message") { resetSkillTurn(session); await skillInject(event.text, session); }
-      else if (event.kind === "turn_finished") { resetSkillTurn(session); } // learning is agent-driven (skill_review), not auto at turn end
       else if (event.kind === "tool_completed" && isSkillReview(event.tool)) {
         // The agent declared a finished deliverable for a skill: learn over this turn's transcript, graded against that skill id.
         const id = typeof event.input.id === "string" ? event.input.id : "";
         skillLearn((payload as { transcript_path?: string }).transcript_path, id);
+        noteSkillReviewed(session, id);
       }
-      else if (event.kind === "tool_completed" && isSkillSearch(event.tool)) noteSkillSearched(session);
+      else if (event.kind === "tool_completed" && isSkillSelection(event.tool)) noteSkillSelection(session, event.tool, event.input, event.output);
       else if (event.kind === "tool_pending" && isActionTool(event.tool) && skillsExist() && claimSkillReminder(session)) {
         out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
+      }
+      if (event.kind === "turn_finished") {
+        const skillState = skillTurnState(session);
+        if (!skillState.selected) out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
+        if (skillState.pendingReviewIds.length) out = out ? `${out}\n\n${SKILL_REVIEW_REMINDER}` : SKILL_REVIEW_REMINDER;
+        if (!out) resetSkillTurn(session);
       }
     } catch { /* skills are best-effort */ }
   }

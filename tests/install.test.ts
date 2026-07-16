@@ -27,6 +27,7 @@ beforeEach(() => {
   process.env.CAIRN_BIN_DIR = binDir; // keep the shim out of the real bun bin dir during tests
   process.env.CAIRN_COPILOT_MCP_PATH = copilotMcp; // keep Copilot writes off the real ~/.copilot
   process.env.CAIRN_COPILOT_HOOK_PATH = copilotHook;
+  process.env.CAIRN_COPILOT_VERSION = "1.0.71";
 });
 
 afterEach(() => {
@@ -38,6 +39,7 @@ afterEach(() => {
   delete process.env.CAIRN_BIN_DIR;
   delete process.env.CAIRN_COPILOT_MCP_PATH;
   delete process.env.CAIRN_COPILOT_HOOK_PATH;
+  delete process.env.CAIRN_COPILOT_VERSION;
   delete process.env.CAIRN_SKIP_COPILOT;
 });
 
@@ -85,7 +87,7 @@ test("install creates a global cairn shim in CAIRN_BIN_DIR", async () => {
   expect(readFileSync(shim, "utf8")).toContain("cli.ts"); // shim invokes the CLI entrypoint
 });
 
-test("install registers cairn in the Copilot mcp-config and writes the sessionStart hook", async () => {
+test("install registers cairn in Copilot and injects only through userPromptSubmitted", async () => {
   await install();
   const mcp = JSON.parse(readFileSync(copilotMcp, "utf8"));
   expect(mcp.mcpServers.cairn).toBeDefined();
@@ -94,21 +96,51 @@ test("install registers cairn in the Copilot mcp-config and writes the sessionSt
   expect(JSON.stringify(mcp.mcpServers.cairn.args)).toContain("server.ts");
   expect(mcp.mcpServers.cairn.args).not.toContain("--hot"); // stable stdio; Copilot has no Cairn cwd
   const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
-  expect(hook.hooks.sessionStart[0].type).toBe("command"); // workflow injected once per session
-  expect(hook.hooks.userPromptSubmitted[0].type).toBe("command"); // per-turn latch reset
+  expect(hook.hooks.sessionStart).toBeUndefined(); // avoids a duplicate workflow on the first turn
+  expect(hook.hooks.userPromptSubmitted[0].type).toBe("command"); // one workflow after the prompt batch
   expect(hook.hooks.preToolUse[0].type).toBe("command"); // brain_create deny gate
-  expect(hook.hooks.preToolUse[0].matcher).toContain("brain_create"); // scoped so it never fires on ordinary tools
+  expect(hook.hooks.preToolUse[0].matcher).toContain("brain_create");
+  expect(hook.hooks.preToolUse[0].matcher).toContain("task"); // general-purpose agents need parent-level injection
   expect(hook.hooks.postToolUse[0].type).toBe("command"); // per-tool reminders after brain_* / Task calls
   expect(hook.hooks.agentStop[0].type).toBe("command"); // Stop equivalent: forces a turn
   expect(hook.hooks.subagentStart[0].type).toBe("command"); // subagent-window injection
   const blob = JSON.stringify(hook);
   expect(blob).toContain("hook.ts");
-  expect(blob).toContain("session-start"); // sessionStart entry carries the session-start mode arg
+  expect(blob).not.toContain("session-start");
   expect(blob).toContain("user-prompt"); // userPromptSubmitted entry carries the user-prompt mode arg
   expect(blob).toContain("pre-tool"); // preToolUse entry carries the pre-tool mode arg
   expect(blob).toContain("post-tool"); // postToolUse entry carries the post-tool mode arg
   expect(blob).toContain("agent-stop"); // agentStop entry carries the agent-stop mode arg
   expect(blob).toContain("subagent-start"); // subagentStart entry carries the subagent-start mode arg
+});
+
+test("install upgrades a stale Copilot hook that still injects at sessionStart", async () => {
+  writeFileSync(copilotHook, JSON.stringify({
+    version: 1,
+    hooks: {
+      sessionStart: [{ type: "command", command: "cairn hook.ts session-start" }],
+      userPromptSubmitted: [{ type: "command", command: "cairn hook.ts user-prompt" }],
+      subagentStop: [{ type: "command", command: "cairn hook.ts subagent-stop" }],
+    },
+  }));
+
+  await install();
+
+  const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
+  expect(hook.hooks.sessionStart).toBeUndefined();
+  expect(hook.hooks.userPromptSubmitted).toHaveLength(1);
+  expect(JSON.stringify(hook)).toContain("user-prompt");
+});
+
+test("install retains a sessionStart fallback for Copilot versions without per-prompt context", async () => {
+  process.env.CAIRN_COPILOT_VERSION = "1.0.62";
+
+  await install();
+
+  const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
+  expect(hook.hooks.sessionStart).toHaveLength(1);
+  expect(hook.hooks.userPromptSubmitted).toHaveLength(1);
+  expect(JSON.stringify(hook.hooks.sessionStart)).toContain("session-start");
 });
 
 test("install Copilot setup is idempotent and preserves other MCP servers", async () => {

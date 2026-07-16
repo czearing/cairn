@@ -1,6 +1,6 @@
 import { test, expect, beforeEach } from "bun:test";
 import { reviewDeclared } from "../src/skill/pipeline";
-import { getSkill, topRuns } from "../src/skill/store";
+import { getSkill, putSkill, skillVersions, topRuns } from "../src/skill/store";
 import { categorize } from "../src/skill/match";
 import { db } from "../src/core/db";
 
@@ -68,4 +68,85 @@ test("a failed learner call is recorded as failed, stores nothing", async () => 
   });
   expect(res).toBeNull();
   expect(topRuns(skill.id).length).toBe(0); // nothing stored on a failed learn
+});
+
+test("established masters keep review candidates without automatic promotion", async () => {
+  putSkill({
+    id: "stable-skill",
+    task: "stable skill",
+    masterPrompt: "1. Reusable baseline",
+    explanation: "baseline",
+    description: "Use for stable tasks.",
+    ts: 1,
+  }, [1, 0]);
+  await reviewDeclared({ request: "one specific run", transcript: "t", output: "o" }, "stable-skill", 2, {
+    learn: async () => ({
+      label: "stable skill",
+      review: { score: 0.9, right: "", wrong: "", improve: "", raw: "" },
+      master: "1. Project-specific candidate",
+      explanation: "candidate",
+    }),
+  });
+  expect(getSkill("stable-skill")!.masterPrompt).toBe("1. Reusable baseline");
+  expect(skillVersions("stable-skill").at(-1)?.master).toBe("1. Project-specific candidate");
+});
+
+test("automatic master promotion requires explicit opt-in", async () => {
+  putSkill({
+    id: "opt-in-skill",
+    task: "opt in skill",
+    masterPrompt: "1. Existing method",
+    description: "Use for opt-in promotion tests.",
+    ts: 1,
+  }, [1, 0]);
+  process.env.CAIRN_AUTO_PROMOTE_MASTERS = "1";
+  try {
+    await reviewDeclared({ request: "task", transcript: "t", output: "o" }, "opt-in-skill", 2, {
+      learn: async () => ({
+        label: "opt in skill",
+        review: { score: 0.8, right: "", wrong: "", improve: "", raw: "" },
+        master: "1. Explicitly promoted candidate",
+        explanation: "opted in",
+      }),
+    });
+    expect(getSkill("opt-in-skill")!.masterPrompt).toBe("1. Explicitly promoted candidate");
+  } finally {
+    delete process.env.CAIRN_AUTO_PROMOTE_MASTERS;
+  }
+});
+
+test("concurrent blank-skill reviews bootstrap exactly one master", async () => {
+  putSkill({
+    id: "blank-race",
+    task: "blank race",
+    masterPrompt: "",
+    description: "Use for atomic bootstrap tests.",
+    ts: 1,
+  }, [1, 0]);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const review = (candidate: string, now: number) => reviewDeclared(
+    { request: candidate, transcript: "t", output: "o" },
+    "blank-race",
+    now,
+    {
+      learn: async () => {
+        await gate;
+        return {
+          label: "blank race",
+          review: { score: 0.8, right: "", wrong: "", improve: "", raw: "" },
+          master: candidate,
+          explanation: candidate,
+        };
+      },
+    }
+  );
+  const pending = [review("1. Candidate A", 2), review("1. Candidate B", 3)];
+  release();
+  await Promise.all(pending);
+  expect(["1. Candidate A", "1. Candidate B"]).toContain(getSkill("blank-race")!.masterPrompt);
+  expect(skillVersions("blank-race").map((version) => version.master).sort()).toEqual([
+    "1. Candidate A",
+    "1. Candidate B",
+  ]);
 });

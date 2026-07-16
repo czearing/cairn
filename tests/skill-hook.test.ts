@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { extractRun } from "../src/skill/transcript";
-import { skillsEnabled, skillInject, skillLearn, skillBlob, skillSearch, skillsExist } from "../src/skill/hook";
+import { skillsEnabled, skillCreate, skillInject, skillLearn, skillLoad, skillSearch, skillSelect, skillsExist } from "../src/skill/hook";
 import { categorize, reindexSkill } from "../src/skill/match";
-import { setMasterPrompt } from "../src/skill/store";
+import { setMasterPrompt, setSkillMetadata } from "../src/skill/store";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -31,6 +31,19 @@ test("extractRun scopes the DETAIL to the current cycle (since the last skill_re
   expect(run!.transcript).toContain("[USER] make it sharper");
   expect(run!.transcript).not.toContain("write me a haiku about frost"); // earlier cycle excluded entirely
   expect(run!.transcript).toContain("TRANSCRIPT (oldest first):");
+});
+
+test("extractRun gives every back-to-back selected skill the same deliverable cycle", () => {
+  const p = join(tmpdir(), `cairn-multi-review-${process.pid}.jsonl`);
+  writeFileSync(p, [
+    JSON.stringify({ type: "user", message: { content: "audit and test the lifecycle" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "FINAL DELIVERABLE" }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "skill_review", input: { id: "skill-a" } }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "skill_review", input: { id: "skill-b" } }] } }),
+  ].join("\n"));
+  expect(extractRun(p, "skill-a")?.output).toContain("FINAL DELIVERABLE");
+  expect(extractRun(p, "skill-b")?.output).toContain("FINAL DELIVERABLE");
+  rmSync(p, { force: true });
 });
 
 test("extractRun shows tool calls inline with their skill hint, timestamped (one transcript)", () => {
@@ -173,47 +186,30 @@ test("the skill layer is ON by default, and CAIRN_SKILLS env overrides both ways
   if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
 });
 
-test("a 0-match injection records WHY (store count, embed status, top scores) so a bare 0 is diagnosable", async () => {
-  const master = "1. imperative subject under 50 chars";
+test("skill injection debug records catalog routing without semantic matching", async () => {
   const { skill } = await categorize("commit message", 1);
-  setMasterPrompt(skill.id, master);
-  await reindexSkill(skill.id, "commit message", master);
+  setMasterPrompt(skill.id, "1. imperative subject under 50 chars");
+  setSkillMetadata(skill.id, "commit message", "Use for writing concise commit messages that explain a reusable code change clearly.");
   const dbg = join(tmpdir(), `cairn-inj-${randomUUID()}.txt`);
   const prevFile = process.env.CAIRN_SKILL_DEBUG_FILE;
   process.env.CAIRN_SKILL_DEBUG_FILE = dbg;
   try {
-    const out = await skillInject("qwerty zxcvbn asdf plugh"); // gibberish: matches nothing
+    const out = await skillInject("qwerty zxcvbn asdf plugh");
     expect(out).toBe("");
     const logged = readFileSync(dbg, "utf8");
-    expect(logged).toContain("matched 0 skills");
-    expect(logged).toContain("WHY 0:");
-    expect(logged).toContain("store=1 skills");                // store NOT empty -> rules out a wrong/empty db
-    expect(logged).toMatch(/embed=ok\(dim \d+\)/);             // embed succeeded -> rules out an embed failure
+    expect(logged).toContain("catalog routing: 1 learned skill(s)");
+    expect(logged).toContain("semantic routing disabled");
   } finally {
     if (prevFile === undefined) delete process.env.CAIRN_SKILL_DEBUG_FILE; else process.env.CAIRN_SKILL_DEBUG_FILE = prevFile;
     try { rmSync(dbg); } catch { /* ignore */ }
   }
 });
 
-test("skillBlob piggyback: gated off, returns curated steps for a synonym query when on", async () => {
-  const master = "imperative subject under 50 chars, explain what changed and why";
-  const { skill } = await categorize("commit message", 1);
-  setMasterPrompt(skill.id, master);
-  await reindexSkill(skill.id, "commit message", master); // build the rich vector
-  const prev = process.env.CAIRN_SKILLS;
-  process.env.CAIRN_SKILLS = "0";
-  expect(await skillBlob("how to write a good commit message")).toEqual([]); // explicit opt-out
-  process.env.CAIRN_SKILLS = "1"; // explicit opt-in
-  const blob = await skillBlob("how to write a good commit message");
-  if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
-  expect(blob[0]!.task).toBe("commit message");
-  expect(blob[0]!.steps).toContain("imperative subject");
-});
-
-test("skillInject NO LONGER auto-injects a master (agent retrieves via skill_search), but still logs the match", async () => {
+test("skillInject does not auto-inject a master and can disable its catalog diagnostic", async () => {
   const master = "1. imperative subject under 50 chars\n2. explain what changed and why";
   const { skill } = await categorize("commit message", 1);
   setMasterPrompt(skill.id, master);
+  setSkillMetadata(skill.id, "commit message", "Use for writing concise commit messages that explain a reusable code change clearly.");
   await reindexSkill(skill.id, "commit message", master);
   const dbg = join(tmpdir(), `cairn-inj-${randomUUID()}.txt`);
   const prevDebug = process.env.CAIRN_SKILL_DEBUG, prevFile = process.env.CAIRN_SKILL_DEBUG_FILE;
@@ -223,8 +219,8 @@ test("skillInject NO LONGER auto-injects a master (agent retrieves via skill_sea
     const out = await skillInject("how to write a good commit message");
     expect(out).toBe("");                                          // nothing is auto-injected into the agent now
     const logged = readFileSync(dbg, "utf8");
-    expect(logged).toContain("matched 1 skill(s): commit message"); // the cosine match is still recorded for diagnostics
-    expect(logged).toContain("auto-injection disabled");            // and it is explicitly marked disabled
+    expect(logged).toContain("catalog routing: 1 learned skill(s)");
+    expect(logged).toContain("semantic routing disabled");
 
     rmSync(dbg);
     process.env.CAIRN_SKILL_DEBUG = "0";                          // explicit opt-out: nothing written
@@ -237,36 +233,66 @@ test("skillInject NO LONGER auto-injects a master (agent retrieves via skill_sea
   }
 });
 
-test("skill_search returns several candidate masters plus the catalog, so the agent disambiguates near-duplicates", async () => {
+test("skill_search returns the same compact catalog for every query and skill_load fetches one exact master", async () => {
   const writer = await categorize("short story", 1); setMasterPrompt(writer.skill.id, "1. write a two-paragraph story");
+  setSkillMetadata(writer.skill.id, "short story", "Use for writing two-paragraph stories and compact fictional scenes with a complete dramatic arc.");
   await reindexSkill(writer.skill.id, "short story", "1. write a two-paragraph story about a domain");
   const reviewer = await categorize("short story review", 2); setMasterPrompt(reviewer.skill.id, "1. score the story and name its weakest tells");
+  setSkillMetadata(reviewer.skill.id, "short story review", "Use for reviewing short story drafts and fictional scenes to identify concrete revision priorities.");
   await reindexSkill(reviewer.skill.id, "short story review", "1. score the story and name its weakest tells");
   const prev = process.env.CAIRN_SKILLS; process.env.CAIRN_SKILLS = "1";
-  const res = await skillSearch("write a short story about a lighthouse");
+  const writing = skillSearch("write a short story about a lighthouse");
+  const reviewing = skillSearch("review this story");
   if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
-  const labels = res.matches.map((m) => m.task);
-  expect(labels).toContain("short story");                         // the writer surfaces as a candidate...
-  expect(labels).toContain("short story review");                  // ...alongside the near-duplicate, for the agent to pick
-  expect(res.matches.every((m) => typeof m.id === "string" && m.id.length > 0)).toBe(true); // each match carries its id, so the agent reuses it by id
-  expect(res.catalog.some((c) => c.label === "short story" && typeof c.id === "string" && c.id.length > 0)).toBe(true); // the full catalog rides along, each with an id
+  expect(writing.catalog).toEqual(reviewing.catalog);
+  expect(writing.catalogVersion).toBe(reviewing.catalogVersion);
+  expect(writing.catalog.map((entry) => entry.title)).toEqual(["short story", "short story review"]);
+  expect(writing.catalog[0]!.description).toContain("two-paragraph stories");
+  expect(skillLoad(writer.skill.id)?.steps).toContain("two-paragraph story");
+  expect(skillLoad(reviewer.skill.id)?.steps).toContain("score the story");
+  expect(skillSearch(`load:${writer.skill.id}`).loaded?.steps).toContain("two-paragraph story");
+  expect(skillSearch("short story").matches?.[0]?.steps).toContain("two-paragraph story");
 });
 
-test("skill_search promotes declared bare URL handlers above unrelated semantic matches", async () => {
-  const handler = await categorize("url reconstruction", 1);
-  setMasterPrompt(handler.skill.id, "1. Treat any bare URL as a reconstruction request.\n2. Capture exact structured evidence.");
-  const unrelated = await categorize("localhost debugging", 2);
-  setMasterPrompt(unrelated.skill.id, "1. Diagnose localhost server failures.");
-  const prev = process.env.CAIRN_SKILLS; process.env.CAIRN_SKILLS = "1";
-  const res = await skillSearch("http://localhost:3000");
-  if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
-  expect(res.matches[0]?.id).toBe(handler.skill.id);
+test("skill_select binds injected ids to the exact catalog version", async () => {
+  const created = await categorize("cli troubleshooting", 1);
+  setMasterPrompt(created.skill.id, "1. reproduce the CLI failure\n2. fix the earliest broken boundary");
+  setSkillMetadata(created.skill.id, "cli troubleshooting", "Use for debugging CLI errors and local integration boundaries from exact evidence.");
+  const injected = skillSearch("cli troubleshooting");
+
+  expect(skillSelect([created.skill.id], "").error).toContain("catalogVersion is required");
+  expect(skillSelect([created.skill.id], injected.catalogVersion).selected[0]?.id).toBe(created.skill.id);
+
+  setMasterPrompt(created.skill.id, "1. reproduce\n2. trace\n3. verify");
+  const stale = skillSelect([created.skill.id], injected.catalogVersion);
+  expect(stale.error).toContain("stale skill catalog version");
+  expect(stale.catalogVersion).not.toBe(injected.catalogVersion);
+  expect(stale.currentCatalog?.some((skill) => skill.id === created.skill.id)).toBe(true);
+});
+
+test("skill_load rejects an unknown or pending skill", async () => {
+  const pending = await categorize("pending skill", 1);
+  expect(skillLoad(pending.skill.id)).toBeNull();
+  expect(skillLoad("unknown")).toBeNull();
+});
+
+test("skill_create recovers an interrupted blank row and persists the initial plan", async () => {
+  const pending = await categorize("api debugging", 1);
+  const result = await skillCreate(
+    "api debugging",
+    "Use for diagnosing reusable API request, response, authentication, and server failures from exact evidence.",
+    "1. Reproduce the failing request\n2. Trace the earliest incorrect boundary\n3. Verify the corrected response",
+    "No injected catalog skill covers general API protocol debugging across repositories.",
+  );
+  expect(result).toMatchObject({ created: false, id: pending.skill.id });
+  expect(skillLoad(pending.skill.id)?.steps).toContain("Reproduce the failing request");
 });
 
 test("skillsExist is false on an empty store, true once a skill exists (gates the search-first reminder)", async () => {
   const prev = process.env.CAIRN_SKILLS; process.env.CAIRN_SKILLS = "1";
   expect(skillsExist()).toBe(false);                               // nothing learned yet -> no reminder
   const { skill } = await categorize("haiku", 1); setMasterPrompt(skill.id, "1. count 5-7-5");
+  setSkillMetadata(skill.id, "haiku", "Use for writing a haiku with deliberate imagery, form, sound, compression, and a clear turn.");
   await reindexSkill(skill.id, "haiku", "1. count 5-7-5");
   expect(skillsExist()).toBe(true);
   if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;

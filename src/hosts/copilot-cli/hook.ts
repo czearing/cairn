@@ -3,20 +3,18 @@
 // setup.ts. As of Copilot CLI v1.0.66 the hook surface is much wider than the original two events,
 // so Cairn now reaches near-parity with Claude Code (see docs.github.com/.../hooks-reference):
 //
-//   session-start  (sessionStart)        : inject the full brain workflow (user-message.md) once per session.
 //   user-prompt    (userPromptSubmitted) : inject the workflow and reset the per-turn latch.
+//   session-start  (sessionStart)        : legacy fallback used only when the installer detects a Copilot
+//                                          version that cannot deliver userPromptSubmitted context.
 //   pre-tool       (preToolUse)          : gate a brain_create (deny closed-question / root-only-branch).
 //                                          preToolUse has no additionalContext channel, so entry-format.md /
 //                                          orchestrate.md cannot be injected here — only allow/deny/modify.
-//   post-tool      (postToolUse)         : after a brain_* or Task tool, inject the matching reminder, and
-//                                          record brain usage for this turn (drives the agentStop gate). Also
-//                                          the skill_review trigger: when the agent signals a finished
-//                                          deliverable, review the whole turn log now (catches backgrounded
-//                                          subagent output a turn-end fire would miss).
+//   post-tool      (postToolUse)         : after a brain_* or Task tool, inject the matching reminder, record
+//                                          brain/skill usage, and persist successful skill_review declarations.
 //   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn. Used
 //                                          for turn-reminder.md (brain unused) and skill-review.md (a skill
-//                                          was used but not submitted via skill_review). Loop-bounded (max 2
-//                                          nudges/turn).
+//                                          was used but not submitted via skill_review). Once all gates pass,
+//                                          enqueue declared reviews over the complete turn transcript.
 //   subagent-start (subagentStart)       : additionalContext is PREPENDED to the subagent's own prompt —
 //                                          the one channel that reaches a subagent's window (subagent-protocol.md).
 //
@@ -24,17 +22,23 @@
 import { readFile } from "node:fs/promises";
 import {
   appendFileSync,
-  closeSync,
-  fstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readSync,
-  writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { isSystemEnvelope } from "../../skill/noise";
+import { recordHostEvent } from "../../core/host-events";
+import { formatSkillCatalog, selectedSkillBlock, skillIdsFromTask } from "../../skill/catalog";
+import {
+  claimDelegation,
+  lifecycleScope,
+  readLifecycle,
+  registerDelegation,
+  releaseDelegation,
+  resetLifecycle,
+  updateLifecycle,
+} from "../../skill/lifecycle";
+import { skillResultId } from "../../skill/tool-result";
+import { recordMissedReviews } from "../../skill/missed-review";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 const emit = (obj: object) => process.stdout.write(JSON.stringify(obj));
@@ -66,8 +70,13 @@ const promptText = async (file: string): Promise<string> => {
     return "";
   }
 };
+const promptWithCatalog = async (file: string): Promise<string> => {
+  const base = await promptText(file);
+  try { return `${base}\n\n${formatSkillCatalog()}`; }
+  catch { return base; }
+};
 const workflowPrompt = (): Promise<string> =>
-  promptText(process.env.AGENT_HARNESS === "1" ? "harness-agent.md" : "user-message.md");
+  promptWithCatalog(process.env.AGENT_HARNESS === "1" ? "harness-agent.md" : "user-message.md");
 
 // MCP tools arrive server-prefixed ("cairn-brain_search") or bare/namespaced ("brain_search" /
 // "mcp__cairn__brain_search"); accept any of those forms.
@@ -96,22 +105,22 @@ export function postToolFiles(toolName: string, answer: string): string[] {
 // If the agent used a skill this turn but is ending WITHOUT submitting the result via skill_review, block
 // and inject the skill-review reminder so the finished work is actually graded.
 export const STOP_CAP = 2;
-export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; reviewed: boolean; stopNudges: number }): {
+export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; pendingReviewCount: number; stopNudges: number }): {
   file: string;
 } {
   if (s.stopNudges >= STOP_CAP) return { file: "" };
   if (!s.skillUsed) return { file: "skill-search-reminder.md" };
   if (!s.brainUsed) return { file: "turn-reminder.md" };
-  if (s.skillUsed && !s.reviewed) return { file: "skill-review.md" };
+  if (s.pendingReviewCount > 0) return { file: "skill-review.md" };
   return { file: "" };
 }
 
-export function harnessStopDecision(s: { skillUsed: boolean; reviewed: boolean; stopNudges: number }): {
+export function harnessStopDecision(s: { skillUsed: boolean; pendingReviewCount: number; stopNudges: number }): {
   file: string;
 } {
   if (s.stopNudges >= STOP_CAP) return { file: "" };
   if (!s.skillUsed) return { file: "skill-search-reminder.md" };
-  if (!s.reviewed) return { file: "skill-review.md" };
+  if (s.pendingReviewCount > 0) return { file: "skill-review.md" };
   return { file: "" };
 }
 
@@ -134,90 +143,7 @@ export function gateDecision(
   return { deny: false };
 }
 
-// ── Per-turn state (drives the agentStop gate without parsing Copilot's transcript) ─────────────
-// A turn runs from userPromptSubmitted to agentStop. Keyed by sessionId, we record whether the brain was
-// used, whether the agent used a skill this turn (skill_search), and whether it closed the deliverable with
-// skill_review — so agentStop can nag an un-reviewed skill turn and never fire a duplicate learn.
-interface TurnState {
-  brainUsed: boolean;
-  skillUsed: boolean;
-  reviewed: boolean;
-  stopNudges: number;
-  stopBlocked: boolean;
-  userMarker: string;
-}
-const freshTurn = (): TurnState => ({
-  brainUsed: false,
-  skillUsed: false,
-  reviewed: false,
-  stopNudges: 0,
-  stopBlocked: false,
-  userMarker: "",
-});
-const turnDir = () => join(homedir(), ".cairn", "copilot-turn");
-const turnPath = (sid: string) =>
-  join(turnDir(), `${(sid || "default").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 128)}.json`);
-const turnScope = (sessionId: string, agentId: string): string => agentId ? `${sessionId}--${agentId}` : sessionId;
-function readTurn(sid: string): TurnState {
-  try {
-    return { ...freshTurn(), ...(JSON.parse(readFileSync(turnPath(sid), "utf8")) as Partial<TurnState>) };
-  } catch {
-    return freshTurn();
-  }
-}
-function writeTurn(sid: string, s: TurnState): void {
-  try {
-    mkdirSync(turnDir(), { recursive: true });
-    writeFileSync(turnPath(sid), JSON.stringify(s));
-  } catch {
-    /* state is best-effort: a miss only weakens a nudge, never breaks the turn */
-  }
-}
-
-export function synchronizeTurnState(
-  state: TurnState,
-  userMarker: string,
-): TurnState {
-  if (!userMarker || state.userMarker === userMarker) return state;
-  return { ...freshTurn(), userMarker };
-}
-
-function latestUserMarker(transcriptPath: string): string {
-  if (!transcriptPath) return "";
-  let fd: number | undefined;
-  try {
-    fd = openSync(transcriptPath, "r");
-    const size = fstatSync(fd).size;
-    const length = Math.min(size, 1024 * 1024);
-    const buffer = Buffer.alloc(length);
-    readSync(fd, buffer, 0, length, size - length);
-    return latestHumanUserMarker(
-      buffer.toString("utf8").split(/\r?\n/),
-    );
-  } catch {
-    return "";
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-}
-
-export function latestHumanUserMarker(lines: string[]): string {
-  for (const line of [...lines].reverse()) {
-    if (!line.includes('"type":"user.message"')) continue;
-    try {
-      const event = JSON.parse(line) as {
-        id?: string;
-        timestamp?: string;
-        data?: { content?: string };
-      };
-      if (isSystemEnvelope(event.data?.content || "")) continue;
-      return event.id || event.timestamp || "";
-    } catch {
-      continue;
-    }
-  }
-  return "";
-}
+const turnScope = (sessionId: string, agentId = "") => lifecycleScope("copilot", sessionId, agentId);
 
 // ── stdin payload parsing (camelCase config ⇒ camelCase payloads; snake_case tolerated) ─────────
 const safeJson = (s: string): unknown => {
@@ -227,31 +153,46 @@ const safeJson = (s: string): unknown => {
     return undefined;
   }
 };
+const toolResultSucceeded = (result: unknown): boolean => {
+  if (!result || typeof result !== "object") return true;
+  const value = result as { success?: unknown; isError?: unknown; resultType?: unknown };
+  if (value.success === false || value.isError === true) return false;
+  return value.resultType == null || value.resultType === "success";
+};
 interface Payload {
   sessionId: string;
   agentId: string;
+  agentName: string;
   toolName: string;
   args: Record<string, unknown>;
+  result: unknown;
   transcriptPath: string;
   prompt: string;
   eventId: string;
+  toolCallId: string;
 }
 function parsePayload(raw: string): Payload {
   try {
     const j = JSON.parse(raw) as Record<string, unknown>;
-    const rawArgs = j.toolArgs ?? j.tool_input;
+    const firstCall = Array.isArray(j.toolCalls) && j.toolCalls[0] && typeof j.toolCalls[0] === "object"
+      ? j.toolCalls[0] as Record<string, unknown>
+      : undefined;
+    const rawArgs = j.toolArgs ?? j.tool_input ?? firstCall?.args;
     const args = (typeof rawArgs === "string" ? safeJson(rawArgs) : rawArgs) as Record<string, unknown> | undefined;
     return {
       sessionId: (j.sessionId as string) ?? (j.session_id as string) ?? "",
       agentId: (j.agentId as string) ?? (j.agent_id as string) ?? "",
-      toolName: (j.toolName as string) ?? (j.tool_name as string) ?? "",
+      agentName: (j.agentName as string) ?? (j.agent_name as string) ?? "",
+      toolName: (j.toolName as string) ?? (j.tool_name as string) ?? (firstCall?.name as string) ?? "",
       args: args ?? {},
+      result: j.toolResult ?? j.tool_result ?? j.toolOutput ?? j.tool_output,
       transcriptPath: (j.transcriptPath as string) ?? (j.transcript_path as string) ?? "",
       prompt: (j.prompt as string) ?? "",
       eventId: j.timestamp == null ? "" : String(j.timestamp),
+      toolCallId: (j.toolCallId as string) ?? (j.tool_call_id as string) ?? (firstCall?.id as string) ?? "",
     };
   } catch {
-    return { sessionId: "", agentId: "", toolName: "", args: {}, transcriptPath: "", prompt: "", eventId: "" };
+    return { sessionId: "", agentId: "", agentName: "", toolName: "", args: {}, result: undefined, transcriptPath: "", prompt: "", eventId: "", toolCallId: "" };
   }
 }
 
@@ -263,13 +204,20 @@ export const shouldStartUserTurn = (prompt: string): boolean =>
 async function queueLatestReview(
   transcriptPath: string,
   sessionId: string,
-  options: { skillId?: string; agentId?: string; subagentOnly?: boolean; eventId?: string } = {}
+  options: {
+    skillId?: string;
+    agentId?: string;
+    agentName?: string;
+    subagentOnly?: boolean;
+    eventId?: string;
+    backend?: string;
+  } = {}
 ): Promise<boolean> {
   if (!transcriptPath || !sessionId) return false;
   try {
     const { skillsEnabled } = await import("../../core/config");
     if (!skillsEnabled()) return false;
-    const { learnFromTranscript, learnLatestCopilotReview } = await import("../../skill/learn");
+    const { learnCopilotReviews, learnFromTranscript } = await import("../../skill/learn");
     if (options.skillId && !options.subagentOnly) {
       const { transcriptReviewKey } = await import("../../skill/review-queue");
       return learnFromTranscript(transcriptPath, options.skillId, {
@@ -277,10 +225,10 @@ async function queueLatestReview(
           ? `${sessionId}:${options.agentId || "main"}:${options.eventId}:${options.skillId}`
           : transcriptReviewKey(transcriptPath, options.skillId, sessionId),
         sessionId,
-        backend: "copilot",
+        backend: options.backend ?? "copilot",
       });
     }
-    return learnLatestCopilotReview(transcriptPath, sessionId, options);
+    return learnCopilotReviews(transcriptPath, sessionId, options);
   } catch {
     return false; // skills are best-effort
   }
@@ -316,6 +264,10 @@ async function main(): Promise<void> {
   // pure helpers above for tests never flips a shared process's DB to read-only.
   process.env.CAIRN_READONLY = "1";
   const mode = process.argv[2];
+  const raw = await readStdin();
+  debugLog(mode ?? "", raw);
+  const rawPayload = safeJson(raw);
+  try { recordHostEvent("copilot", mode ?? "", raw, rawPayload); } catch { /* event indexing never blocks the host */ }
 
   if (mode === "session-start") {
     const text = await workflowPrompt();
@@ -328,21 +280,20 @@ async function main(): Promise<void> {
     return;
   }
 
-  const raw = await readStdin();
-  debugLog(mode ?? "", raw);
-  const { sessionId, agentId, toolName, args, transcriptPath, prompt, eventId } = parsePayload(raw);
+  const { sessionId, agentId, agentName, toolName, args, result, transcriptPath, prompt, eventId, toolCallId } = parsePayload(raw);
 
   if (mode === "subagent-stop") {
     const path = transcriptPath || eventsPathForSession(sessionId);
-    if (await queueLatestReview(path, sessionId, { agentId: agentId || undefined, subagentOnly: true })) {
-      const st = synchronizeTurnState(
-        readTurn(sessionId),
-        latestUserMarker(path),
-      );
-      st.skillUsed = true;
-      st.reviewed = true;
-      writeTurn(sessionId, st);
-    }
+    const { latestCopilotAgentId } = await import("../../skill/review-queue");
+    const stoppingAgentId = agentId || latestCopilotAgentId(path, agentName);
+    const stateId = turnScope(sessionId, stoppingAgentId);
+    const state = readLifecycle(stateId);
+    await queueLatestReview(path, sessionId, {
+      agentId: stoppingAgentId || undefined,
+      agentName: stoppingAgentId ? undefined : agentName || undefined,
+      subagentOnly: true,
+    });
+    updateLifecycle(stateId, () => ({ ...state, stopBlocked: false }));
     emit({});
     return;
   }
@@ -352,14 +303,20 @@ async function main(): Promise<void> {
     // in front of the model BEFORE it acts, on EVERY prompt — this is what keeps it from decaying or being
     // dropped on compaction. Empirically verified on Copilot CLI v1.0.66: userPromptSubmitted additionalContext
     // IS delivered to the model (the published hooks reference says "Output processed: No", but a live marker
-    // test proved otherwise; sessionStart still injects a baseline copy in case a future version regresses).
+    // test proved otherwise). This is the only main-agent workflow injection point so the first turn cannot
+    // receive a duplicate sessionStart copy.
     // Also reset the per-turn latch so the agentStop gate is scoped to this turn.
     //
     // Copilot can re-fire this hook for a blocked continuation. Preserve the cap only for that continuation,
     // then let the next genuine user turn start with a fresh budget.
+    const stateId = turnScope(sessionId);
+    const delegatedIds = claimDelegation(sessionId, stateId);
+    if (delegatedIds.length) {
+      resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
+      return void emit({});
+    }
     if (!shouldStartUserTurn(prompt)) return void emit({});
-    const prev = readTurn(sessionId);
-    writeTurn(sessionId, { ...freshTurn(), stopNudges: prev.stopBlocked ? prev.stopNudges : 0 });
+    resetLifecycle(stateId, {}, true);
     const wf = await workflowPrompt();
     emit(wf ? { additionalContext: internalContext(wf) } : {});
     return;
@@ -371,6 +328,23 @@ async function main(): Promise<void> {
     if (process.env.CAIRN_COPILOT_NO_GATE) return void emit({});
     let decision: { deny: boolean; reason?: string } = { deny: false };
     try {
+      if (isTask(toolName) && typeof args.prompt === "string") {
+        const parentScope = turnScope(sessionId, agentId);
+        const selectedIds = readLifecycle(parentScope).pendingReviewIds.filter((id) => !id.startsWith("__"));
+        const requestedIds = skillIdsFromTask(args);
+        const skillIds = requestedIds.filter((id) => selectedIds.includes(id));
+        if (skillIds.length) {
+          registerDelegation(parentScope, toolCallId, skillIds);
+          const protocol = await promptText("delegated-skill-protocol.md");
+          emit({ modifiedArgs: { ...args, prompt: `${protocol}\n\n${selectedSkillBlock(skillIds)}\n\n${args.prompt}` } });
+          return;
+        }
+      }
+      if (isTask(toolName) && args.agent_type === "general-purpose" && typeof args.prompt === "string") {
+        const protocol = await promptWithCatalog("general-purpose-protocol.md");
+        emit({ modifiedArgs: { ...args, prompt: `${protocol}\n${args.prompt}` } });
+        return;
+      }
       if (isTool(toolName, "brain_create")) {
         const { rootId, openBranchExists } = await import("../../core/audit");
         decision = gateDecision(toolName, args, {
@@ -388,59 +362,98 @@ async function main(): Promise<void> {
   if (mode === "post-tool") {
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const stateId = turnScope(sessionId, agentId);
-    const path = transcriptPath || eventsPathForSession(sessionId);
-    const st = synchronizeTurnState(
-      readTurn(stateId),
-      latestUserMarker(path),
-    );
-    if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) st.brainUsed = true;
-    // skill_search / skill_create mean the agent is doing skill work: the turn now OWES a skill_review, which
-    // the agentStop gate enforces.
-    if (isTool(toolName, "skill_search") || isTool(toolName, "skill_create")) st.skillUsed = true;
+    updateLifecycle(stateId, (current) => {
+      const next = { ...current };
+      if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) next.brainUsed = true;
+      if (isTool(toolName, "skill_select")) {
+        const ids = Array.isArray(args.ids) ? args.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0) : [];
+        if (ids.length) {
+          next.skillUsed = true;
+          next.pendingReviewIds = [...new Set([...next.pendingReviewIds, ...ids])];
+        }
+      }
+      if (isTool(toolName, "skill_create")) {
+        next.skillUsed = true;
+        next.pendingReviewIds = [...new Set([...next.pendingReviewIds, skillResultId(result) || "__created__"])];
+      }
+      if (isTool(toolName, "skill_search")) {
+        next.skillUsed = true;
+        next.pendingReviewIds = [...new Set([...next.pendingReviewIds, "__legacy__"])];
+      }
+      if (isTool(toolName, "skill_load")) {
+        const id = typeof args.id === "string" ? args.id : "";
+        if (id) {
+          next.skillUsed = true;
+          next.pendingReviewIds = [...new Set([...next.pendingReviewIds, id])];
+        }
+      }
 
-    // The agent DECLARED a finished deliverable for skill `id`. Review the WHOLE turn log NOW (it already
-    // holds any subagent's output, which a turn-end fire could miss when the work was backgrounded). Each
-    // skill_review fires its own learner (a turn with two deliverables = two calls, two ids); mark reviewed
-    // so agentStop does not nag, and skillUsed so the gate is satisfied.
-    if (isTool(toolName, "skill_review")) {
-      const id = typeof args.id === "string" ? args.id : "";
-      st.skillUsed = true;
-      if (await queueLatestReview(path, sessionId, {
-        skillId: id,
-        agentId: agentId || undefined,
-        eventId,
-      })) st.reviewed = true;
-    }
+      if (isTool(toolName, "skill_review") && toolResultSucceeded(result)) {
+        const id = typeof args.id === "string" ? args.id : "";
+        next.skillUsed = true;
+        if (id) {
+          next.pendingReviewIds = next.pendingReviewIds.filter((pendingId) =>
+            pendingId !== id && pendingId !== "__created__" && pendingId !== "__legacy__"
+          );
+          const declaration = { skillId: id, eventId };
+          if (!next.pendingReviews.some((review) =>
+            review.skillId === declaration.skillId && review.eventId === declaration.eventId
+          )) next.pendingReviews.push(declaration);
+        }
+      }
+      return next;
+    });
 
     const answer = typeof args.answer === "string" ? args.answer : "";
     const blocks = (await Promise.all(postToolFiles(toolName, answer).map(promptText))).filter((t) => t.length > 0);
-    writeTurn(stateId, st);
-
     const text = internalContext(blocks.join("\n\n"));
     emit(text ? { additionalContext: text } : {});
     return;
   }
 
   if (mode === "agent-stop") {
-    // Learning is now AGENT-DRIVEN: skill_review fires the learner mid-turn with the declared label. agentStop
-    // no longer auto-learns (there is no label to grade against here) — it only NAGS: brain unused, or a skill
-    // was used but the deliverable was not submitted via skill_review. Bounded to STOP_CAP nudges/turn.
+    // skill_review declares which skill owns the deliverable. agentStop enforces the required workflow first,
+    // then queues each declaration over the complete transcript, including the final visible answer.
     if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
     const path = transcriptPath || eventsPathForSession(sessionId);
-    const st = synchronizeTurnState(
-      readTurn(sessionId),
-      latestUserMarker(path),
-    );
+    const stateId = turnScope(sessionId);
+    const st = readLifecycle(stateId);
     const file = process.env.AGENT_HARNESS === "1"
-      ? harnessStopDecision(st).file
-      : stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, reviewed: st.reviewed, stopNudges: st.stopNudges }).file;
+      ? harnessStopDecision({ skillUsed: st.skillUsed, pendingReviewCount: st.pendingReviewIds.length, stopNudges: st.stopNudges }).file
+      : stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, pendingReviewCount: st.pendingReviewIds.length, stopNudges: st.stopNudges }).file;
     const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
-      writeTurn(sessionId, { ...st, stopNudges: st.stopNudges + 1, stopBlocked: true });
+      updateLifecycle(stateId, () => ({ ...st, stopNudges: st.stopNudges + 1, stopBlocked: true }));
       emit({ decision: "block", reason: text }); // nudge the agent to review before ending
       return;
     }
-    if (st.stopBlocked) writeTurn(sessionId, { ...st, stopBlocked: false });
+    for (const review of st.pendingReviews) {
+      const accepted = await queueLatestReview(path, sessionId, {
+        skillId: review.skillId,
+        eventId: review.eventId,
+      });
+      if (!accepted) {
+        if (st.reviewNudges >= STOP_CAP) {
+          updateLifecycle(stateId, () => ({ ...st, stopBlocked: false }));
+          emit({});
+          return;
+        }
+        updateLifecycle(stateId, () => ({ ...st, reviewNudges: st.reviewNudges + 1, stopBlocked: true }));
+        emit({
+          decision: "block",
+          reason: internalContext("Cairn could not durably queue the declared skill review. Keep the turn open and retry ending it; do not dismiss this continuation."),
+        });
+        return;
+      }
+    }
+    if (st.pendingReviewIds.length) {
+      recordMissedReviews(stateId, st.turnSeq, st.pendingReviewIds, path);
+      updateLifecycle(stateId, () => ({ ...st, stopBlocked: false }));
+      emit({});
+      return;
+    }
+    updateLifecycle(stateId, () => ({ ...st, pendingReviewIds: [], pendingReviews: [], stopBlocked: false }));
+    releaseDelegation(sessionId);
     emit({});
     return;
   }

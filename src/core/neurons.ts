@@ -2,7 +2,23 @@ import { randomUUID } from "node:crypto";
 import { db } from "./db";
 import { config } from "./config";
 import { embed, embedModel } from "./embed";
+import {
+  addEdge,
+  edgesForSources,
+  edgesFrom,
+  linkBoth,
+  replaceEdges,
+  resyncLegacyEdges,
+  sourcesTargeting,
+  unlinkBoth,
+} from "./graph";
 import { encodeVector } from "./vector";
+import {
+  deleteNeuronVector,
+  prepareCurrentVectorIndex,
+  prepareVectorIndex,
+  writeNeuronVector,
+} from "./vector-store";
 import type { Neuron, Row, NeuronPatch } from "./neurons.types";
 
 export const vecText = (text: string, answer: string) => `${text} ${answer}`.trim();
@@ -25,8 +41,8 @@ function parseEdges(json: string): string[] {
   try { const e = JSON.parse(json); return Array.isArray(e) ? e : []; } catch { return []; }
 }
 
-export function toNeuron(r: Row): Neuron {
-  return { id: r.id, text: r.text, answer: r.answer, citation: r.citation, edges: parseEdges(r.edges) };
+export function toNeuron(r: Row, edges = parseEdges(r.edges)): Neuron {
+  return { id: r.id, text: r.text, answer: r.answer, citation: r.citation, edges };
 }
 
 const dedupe = (edges: string[], self: string) => [...new Set(edges)].filter((e) => e && e !== self);
@@ -34,11 +50,13 @@ export const SELECT = "SELECT id, text, answer, citation, edges, embedding, embe
 
 export function get(id: string): Neuron | null {
   const r = db().query(`${SELECT} WHERE id = ?`).get(id) as Row | null;
-  return r ? toNeuron(r) : null;
+  return r ? toNeuron(r, edgesFrom(id)) : null;
 }
 
 export function all(): Neuron[] {
-  return (db().query(SELECT).all() as Row[]).map(toNeuron);
+  const rows = db().query(SELECT).all() as Row[];
+  const edges = edgesForSources(rows.map((row) => row.id));
+  return rows.map((row) => toNeuron(row, edges.get(row.id) ?? []));
 }
 
 /** A neuron's id, question text, and creation order (rowid). Enough to resolve a hit's edge neighbors
@@ -62,36 +80,12 @@ export function refsByIds(ids: string[]): Map<string, NodeRef> {
   return new Map(rows.map((r) => [r.id, r]));
 }
 
-// Edge edits read and write ONLY the `edges` column — never SELECT the row's embedding (a ~1.5KB
-// BLOB) just to append or drop one id. addEdge runs once per edge on every create, so pulling the
-// vector here put the embedding on the node-creation hot path for nothing.
-function edgesOf(id: string): string[] | null {
-  const r = db().query("SELECT edges FROM neurons WHERE id = ?").get(id) as { edges: string } | null;
-  return r ? parseEdges(r.edges) : null;
-}
-function setEdges(id: string, edges: string[]): void {
-  db().query("UPDATE neurons SET edges = ? WHERE id = ?").run(JSON.stringify(edges), id);
-}
-
-function addEdge(from: string, to: string): void {
-  const edges = edgesOf(from);
-  if (!edges || edges.includes(to)) return;
-  setEdges(from, [...edges, to]);
-}
-
-function removeEdge(from: string, to: string): void {
-  const edges = edgesOf(from);
-  if (!edges || !edges.includes(to)) return;
-  setEdges(from, edges.filter((e) => e !== to));
-}
-
 // Connect/disconnect two thoughts (mirrored, so the link shows on both).
 export function link(a: string, b: string): void {
-  if (a !== b) { addEdge(a, b); addEdge(b, a); }
+  if (a !== b) linkBoth(a, b);
 }
 export function unlink(a: string, b: string): void {
-  removeEdge(a, b);
-  removeEdge(b, a);
+  unlinkBoth(a, b);
 }
 
 // Create a new neuron; embeds on write; mirrors edges so the graph stays undirected.
@@ -100,10 +94,14 @@ export async function create(text: string, edges: string[] = []): Promise<Neuron
   const safeText = stripCtrl(text);
   const clean = dedupe(edges, id);
   const vec = encodeVector(await embed(vecText(safeText, "")));
-  db()
-    .query("INSERT INTO neurons (id, text, answer, citation, edges, embedding, embedding_model) VALUES (?, ?, '', '', ?, ?, ?)")
-    .run(id, safeText, JSON.stringify(clean), vec, embedModel());
-  for (const t of clean) addEdge(t, id);
+  db().transaction(() => {
+    prepareVectorIndex(embedModel(), vec.byteLength / 4);
+    db().query("INSERT INTO neurons (id, text, answer, citation, edges, embedding, embedding_model) VALUES (?, ?, '', '', '[]', ?, ?)")
+      .run(id, safeText, vec, embedModel());
+    replaceEdges(id, clean);
+    for (const target of clean) addEdge(target, id);
+    writeNeuronVector(id, embedModel(), vec);
+  });
   return { id, text: safeText, answer: "", citation: "", edges: clean };
 }
 
@@ -132,26 +130,30 @@ export async function mutate(id: string, patch: NeuronPatch): Promise<Neuron | n
   }
   if (next.text !== cur.text || next.answer !== cur.answer) {
     const vec = encodeVector(await embed(vecText(next.text, next.answer)));
-    db().query("UPDATE neurons SET text = ?, answer = ?, citation = ?, edges = ?, embedding = ?, embedding_model = ? WHERE id = ?")
-      .run(next.text, next.answer, next.citation, JSON.stringify(next.edges), vec, embedModel(), id);
+    db().transaction(() => {
+      prepareVectorIndex(embedModel(), vec.byteLength / 4);
+      db().query("UPDATE neurons SET text = ?, answer = ?, citation = ?, embedding = ?, embedding_model = ? WHERE id = ?")
+        .run(next.text, next.answer, next.citation, vec, embedModel(), id);
+      if (patch.edges) replaceEdges(id, next.edges);
+      writeNeuronVector(id, embedModel(), vec);
+    });
   } else {
     // text/answer unchanged → only citation/edges can differ; leave the embedding intact
-    db().query("UPDATE neurons SET citation = ?, edges = ? WHERE id = ?")
-      .run(next.citation, JSON.stringify(next.edges), id);
+    db().transaction(() => {
+      db().query("UPDATE neurons SET citation = ? WHERE id = ?").run(next.citation, id);
+      if (patch.edges) replaceEdges(id, next.edges);
+    });
   }
   return next;
 }
 
 export function remove(id: string): boolean {
-  const info = db().query("DELETE FROM neurons WHERE id = ?").run(id);
-  // Detach back-references WITHOUT loading the whole table: all() pulls every row's text/answer AND
-  // its ~1.5KB embedding just to find a few neighbors. Only rows whose edges JSON contains this id can
-  // reference it, so LIKE narrows to those and we read just id+edges. The exact edges.includes(id)
-  // check still gates each write, so a rare LIKE substring false-positive is simply a no-op.
-  const refs = db().query("SELECT id, edges FROM neurons WHERE edges LIKE ?").all(`%${id}%`) as { id: string; edges: string }[];
-  for (const r of refs) {
-    const edges = parseEdges(r.edges);
-    if (edges.includes(id)) setEdges(r.id, edges.filter((e) => e !== id));
-  }
-  return info.changes > 0;
+  return db().transaction(() => {
+    const sources = sourcesTargeting(id);
+    prepareCurrentVectorIndex();
+    const info = db().query("DELETE FROM neurons WHERE id = ?").run(id);
+    deleteNeuronVector(id);
+    resyncLegacyEdges(sources);
+    return info.changes > 0;
+  });
 }

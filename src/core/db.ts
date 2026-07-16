@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { config } from "./config";
+import { ensureEngineSchema } from "./schema";
 import { startBackgroundSync } from "./sync";
 
 // The brain is opened in one of two modes, decided at open time:
@@ -31,6 +32,8 @@ export interface Db {
   query(sql: string): Stmt;
   /** Execute a statement for its side effect (DDL, or a parameterless write like a test's DELETE). */
   run(sql: string, ...params: unknown[]): void;
+  transaction<T>(fn: () => T): T;
+  loadExtension(path: string): void;
 }
 
 let _db: Db | null = null;
@@ -40,6 +43,34 @@ let _db: Db | null = null;
 // in-memory vector cache.
 let _writeEpoch = 0;
 function markWrite(): void { _writeEpoch++; }
+
+const wait = (ms: number): void => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
+function isBusy(error: unknown): boolean {
+  const value = error as { code?: unknown; message?: unknown };
+  return value?.code === "SQLITE_BUSY"
+    || value?.code === "SQLITE_BUSY_SNAPSHOT"
+    || value?.code === "SQLITE_LOCKED"
+    || (typeof value?.message === "string" && /database is (locked|busy)/i.test(value.message));
+}
+
+function isTransientOpen(error: unknown): boolean {
+  const value = error as { code?: unknown };
+  return isBusy(error) || value?.code === "SQLITE_IOERR_TRUNCATE";
+}
+
+function retry<T>(fn: () => T, transient = isBusy): T {
+  const retries = Math.max(0, Number(process.env.CAIRN_SQLITE_TX_RETRIES || "3"));
+  for (let attempt = 0; ; attempt++) {
+    try { return fn(); }
+    catch (error) {
+      if (!transient(error) || attempt >= retries) throw error;
+      wait(Math.min(500, 25 * 2 ** attempt));
+    }
+  }
+}
 
 // Wrap a prepared statement so any .run() (a write) bumps the epoch; reads pass straight through. A
 // fresh wrapper per query() call avoids double-counting bun's internally-cached statement objects.
@@ -83,16 +114,29 @@ function assertNotRealBrainInTests(dbPath: string): void {
 
 // Create the neurons table and backfill columns added in later versions. Reads the schema first and
 // only writes DDL when something is missing.
-function ensureSchema(query: (sql: string) => Stmt, exec: (sql: string) => void, wal: boolean): void {
-  if (wal) exec("PRAGMA journal_mode = WAL");
-  // Block on a held write lock instead of failing instantly with SQLITE_BUSY. Without this, two concurrent
-  // writers (e.g. overlapping skill workers, or a worker plus the MCP server) lose most of their writes:
-  // measured 495/600 writes dropped. Writes are sub-millisecond, so the wait is only ever a brief queue.
+function configureConnection(d: BunDatabase, writer: boolean): void {
+  // Block on a held write lock instead of failing instantly with SQLITE_BUSY.
+  retry(() => d.run("PRAGMA busy_timeout = 5000"), isTransientOpen);
+  if (writer) {
+    const mode = retry(
+      () => (d.query("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
+      isTransientOpen
+    );
+    if (mode.toLowerCase() !== "wal") retry(() => d.run("PRAGMA journal_mode = WAL"), isTransientOpen);
+  }
+  d.run("PRAGMA synchronous = NORMAL");
+  d.run("PRAGMA temp_store = MEMORY");
+  d.run(`PRAGMA cache_size = -${Math.max(1024, Number(process.env.CAIRN_SQLITE_CACHE_KIB || "65536"))}`);
+  d.run(`PRAGMA mmap_size = ${Math.max(0, Number(process.env.CAIRN_SQLITE_MMAP_BYTES || String(256 * 1024 * 1024)))}`);
+  if (writer) d.run(`PRAGMA wal_autocheckpoint = ${Math.max(1, Number(process.env.CAIRN_SQLITE_WAL_PAGES || "1000"))}`);
+}
+
+function ensureSchema(query: (sql: string) => Stmt, exec: (sql: string) => void): void {
   exec("PRAGMA busy_timeout = 5000");
   const cols = query("PRAGMA table_info(neurons)").all() as { name: string }[];
   if (cols.length === 0) {
     exec(
-      `CREATE TABLE neurons (
+      `CREATE TABLE IF NOT EXISTS neurons (
          id              TEXT PRIMARY KEY,
          text            TEXT NOT NULL,
          answer          TEXT NOT NULL DEFAULT '',
@@ -102,16 +146,17 @@ function ensureSchema(query: (sql: string) => Stmt, exec: (sql: string) => void,
          embedding_model TEXT
        )`
     );
-    return;
+  } else {
+    // citation backs the no-uncited-answers rule; embedding_model lets search detect a model change and
+    // re-embed vectors that are no longer comparable. Both are ADDed for brains created before they existed.
+    if (!cols.some((c) => c.name === "citation")) {
+      exec("ALTER TABLE neurons ADD COLUMN citation TEXT NOT NULL DEFAULT ''");
+    }
+    if (!cols.some((c) => c.name === "embedding_model")) {
+      exec("ALTER TABLE neurons ADD COLUMN embedding_model TEXT");
+    }
   }
-  // citation backs the no-uncited-answers rule; embedding_model lets search detect a model change and
-  // re-embed vectors that are no longer comparable. Both are ADDed for brains created before they existed.
-  if (!cols.some((c) => c.name === "citation")) {
-    exec("ALTER TABLE neurons ADD COLUMN citation TEXT NOT NULL DEFAULT ''");
-  }
-  if (!cols.some((c) => c.name === "embedding_model")) {
-    exec("ALTER TABLE neurons ADD COLUMN embedding_model TEXT");
-  }
+  ensureEngineSchema(query, exec);
 }
 
 // Local-only brain on bun:sqlite — the default, and what every test run uses.
@@ -119,14 +164,21 @@ function openBun(): Db {
   assertNotRealBrainInTests(config.dbPath);
   mkdirSync(dirname(config.dbPath), { recursive: true });
   const d = new BunDatabase(config.dbPath);
-  ensureSchema(
+  configureConnection(d, true);
+  retry(() => d.transaction(() => ensureSchema(
     (sql) => d.query(sql) as unknown as Stmt,
-    (sql) => { d.run(sql); },
-    true
-  );
+    (sql) => { d.run(sql); }
+  )).immediate());
   return {
+    // Bun caches prepared statements by SQL internally; keep cursor lifetimes under Bun's control so
+    // completed reads cannot pin a WAL snapshot while another hook connection writes.
     query: (sql) => countingStmt(d.query(sql) as unknown as Stmt),
     run: (sql, ...params) => { markWrite(); d.run(sql, ...(params as never[])); },
+    transaction: <T>(fn: () => T) => {
+      if (d.inTransaction) return fn();
+      return retry(() => d.transaction(fn).immediate());
+    },
+    loadExtension: (path) => d.loadExtension(path),
   };
 }
 
@@ -138,13 +190,15 @@ function openReader(): Db {
     // No brain on disk yet. Behave as an empty brain rather than throwing, so a hook that happens to
     // fire first is a harmless no-op.
     const empty: Stmt = { all: () => [], get: () => undefined, run: () => ({ changes: 0 }) };
-    return { query: () => empty, run: () => {} };
+    return { query: () => empty, run: () => {}, transaction: (fn) => fn(), loadExtension: () => {} };
   }
   const d = new BunDatabase(path, { readonly: true });
-  try { d.run("PRAGMA busy_timeout = 2000"); } catch { /* a readonly handle may reject it; a rare miss is tolerated */ }
+  try { configureConnection(d, false); } catch { /* a readonly handle may reject a tuning pragma */ }
   return {
     query: (sql) => d.query(sql) as unknown as Stmt,
     run: () => { throw new Error("brain is open read-only (CAIRN_READONLY=1); writes are not allowed here"); },
+    transaction: (fn) => fn(),
+    loadExtension: (path) => d.loadExtension(path),
   };
 }
 

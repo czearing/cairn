@@ -7,6 +7,7 @@
 // proportional to actual changes, not table size. A periodic full id-diff remains as a correctness
 // backstop. A bad token or no network simply makes a pass a logged no-op until the next one.
 import { createRequire } from "node:module";
+import { getLoadablePath } from "sqlite-vec";
 import { config } from "./config";
 import type { Db } from "./db";
 
@@ -17,6 +18,47 @@ const SCHEMA = `CREATE TABLE IF NOT EXISTS neurons (id TEXT PRIMARY KEY, text TE
 // TypedArray, so wrap it. Strings (legacy JSON embeddings), Buffers, and null already bind fine.
 const toBind = (v: unknown): unknown => (v instanceof ArrayBuffer ? new Uint8Array(v) : v);
 const vals = (r: Row) => [r.id, r.text, r.answer, r.citation, r.edges, toBind(r.embedding), r.embedding_model];
+
+function importEdges(local: Db, row: Row): void {
+  local.query("DELETE FROM neuron_edges WHERE source_id = ?").run(row.id);
+  if (typeof row.edges !== "string") return;
+  let edges: unknown;
+  try { edges = JSON.parse(row.edges); } catch { return; }
+  if (!Array.isArray(edges)) return;
+  const insert = local.query(`INSERT OR IGNORE INTO neuron_edges(
+    source_id,target_id,relation_type,provenance,position
+  ) VALUES (?,?,'related','cloud-json',?)`);
+  edges.forEach((target, position) => {
+    if (typeof target === "string" && target && target !== row.id) insert.run(row.id, target, position);
+  });
+}
+
+let vectorExtensionLoaded = false;
+function importVector(local: Db, row: Row): void {
+  const embedding = toBind(row.embedding);
+  if (!(embedding instanceof Uint8Array) || !row.embedding_model) return;
+  const state = local.query(`SELECT
+    model,dimensions,table_name AS tableName
+    FROM neuron_vector_index WHERE singleton=1`).get() as {
+      model: string;
+      dimensions: number;
+      tableName: string;
+    } | null;
+  if (
+    !state
+    || state.model !== row.embedding_model
+    || state.dimensions * 4 !== embedding.byteLength
+    || !/^neuron_vec_\d+_[a-f0-9]{12}$/.test(state.tableName)
+  ) return;
+  if (!vectorExtensionLoaded) {
+    local.loadExtension(getLoadablePath());
+    vectorExtensionLoaded = true;
+  }
+  local.query(`DELETE FROM "${state.tableName}" WHERE id = ?`).run(row.id);
+  local.query(`INSERT INTO "${state.tableName}"(id,embedding) VALUES (?,?)`).run(row.id, embedding);
+  const seq = (local.query("SELECT value FROM engine_meta WHERE key='vector_seq'").get() as { value: number }).value;
+  local.query("UPDATE neuron_vector_index SET source_seq=? WHERE singleton=1").run(seq);
+}
 
 interface RemoteStmt { all(...a: unknown[]): unknown[]; get(...a: unknown[]): unknown; run(...a: unknown[]): unknown }
 interface Remote { prepare(s: string): RemoteStmt; exec(s: string): unknown }
@@ -103,7 +145,16 @@ async function pullSince(local: Db, remote: Remote, from: number): Promise<numbe
   let batch: RowRid[];
   do {
     batch = sel.all(cursor) as RowRid[];
-    for (const r of batch) { ins.run(...vals(r)); cursor = num(r._rid); }
+    local.transaction(() => {
+      for (const r of batch) {
+        const inserted = ins.run(...vals(r)) as { changes?: number };
+        if (inserted.changes) {
+          importEdges(local, r);
+          importVector(local, r);
+        }
+        cursor = num(r._rid);
+      }
+    });
     await yield_();
   } while (batch.length === CHUNK);
   return cursor;
@@ -131,7 +182,16 @@ async function fullReconcile(local: Db, remote: Remote): Promise<void> {
   const ins = local.query(INSERT_IGNORE);
   for (const ids of chunk(cloudIds.filter((id) => !localSet.has(id)), CHUNK)) {
     const rows = remote.prepare(`SELECT ${COLS} FROM neurons WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Row[];
-    for (const r of rows) { ins.run(...vals(r)); pulled++; }
+    local.transaction(() => {
+      for (const r of rows) {
+        const inserted = ins.run(...vals(r)) as { changes?: number };
+        if (inserted.changes) {
+          importEdges(local, r);
+          importVector(local, r);
+        }
+        pulled++;
+      }
+    });
     await yield_();
   }
   const rins = remote.prepare(INSERT_IGNORE);

@@ -22,7 +22,7 @@ function ensure(): void {
   ready = true; // set first: on a READ-ONLY connection (the hook) the DDL below throws, but reads against
   //              already-created tables must still proceed, so we never retry the failed DDL.
   try {
-    db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', explanation TEXT NOT NULL DEFAULT '', identity TEXT NOT NULL DEFAULT '', identity_vec BLOB, base_label TEXT NOT NULL DEFAULT '', embedding BLOB, rich BLOB, embedding_model TEXT, ts INTEGER NOT NULL)");
+    db().run("CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, task TEXT NOT NULL, label_norm TEXT NOT NULL DEFAULT '', master_prompt TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', explanation TEXT NOT NULL DEFAULT '', identity TEXT NOT NULL DEFAULT '', identity_vec BLOB, base_label TEXT NOT NULL DEFAULT '', embedding BLOB, rich BLOB, embedding_model TEXT, ts INTEGER NOT NULL)");
     db().run("CREATE TABLE IF NOT EXISTS skill_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, recipe TEXT NOT NULL, quality REAL NOT NULL, review TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL)");
     db().run("CREATE INDEX IF NOT EXISTS skill_runs_skill_q ON skill_runs (skill_id, quality)");
     // Append-only history of every master-prompt VERSION (each rewrite), with the explanation = why it changed
@@ -33,6 +33,7 @@ function ensure(): void {
     const cols = db().query("PRAGMA table_info(skills)").all() as { name: string }[]; // backfill older skills tables
     if (!cols.some((c) => c.name === "rich")) db().run("ALTER TABLE skills ADD COLUMN rich BLOB"); // domain-vocab vector
     if (!cols.some((c) => c.name === "explanation")) db().run("ALTER TABLE skills ADD COLUMN explanation TEXT NOT NULL DEFAULT ''"); // reviewer-only rationale, split out of master_prompt
+    if (!cols.some((c) => c.name === "description")) db().run("ALTER TABLE skills ADD COLUMN description TEXT NOT NULL DEFAULT ''");
     if (!cols.some((c) => c.name === "identity")) db().run("ALTER TABLE skills ADD COLUMN identity TEXT NOT NULL DEFAULT ''"); // frozen purpose text, set once
     if (!cols.some((c) => c.name === "identity_vec")) db().run("ALTER TABLE skills ADD COLUMN identity_vec BLOB"); // frozen purpose vector for the reuse guard
     if (!cols.some((c) => c.name === "base_label")) db().run("ALTER TABLE skills ADD COLUMN base_label TEXT NOT NULL DEFAULT ''"); // base of a minted "<label> (N)" variant; empty for a base skill
@@ -44,9 +45,19 @@ function ensure(): void {
   } catch { /* read-only connection or legacy duplicate labels: reads still work against existing tables */ }
 }
 
-const SKILL_COLS = "id, task, label_norm, master_prompt, explanation, embedding, embedding_model, ts";
-const SKILL_VALS = "?, ?, ?, ?, ?, ?, ?, ?";
-const skillRow = (s: Skill, vec: number[]) => [s.id, s.task, normalizeLabel(s.task), s.masterPrompt, s.explanation ?? "", encodeVector(vec), embedModel(), s.ts] as const;
+const SKILL_COLS = "id, task, label_norm, master_prompt, description, explanation, embedding, embedding_model, ts";
+const SKILL_VALS = "?, ?, ?, ?, ?, ?, ?, ?, ?";
+const skillRow = (s: Skill, vec: number[]) => [
+  s.id,
+  s.task,
+  normalizeLabel(s.task),
+  s.masterPrompt,
+  s.description ?? "",
+  s.explanation ?? "",
+  encodeVector(vec),
+  embedModel(),
+  s.ts,
+] as const;
 
 /** Insert (or replace) a skill with its task embedding. Used for explicit puts; creation uses the atomic
  *  insertSkillIfAbsent below. */
@@ -63,10 +74,12 @@ export function insertSkillIfAbsent(s: Skill, vec: number[]): void {
   db().run(`INSERT OR IGNORE INTO skills (${SKILL_COLS}) VALUES (${SKILL_VALS})`, ...skillRow(s, vec));
 }
 
-const SELECT_SKILL = "SELECT id, task, master_prompt AS masterPrompt, explanation, ts FROM skills";
+const SELECT_SKILL = "SELECT id, task, master_prompt AS masterPrompt, description, explanation, ts FROM skills";
 export function getSkill(id: string): Skill | null {
   ensure();
-  try { return (db().query(`${SELECT_SKILL} WHERE id = ?`).get(id) as Skill | undefined) ?? null; } catch { return null; }
+  try {
+    return (db().query(`${SELECT_SKILL} WHERE id = ?`).get(id) as Skill | undefined) ?? null;
+  } catch { return null; }
 }
 
 /** The skill owning a normalized label, or null. The exact-match restore key, indexed and unique. */
@@ -102,22 +115,61 @@ export function setMasterPrompt(id: string, masterPrompt: string, explanation?: 
   db().run("UPDATE skills SET master_prompt = ?, explanation = ? WHERE id = ?", masterPrompt, explanation, id);
 }
 
+/** Bootstrap a legacy blank skill exactly once. Concurrent reviewers cannot overwrite the winner. */
+export function setMasterPromptIfBlank(
+  id: string,
+  masterPrompt: string,
+  explanation = ""
+): boolean {
+  ensure();
+  return db().query(`UPDATE skills
+    SET master_prompt = ?, explanation = ?
+    WHERE id = ? AND TRIM(master_prompt) = ''`)
+    .run(masterPrompt, explanation, id).changes > 0;
+}
+
+export function setSkillMetadata(id: string, title: string, description: string): void {
+  ensure();
+  db().run(
+    "UPDATE skills SET task = ?, label_norm = ?, description = ? WHERE id = ?",
+    title.trim(),
+    normalizeLabel(title),
+    description.trim(),
+    id,
+  );
+}
+
 /** Every skill's label (the `task` field), for biasing the labeler toward reuse. */
 export function skillLabels(): string[] {
   ensure();
-  return (db().query("SELECT task FROM skills WHERE master_prompt <> ''").all() as { task: string }[]).map((r) => r.task);
+  return (db().query("SELECT task FROM skills WHERE master_prompt <> '' AND TRIM(description) <> ''").all() as { task: string }[]).map((r) => r.task);
 }
 
-/** Every skill as `{id, label, gist}`, so the agent can see WHAT each existing skill is AND has its stable
- *  `id` to reuse it (skill_review takes the id, never a re-typed label). The gist is the first line of the
- *  master (what the skill produces), falling back to the explanation. Capped so the prompt stays small. */
-export function skillCatalog(): { id: string; label: string; gist: string }[] {
+export interface SkillCatalogEntry {
+  id: string;
+  title: string;
+  description: string;
+}
+
+export interface SkillCatalogDetail extends SkillCatalogEntry {
+  masterPrompt: string;
+}
+
+export function skillCatalogDetails(): SkillCatalogDetail[] {
   ensure();
-  const rows = db().query("SELECT id, task, master_prompt, explanation FROM skills WHERE master_prompt <> ''").all() as { id: string; task: string; master_prompt: string; explanation: string }[];
-  return rows.map((r) => {
-    const firstLine = (r.master_prompt || "").split("\n").map((l) => l.trim()).find((l) => l.length > 0);
-    return { id: r.id, label: r.task, gist: (firstLine || r.explanation || "").slice(0, 140) };
-  });
+  const rows = db().query("SELECT id, task, description, explanation, master_prompt FROM skills WHERE master_prompt <> '' AND TRIM(description) <> '' ORDER BY task COLLATE NOCASE").all() as
+    { id: string; task: string; description: string; explanation: string; master_prompt: string }[];
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.task,
+    description: (row.description || row.explanation || "").slice(0, 420),
+    masterPrompt: row.master_prompt,
+  }));
+}
+
+/** Compact agent-facing catalog. The description is the complete usage contract. */
+export function skillCatalog(): SkillCatalogEntry[] {
+  return skillCatalogDetails().map(({ masterPrompt: _masterPrompt, ...entry }) => entry);
 }
 
 /** Every skill's id, task, label vector, and rich (label+master) vector. Assignment uses the clean label
@@ -126,7 +178,7 @@ export function skillCatalog(): { id: string; label: string; gist: string }[] {
 export function skillVectors(): { id: string; task: string; vec: number[]; rich: number[] }[] {
   ensure();
   try {
-    return (db().query("SELECT id, task, embedding, rich FROM skills WHERE master_prompt <> ''").all() as { id: string; task: string; embedding: unknown; rich: unknown }[])
+    return (db().query("SELECT id, task, embedding, rich FROM skills WHERE master_prompt <> '' AND TRIM(description) <> ''").all() as { id: string; task: string; embedding: unknown; rich: unknown }[])
       .map((r) => ({ id: r.id, task: r.task, vec: decodeVector(r.embedding) ?? [], rich: decodeVector(r.rich) ?? [] }));
   } catch { return []; }
 }
@@ -171,16 +223,13 @@ export function variantSkills(baseLabel: string): { id: string; task: string }[]
   try { return db().query("SELECT id, task FROM skills WHERE label_norm = ? OR base_label = ?").all(base, base) as { id: string; task: string }[]; } catch { return []; }
 }
 
-/** Append a master-prompt VERSION to the skill's history when the master actually changed (no-op when the new
- *  master is identical to the latest one, so an unchanged rewrite does not spam the timeline). Keeps the last
- *  `keep` versions. This is the source for the UI's "how the master evolved and why" timeline. */
-export function addVersion(skillId: string, master: string, explanation: string, score: number, ts: number, keep = 50): void {
+/** Append a changed master to the complete version history. */
+export function addVersion(skillId: string, master: string, explanation: string, score: number, ts: number): void {
   ensure();
   try {
     const last = db().query("SELECT master FROM skill_versions WHERE skill_id = ? ORDER BY ts DESC, id DESC LIMIT 1").get(skillId) as { master: string } | undefined;
     if (last && last.master === master) return; // master unchanged: nothing new to version
     db().run("INSERT INTO skill_versions (skill_id, master, explanation, score, ts) VALUES (?, ?, ?, ?, ?)", skillId, master, explanation, score, ts);
-    db().run("DELETE FROM skill_versions WHERE skill_id = ? AND id NOT IN (SELECT id FROM skill_versions WHERE skill_id = ? ORDER BY ts DESC, id DESC LIMIT ?)", skillId, skillId, keep);
   } catch { /* read-only */ }
 }
 
@@ -190,11 +239,10 @@ export function skillVersions(skillId: string): { master: string; explanation: s
   try { return db().query("SELECT master, explanation, score, ts FROM skill_versions WHERE skill_id = ? ORDER BY ts ASC, id ASC").all(skillId) as { master: string; explanation: string; score: number; ts: number }[]; } catch { return []; }
 }
 
-/** Record a run under a skill, then prune to the top `keep` by quality (the reviewer's reference set). */
-export function addRun(run: SkillRun, keep = 10): void {
+/** Record a run without deleting history. topRuns selects the bounded reviewer reference set. */
+export function addRun(run: SkillRun): void {
   ensure();
   db().run("INSERT INTO skill_runs (skill_id, recipe, quality, review, ts) VALUES (?, ?, ?, ?, ?)", run.skillId, run.recipe, run.quality, run.review, run.ts);
-  db().run("DELETE FROM skill_runs WHERE skill_id = ? AND id NOT IN (SELECT id FROM skill_runs WHERE skill_id = ? ORDER BY quality DESC, ts DESC LIMIT ?)", run.skillId, run.skillId, keep);
 }
 
 /** The top `n` runs for a skill by quality (the reviewer references these to assemble the master prompt). */
@@ -209,7 +257,7 @@ export function listSkills(): (Skill & { runs: SkillRun[]; versions: { master: s
   ensure();
   try {
     const skills = db().query(
-      "SELECT id, task, master_prompt AS masterPrompt, explanation, ts FROM skills WHERE TRIM(master_prompt) <> '' ORDER BY ts DESC"
+      `${SELECT_SKILL} WHERE TRIM(master_prompt) <> '' AND TRIM(description) <> '' ORDER BY ts DESC`
     ).all() as Skill[];
     return skills.map((s) => ({
       ...s,

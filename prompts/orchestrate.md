@@ -5,4 +5,4 @@ overlap or redo work unless you coordinate up front. Use the brain to keep them 
 - Give each `cairn` subagent its node, and have it search the brain first, then record its findings under that node.
 - Synthesize from the nodes they write, so no two agents cover the same ground.
 
-When a subagent hands back a finished, reusable deliverable (a story, a review, a fix), call `skill_review` with that deliverable's skill label once the subagent has RETURNED — not while it is still running — so the completed work is graded. Use one `skill_review` call per distinct deliverable.
+Select delegated skills in the parent, include `CAIRN_SKILL_IDS: <ids>` in each Task prompt, incorporate the result, then review every delegated skill id in the parent.

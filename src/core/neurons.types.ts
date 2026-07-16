@@ -18,7 +18,7 @@ export interface Row {
   text: string;
   answer: string;
   citation: string;
-  /** JSON-encoded `string[]` of edge ids. */
+  /** Legacy JSON mirror of relational `neuron_edges`, retained for cloud/backward compatibility. */
   edges: string;
   /** The embedding vector: a packed little-endian float32 BLOB (Uint8Array), or the legacy
    * JSON-encoded string on un-migrated rows, or null until it has been computed. */

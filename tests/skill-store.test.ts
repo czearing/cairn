@@ -1,6 +1,7 @@
 import { test, expect, beforeEach } from "bun:test";
-import { putSkill, getSkill, setMasterPrompt, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector, deleteSkillByLabel, deleteSkill, skillCatalog, addVersion, skillVersions } from "../src/skill/store";
+import { putSkill, getSkill, setMasterPrompt, setSkillMetadata, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector, deleteSkillByLabel, deleteSkill, skillCatalog, addVersion, skillVersions } from "../src/skill/store";
 import { db } from "../src/core/db";
+import { formatSkillCatalog, skillCatalogSnapshot } from "../src/skill/catalog";
 
 beforeEach(() => {
   try { db().run("DELETE FROM skills"); } catch { /* not created yet */ }
@@ -59,6 +60,7 @@ test("addVersion records each CHANGED master (dedup unchanged), skillVersions re
 
 test("listSkills includes the master-version timeline", () => {
   putSkill({ id: "v2", task: "t2", masterPrompt: "B", ts: 1 }, [1, 0]);
+  setSkillMetadata("v2", "timeline skill", "Use for testing complete skill master version timelines and history rendering.");
   putSkill({ id: "pending", task: "pending", masterPrompt: "", ts: 2 }, [0, 1]);
   addVersion("v2", "A", "wA", 0.6, 1);
   addVersion("v2", "B", "wB", 0.8, 2);
@@ -71,15 +73,34 @@ test("listSkills includes the master-version timeline", () => {
 
 test("skillCatalog lists learned skills and hides pending skills without a master", () => {
   putSkill({ id: "c1", task: "haiku", masterPrompt: "1. count 5-7-5 syllables\n2. sharpen the cut", ts: 1 }, [1, 0]);
+  setSkillMetadata("c1", "poetry writing", "Use for writing haiku and short poems or revising poetry through deliberate imagery, form, sound, and compression.");
   putSkill({ id: "c2", task: "blank", masterPrompt: "", ts: 2 }, [0, 1]);
   const cat = skillCatalog();
-  expect(cat).toContainEqual({ id: "c1", label: "haiku", gist: "1. count 5-7-5 syllables" }); // gist = first non-empty master line
+  expect(cat).toContainEqual({
+    id: "c1",
+    title: "poetry writing",
+    description: "Use for writing haiku and short poems or revising poetry through deliberate imagery, form, sound, and compression.",
+  });
   expect(cat.some((s) => s.id === "c2")).toBe(false);
+  expect(formatSkillCatalog()).toContain("`c1` **poetry writing**");
+  expect(formatSkillCatalog()).toContain("Use for writing haiku");
+  const first = skillCatalogSnapshot();
+  expect(formatSkillCatalog()).toContain(`Catalog version: \`${first.version}\``);
+  setMasterPrompt("c1", "1. draft the image\n2. sharpen the cut");
+  expect(skillCatalogSnapshot().version).not.toBe(first.version);
 });
 
 test("putSkill/getSkill round-trips, vector decodes back", () => {
   putSkill({ id: "s1", task: "write a haiku", masterPrompt: "draft then check 5-7-5", ts: 1 }, [0.1, 0.2, 0.3]);
-  expect(getSkill("s1")).toEqual({ id: "s1", task: "write a haiku", masterPrompt: "draft then check 5-7-5", explanation: "", ts: 1 });
+  setSkillMetadata("s1", "write a haiku", "Use for writing haiku with deliberate imagery, form, sound, compression, and a clear turn.");
+  expect(getSkill("s1")).toEqual({
+    id: "s1",
+    task: "write a haiku",
+    masterPrompt: "draft then check 5-7-5",
+    description: "Use for writing haiku with deliberate imagery, form, sound, compression, and a clear turn.",
+    explanation: "",
+    ts: 1,
+  });
   const v = skillVectors().find((s) => s.id === "s1")!;
   expect(v.vec[0]).toBeCloseTo(0.1, 5);
   expect(v.vec.length).toBe(3);
@@ -96,13 +117,14 @@ test("setMasterPrompt replaces the instructions; explanation is set only when pa
   expect(getSkill("s1")!.explanation).toBe("new why");
 });
 
-test("addRun keeps only the top N runs by quality", () => {
+test("addRun preserves complete history while topRuns returns the requested best subset", () => {
   putSkill({ id: "s1", task: "t", masterPrompt: "", ts: 1 }, [1, 0]);
-  for (let i = 0; i < 14; i++) addRun({ skillId: "s1", recipe: `r${i}`, quality: i / 14, review: "", ts: 100 + i }, 10);
-  const top = topRuns("s1", 20);
-  expect(top.length).toBe(10);                                  // pruned to 10
+  for (let i = 0; i < 14; i++) addRun({ skillId: "s1", recipe: `r${i}`, quality: i / 14, review: "", ts: 100 + i });
+  const top = topRuns("s1", 10);
+  expect(top.length).toBe(10);
   expect(top[0]!.quality).toBeCloseTo(13 / 14, 5);              // best first
   expect(top.every((r) => r.quality >= 4 / 14)).toBe(true);    // the four worst were dropped
+  expect((db().query("SELECT COUNT(*) count FROM skill_runs WHERE skill_id = 's1'").get() as { count: number }).count).toBe(14);
 });
 
 test("topRuns is scoped per skill", () => {
@@ -135,6 +157,7 @@ test("skillByLabel resolves the exact restore key, null when absent", () => {
 
 test("listSkills returns each skill with its runs in chronological order (for the viewer)", () => {
   putSkill({ id: "s1", task: "haiku", masterPrompt: "m", ts: 5 }, [1, 0]);
+  setSkillMetadata("s1", "haiku", "Use for writing haiku with deliberate imagery, form, sound, compression, and a clear turn.");
   addRun({ skillId: "s1", recipe: "r1", quality: 0.8, review: "", ts: 1 });
   addRun({ skillId: "s1", recipe: "r2", quality: 0.9, review: "", ts: 2 });
   const list = listSkills();

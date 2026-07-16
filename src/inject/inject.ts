@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { NormalizedEvent } from "./events.types";
 import { matchEvent } from "./matchers";
 import { prefsBlock } from "../core/prefs";
+import { formatSkillCatalog } from "../skill/catalog";
 
 // Prompts directory, resolved from this module's URL (repo-root/prompts/).
 const PROMPTS_DIR = new URL("../../prompts/", import.meta.url);
@@ -25,6 +26,8 @@ export async function inject(event: NormalizedEvent): Promise<string | null> {
   if (event.kind === "user_message") {
     const prefs = prefsBlock();
     if (prefs) content = content ? `${prefs}\n\n${content}` : prefs;
+    try { content = content ? `${content}\n\n${formatSkillCatalog()}` : formatSkillCatalog(); }
+    catch { /* skill storage is best-effort */ }
   }
   return content;
 }

@@ -27,6 +27,12 @@ export interface EnqueueReview {
   now?: number;
 }
 
+export interface ReviewSupervisor {
+  owner: string;
+  pid: number;
+  heartbeatTs: number;
+}
+
 const MAX_ATTEMPTS = () => Number(process.env.CAIRN_REVIEW_MAX_ATTEMPTS || "3");
 const STALE_MS = () => Number(process.env.CAIRN_REVIEW_STALE_MS || String(6 * 60 * 1000));
 export const reviewHeartbeatMs = (): number => Math.max(10, Math.floor(STALE_MS() / 3));
@@ -48,6 +54,12 @@ function openQueue(): Database {
     updated_ts INTEGER NOT NULL
   )`);
   d.run("CREATE INDEX IF NOT EXISTS review_jobs_status_created ON review_jobs (status, created_ts)");
+  d.run(`CREATE TABLE IF NOT EXISTS review_supervisor (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    owner TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    heartbeat_ts INTEGER NOT NULL
+  )`);
   return d;
 }
 
@@ -172,7 +184,68 @@ export function listReviewJobs(limit = 100): ReviewJob[] {
 
 export function clearReviewJobs(): void {
   const d = openQueue();
-  try { d.run("DELETE FROM review_jobs"); } finally { d.close(); }
+  try {
+    d.run("DELETE FROM review_jobs");
+    d.run("DELETE FROM review_supervisor");
+  } finally { d.close(); }
+}
+
+export function acquireReviewSupervisor(
+  owner: string,
+  pid: number,
+  now = Date.now(),
+  staleMs = Number(process.env.CAIRN_REVIEW_SUPERVISOR_STALE_MS || "30000")
+): boolean {
+  const d = openQueue();
+  try {
+    d.run("BEGIN IMMEDIATE");
+    const current = d.query("SELECT owner, heartbeat_ts AS heartbeatTs FROM review_supervisor WHERE singleton = 1")
+      .get() as { owner: string; heartbeatTs: number } | undefined;
+    if (current && current.owner !== owner && current.heartbeatTs >= now - staleMs) {
+      d.run("COMMIT");
+      return false;
+    }
+    d.query(`INSERT INTO review_supervisor (singleton, owner, pid, heartbeat_ts) VALUES (1, ?, ?, ?)
+      ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner, pid=excluded.pid, heartbeat_ts=excluded.heartbeat_ts`)
+      .run(owner, pid, now);
+    d.run("COMMIT");
+    return true;
+  } catch (error) {
+    try { d.run("ROLLBACK"); } catch { /* no transaction */ }
+    throw error;
+  } finally {
+    d.close();
+  }
+}
+
+export function heartbeatReviewSupervisor(owner: string, now = Date.now()): boolean {
+  const d = openQueue();
+  try {
+    return d.query("UPDATE review_supervisor SET heartbeat_ts = ? WHERE singleton = 1 AND owner = ?")
+      .run(now, owner).changes > 0;
+  } finally {
+    d.close();
+  }
+}
+
+export function releaseReviewSupervisor(owner: string): void {
+  const d = openQueue();
+  try { d.query("DELETE FROM review_supervisor WHERE singleton = 1 AND owner = ?").run(owner); }
+  finally { d.close(); }
+}
+
+export function reviewSupervisorActive(
+  now = Date.now(),
+  staleMs = Number(process.env.CAIRN_REVIEW_SUPERVISOR_STALE_MS || "30000")
+): boolean {
+  const d = openQueue();
+  try {
+    const row = d.query("SELECT heartbeat_ts AS heartbeatTs FROM review_supervisor WHERE singleton = 1")
+      .get() as { heartbeatTs: number } | undefined;
+    return Boolean(row && row.heartbeatTs >= now - staleMs);
+  } finally {
+    d.close();
+  }
 }
 
 export function transcriptReviewKey(transcriptPath: string, skillId: string, sessionId = ""): string {
@@ -190,11 +263,29 @@ const isReviewTool = (name: string): boolean => name.endsWith("skill_review") ||
 export function latestCopilotReview(
   transcriptPath: string,
   sessionId: string,
-  options: { skillId?: string; agentId?: string; subagentOnly?: boolean } = {}
+  options: { skillId?: string; agentId?: string; agentName?: string; subagentOnly?: boolean } = {}
 ): { id: string; skillId: string } | null {
+  return copilotReviews(transcriptPath, sessionId, options)[0] ?? null;
+}
+
+export function copilotReviews(
+  transcriptPath: string,
+  sessionId: string,
+  options: { skillId?: string; agentId?: string; agentName?: string; subagentOnly?: boolean } = {}
+): { id: string; skillId: string }[] {
   let lines: string[];
-  try { lines = readFileSync(transcriptPath, "utf8").split("\n").filter(Boolean); } catch { return null; }
+  try { lines = readFileSync(transcriptPath, "utf8").split("\n").filter(Boolean); } catch { return []; }
+  const agentNames = new Map<string, string>();
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as { type?: unknown; agentId?: unknown; data?: { agentName?: unknown } };
+      const agentId = str(event.agentId);
+      const agentName = str(event.data?.agentName);
+      if (event.type === "subagent.started" && agentId && agentName) agentNames.set(agentId, agentName);
+    } catch { /* skip malformed transcript rows */ }
+  }
   const completed = new Set<string>();
+  const reviews: { id: string; skillId: string }[] = [];
   for (let i = lines.length - 1; i >= 0; i--) {
     let event: {
       type?: unknown;
@@ -212,6 +303,7 @@ export function latestCopilotReview(
     if (!toolCallId || !completed.has(toolCallId)) continue;
     const agentId = str(event.agentId);
     if (options.agentId && agentId !== options.agentId) continue;
+    if (options.agentName && agentNames.get(agentId) !== options.agentName) continue;
     if (options.subagentOnly && !agentId) continue;
     let args: { id?: unknown } = {};
     try {
@@ -221,7 +313,30 @@ export function latestCopilotReview(
     const skillId = str(args.id);
     if (!skillId || (options.skillId && skillId !== options.skillId)) continue;
     const eventId = typeof event.timestamp === "number" ? event.timestamp : i;
-    return { id: `${sessionId}:${agentId || "main"}:${eventId}:${i}:${skillId}`, skillId };
+    reviews.push({ id: `${sessionId}:${agentId || "main"}:${eventId}:${i}:${skillId}`, skillId });
   }
-  return null;
+  return reviews;
+}
+
+export function latestCopilotAgentId(transcriptPath: string, agentName: string): string {
+  if (!transcriptPath || !agentName.trim()) return "";
+  let lines: string[];
+  try { lines = readFileSync(transcriptPath, "utf8").split("\n").filter(Boolean); } catch { return ""; }
+  const agentNames = new Map<string, string>();
+  const events: { agentId: string }[] = [];
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as { type?: unknown; agentId?: unknown; data?: { agentName?: unknown } };
+      const agentId = str(event.agentId);
+      if (!agentId) continue;
+      const startedName = str(event.data?.agentName);
+      if (event.type === "subagent.started" && startedName) agentNames.set(agentId, startedName);
+      events.push({ agentId });
+    } catch { /* skip malformed transcript rows */ }
+  }
+  for (let index = events.length - 1; index >= 0; index--) {
+    const agentId = events[index]!.agentId;
+    if (agentNames.get(agentId) === agentName) return agentId;
+  }
+  return "";
 }

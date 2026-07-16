@@ -5,9 +5,7 @@ import type { Skill } from "./types";
 
 export { normalizeLabel };
 
-// Rebuild the skill's rich retrieval vector from its label + master prompt, so retrieval (the injection path)
-// matches the domain vocabulary the master introduces. Called when the reviewer assembles a master. The vector
-// is used ONLY for advisory injection retrieval, never to decide a skill's identity. Best-effort.
+// Rebuild the rich vector used by the human-facing skill viewer search. Agent routing uses the explicit catalog.
 export async function reindexSkill(id: string, task: string, master: string): Promise<void> {
   try { setRichVector(id, await embed(`${task}. ${master}`)); } catch { /* embedder down: keep the label vector */ }
 }

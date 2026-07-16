@@ -174,6 +174,10 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  if (!dryRun) {
+    const { skillCatalog } = await import("./skill/store");
+    skillCatalog();
+  }
 
   // ── Phase 2: hooks ────────────────────────────────────────────────────────────────────────
   line(c.dim("\n2/7  Claude Code prompt-injection hooks"));
@@ -224,8 +228,8 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
     );
     const chook = await installCopilotHook(dryRun);
     step(
-      chook === "added" ? `${sym.ok} Installed the injection hooks ${c.dim("(sessionStart, userPromptSubmitted, preToolUse, postToolUse, agentStop, subagentStart)")}.`
-        : chook === "would-add" ? `${sym.dot} Would install the injection hooks (sessionStart, userPromptSubmitted, preToolUse, postToolUse, agentStop, subagentStart).`
+      chook === "added" ? `${sym.ok} Installed the injection hooks ${c.dim("(userPromptSubmitted, preToolUse, postToolUse, agentStop, subagentStart, subagentStop)")}.`
+        : chook === "would-add" ? `${sym.dot} Would install the injection hooks (userPromptSubmitted, preToolUse, postToolUse, agentStop, subagentStart, subagentStop).`
           : `${sym.dot} Injection hooks already installed. No change.`
     );
   }

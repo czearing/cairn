@@ -2,17 +2,22 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { learnFromTranscript } from "../src/skill/learn";
+import { processReviewJob } from "../src/skill/review-worker";
 import {
   claimReviewJobs,
   clearReviewJobs,
   completeReviewJob,
+  acquireReviewSupervisor,
   enqueueReview,
   failReviewJob,
   heartbeatReviewJob,
+  heartbeatReviewSupervisor,
   latestCopilotReview,
   listReviewJobs,
+  releaseReviewSupervisor,
+  reviewSupervisorActive,
 } from "../src/skill/review-queue";
 
 beforeEach(() => {
@@ -29,8 +34,14 @@ afterEach(() => {
 
 test("learnFromTranscript accepts a review even when worker capacity is zero", () => {
   const path = join(tmpdir(), `cairn-review-${randomUUID()}.jsonl`);
+  writeFileSync(path, "{}");
   expect(learnFromTranscript(path, "haiku", { id: "job-cap", backend: "copilot" })).toBe(true);
-  expect(listReviewJobs()[0]!.status).toBe("pending");
+  const job = listReviewJobs()[0]!;
+  expect(job.status).toBe("pending");
+  expect(job.transcriptPath).not.toBe(path);
+  expect(existsSync(job.transcriptPath)).toBe(true);
+  rmSync(job.transcriptPath, { force: true });
+  rmSync(path, { force: true });
 });
 
 test("learnFromTranscript is a no-op inside a worker, with no transcript path, and with no label", () => {
@@ -102,4 +113,36 @@ test("a failed skill_review call is not accepted from the transcript", () => {
     }),
   ].join("\n"));
   expect(latestCopilotReview(transcriptPath, "session-failed")).toBeNull();
+});
+
+test("only one warm review supervisor owns the queue lease", () => {
+  const now = Date.now();
+  expect(acquireReviewSupervisor("owner-a", 1, now, 1000)).toBe(true);
+  expect(reviewSupervisorActive(now, 1000)).toBe(true);
+  expect(acquireReviewSupervisor("owner-b", 2, now + 500, 1000)).toBe(false);
+  expect(heartbeatReviewSupervisor("owner-a", now + 700)).toBe(true);
+  expect(acquireReviewSupervisor("owner-b", 2, now + 1200, 1000)).toBe(false);
+  releaseReviewSupervisor("owner-a");
+  expect(acquireReviewSupervisor("owner-b", 2, now + 1201, 1000)).toBe(true);
+});
+
+test("failed reviews retain their immutable snapshot for diagnosis", async () => {
+  const path = join(tmpdir(), `cairn-failed-snapshot-${randomUUID()}.jsonl`);
+  writeFileSync(path, "{}");
+  enqueueReview({ id: "failed-snapshot", skillId: "missing-skill", transcriptPath: path, backend: "copilot" });
+  const job = claimReviewJobs(1)[0]!;
+  process.env.CAIRN_REVIEW_SNAPSHOT = "1";
+  try {
+    expect(await processReviewJob(job)).toBe(false);
+    expect(existsSync(path)).toBe(true);
+    expect(listReviewJobs()[0]).toEqual(expect.objectContaining({
+      id: "failed-snapshot",
+      status: "pending",
+      attempts: 1,
+      error: "transcript contained no reviewable deliverable",
+    }));
+  } finally {
+    delete process.env.CAIRN_REVIEW_SNAPSHOT;
+    rmSync(path, { force: true });
+  }
 });

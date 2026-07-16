@@ -1,28 +1,41 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { skillResultId } from "./tool-result";
+import { lifecycleScope, readLifecycle, resetLifecycle, updateLifecycle } from "./lifecycle";
 
-// Per-turn latch for the "search your skills first" reminder. Hooks are separate short-lived processes, so the
-// only shared state is on disk: one tiny JSON file per session. resetSkillTurn clears it at the start of each
-// user turn; noteSkillSearched records that the agent called skill_search; claimSkillReminder arms the SINGLE
-// reminder the first time the agent acts without having searched. Best-effort, never throws.
-
-const DIR = () => process.env.CAIRN_SKILL_TURN_DIR || join(homedir(), ".cairn", "skill-turn");
-const fileFor = (session: string) => join(DIR(), `${session.split("/").join("_").split("\\").join("_") || "default"}.json`);
-
-interface TurnState { searched: boolean; reminded: boolean }
-function readState(session: string): TurnState {
-  try { return JSON.parse(readFileSync(fileFor(session), "utf8")) as TurnState; } catch { return { searched: false, reminded: false }; }
-}
-function writeState(session: string, s: TurnState): void {
-  try { mkdirSync(DIR(), { recursive: true }); writeFileSync(fileFor(session), JSON.stringify(s)); } catch { /* best-effort */ }
-}
+interface TurnState { selected: boolean; pendingReviewIds: string[]; reminded: boolean }
+const scope = (session: string) => lifecycleScope("claude", session);
 
 // A new user turn: clear the latch so the one reminder can fire again this turn.
-export function resetSkillTurn(session: string): void { writeState(session, { searched: false, reminded: false }); }
+export function resetSkillTurn(session: string): void { resetLifecycle(scope(session)); }
 
-// The agent called skill_search this turn: record it so the reminder never fires.
-export function noteSkillSearched(session: string): void { const s = readState(session); if (!s.searched) writeState(session, { ...s, searched: true }); }
+export function noteSkillSelection(session: string, tool: string, input: Record<string, unknown>, output?: unknown): void {
+  let ids: string[] = [];
+  if (baseName(tool) === "skill_select" && Array.isArray(input.ids)) {
+    ids = input.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+  } else if (baseName(tool) === "skill_create") {
+    ids = [skillResultId(output) || "__created__"];
+  } else if (baseName(tool) === "skill_search") {
+    ids = ["__legacy__"];
+  }
+  updateLifecycle(scope(session), (state) => ({
+    ...state,
+    skillUsed: true,
+    pendingReviewIds: [...new Set([...state.pendingReviewIds, ...ids])],
+  }));
+}
+
+export function noteSkillReviewed(session: string, id: string): void {
+  updateLifecycle(scope(session), (state) => ({
+    ...state,
+    pendingReviewIds: state.pendingReviewIds.filter((pendingId) =>
+      pendingId !== id && pendingId !== "__created__" && pendingId !== "__legacy__"
+    ),
+  }));
+}
+
+export function skillTurnState(session: string): TurnState {
+  const state = readLifecycle(scope(session));
+  return { selected: state.skillUsed, pendingReviewIds: state.pendingReviewIds, reminded: state.reminded };
+}
 
 // Tools that DO or CHANGE something, as opposed to reading/searching or brain bookkeeping. The reminder fires
 // before the FIRST of these in a turn. This is a category of tool (does it act on the world), not a content
@@ -30,14 +43,19 @@ export function noteSkillSearched(session: string): void { const s = readState(s
 const ACTION_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "Task"]);
 const baseName = (tool: string) => (tool.includes("__") ? tool.slice(tool.lastIndexOf("__") + 2) : tool);
 export function isActionTool(tool: string): boolean { return ACTION_TOOLS.has(baseName(tool)); }
-export function isSkillSearch(tool: string): boolean { return baseName(tool) === "skill_search"; }
+export function isSkillSelection(tool: string): boolean {
+  return ["skill_select", "skill_create", "skill_search"].includes(baseName(tool));
+}
 export function isSkillReview(tool: string): boolean { return baseName(tool) === "skill_review"; }
 
 // True (and arms the latch so it never returns true again this turn) only the first time the agent is about to
-// act without having searched its skills. Returns false once it has searched, or after the one reminder.
+// act without selecting or creating a skill. Returns false once prepared, or after the one reminder.
 export function claimSkillReminder(session: string): boolean {
-  const s = readState(session);
-  if (s.searched || s.reminded) return false;
-  writeState(session, { ...s, reminded: true });
-  return true;
+  let claimed = false;
+  updateLifecycle(scope(session), (state) => {
+    if (state.skillUsed || state.reminded) return state;
+    claimed = true;
+    return { ...state, reminded: true };
+  });
+  return claimed;
 }

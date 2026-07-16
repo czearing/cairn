@@ -13,24 +13,40 @@ import { isSystemEnvelope } from "./noise";
 // Subagent messages/tools are interleaved in this same log (agentId-tagged), so a subagent's deliverable is
 // captured too. Host system-envelope user messages (notifications, reminders) never count as a human prompt.
 
-interface Event { type: string; role: "user" | "assistant" | "other"; text: string; tool?: string; toolArgs?: string; agent?: string; marker?: string; thinking?: boolean; ts: number }
+interface Event {
+  type: string;
+  role: "user" | "assistant" | "other";
+  text: string;
+  tool?: string;
+  toolArgs?: unknown;
+  agent?: string;
+  marker?: string;
+  thinking?: boolean;
+  systemTurn?: boolean;
+  ts: number;
+}
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 const clock = (ts: number): string => (ts > 0 ? new Date(ts).toISOString().slice(11, 19) : "");
 const isReviewTool = (name: string): boolean => name.endsWith("skill_review") || name.includes("skill_review");
 // A tool's args arrive as a JSON string or object; pull a short human hint (the query/label) for the loaded list.
 function argHint(raw: unknown): string {
-  let o: { task?: unknown; label?: unknown; query?: unknown; what?: unknown } = {};
+  let o: { task?: unknown; title?: unknown; label?: unknown; query?: unknown; what?: unknown; id?: unknown } = {};
   try { o = typeof raw === "string" ? JSON.parse(raw) : (raw ?? {}) as typeof o; } catch { return ""; }
-  return str(o.label) || str(o.task) || str(o.query) || str(o.what);
+  return str(o.title) || str(o.label) || str(o.task) || str(o.query) || str(o.what) || str(o.id);
 }
 
-export function extractRunCopilot(path: string): RunInput | null {
+export function extractRunCopilot(
+  path: string,
+  targetSkillId = "",
+  options: { latestTurn?: boolean } = {}
+): RunInput | null {
   let lines: string[];
   try { lines = readFileSync(path, "utf8").split("\n").filter(Boolean); } catch { return null; }
 
   const agentName = new Map<string, string>(); // agentId -> a short human name, learned from subagent.started
   const events: Event[] = [];
+  let systemTurn = false;
   for (const line of lines) {
     let o: { type?: string; agentId?: unknown; timestamp?: unknown; data?: { content?: unknown; reasoningText?: unknown; toolName?: unknown; arguments?: unknown; agentName?: unknown; agentDisplayName?: unknown } };
     try { o = JSON.parse(line); } catch { continue; }
@@ -48,26 +64,62 @@ export function extractRunCopilot(path: string): RunInput | null {
       const name = (agentId && agentName.get(agentId)) || str(data.agentDisplayName) || str(data.agentName) || "subagent";
       events.push({ type, role: "other", text: "", marker: `↳ subagent ${name} returned`, ts });
     } else if (type === "user.message") {
-      const t = str(data.content); if (t) events.push({ type, role: "user", text: t, ts });
+      const t = str(data.content);
+      if (t) {
+        systemTurn = isSystemEnvelope(t);
+        events.push({ type, role: "user", text: t, systemTurn, ts });
+      }
     } else if (type === "assistant.message") {
       // The model's THINKING (reasoningText) comes first, then its visible message (content). Capture both,
       // in order, so the reviewer sees how the agent reasoned — not just the final line.
-      const reasoning = str(data.reasoningText); if (reasoning) events.push({ type, role: "assistant", text: reasoning, thinking: true, agent, ts });
-      const t = str(data.content); if (t) events.push({ type, role: "assistant", text: t, agent, ts });
+      const reasoning = str(data.reasoningText); if (reasoning) events.push({ type, role: "assistant", text: reasoning, thinking: true, systemTurn, agent, ts });
+      const t = str(data.content); if (t) events.push({ type, role: "assistant", text: t, systemTurn, agent, ts });
     } else if (type === "tool.execution_start") {
-      const n = str(data.toolName); if (n) events.push({ type, role: "assistant", text: "", tool: n, toolArgs: str(data.arguments), agent, ts });
+      const n = str(data.toolName); if (n) events.push({ type, role: "assistant", text: "", tool: n, toolArgs: data.arguments, systemTurn, agent, ts });
     }
   }
   if (events.length === 0) return null;
 
-  // The DETAIL window is the current review cycle: everything since the PREVIOUS skill_review call. The LAST
-  // skill_review in the log is the one that triggered this review, so we cut after the one BEFORE it; with only
-  // one (the first review ever) we take the whole session.
   const reviewIdxs = events.map((e, i) => (e.tool && isReviewTool(e.tool) ? i : -1)).filter((i) => i >= 0);
-  const detailStart = reviewIdxs.length >= 2 ? reviewIdxs[reviewIdxs.length - 2]! + 1 : 0;
-  const cycle = events.slice(detailStart);
-
   const genuineUser = (e: Event) => e.role === "user" && e.text && !isSystemEnvelope(e.text);
+  if (options.latestTurn) {
+    const lastUser = events.findLastIndex(genuineUser);
+    if (lastUser < 0) return null;
+    let start = lastUser;
+    while (start > 0 && events[start - 1]!.role === "user" && genuineUser(events[start - 1]!)) start--;
+    const cycle = events.slice(start).filter((event) => !event.systemTurn);
+    const request = cycle.filter(genuineUser).map((event) => event.text).join("\n").trim();
+    const output = cycle.filter((event) =>
+      event.role === "assistant" && event.text && !event.thinking
+    ).map((event) => event.text).join("\n\n").trim();
+    if (!request || !output) return null;
+    return { request, output, transcript: transcriptRows(cycle) };
+  }
+  const reviewSkillId = (event: Event): string => {
+    if (!event.toolArgs) return "";
+    try {
+      const args = typeof event.toolArgs === "string" ? JSON.parse(event.toolArgs) as { id?: unknown } : event.toolArgs as { id?: unknown };
+      return str(args.id);
+    } catch { return ""; }
+  };
+  const targetReview = targetSkillId
+    ? reviewIdxs.filter((index) => reviewSkillId(events[index]!) === targetSkillId).at(-1)
+    : reviewIdxs.at(-1);
+  if (targetReview === undefined && targetSkillId) return null;
+  if (targetReview === undefined) {
+    const request = events.filter(genuineUser).map((event) => event.text).join("\n").trim();
+    const output = events.filter((event) => event.role === "assistant" && event.text && !event.thinking).map((event) => event.text).join("\n\n").trim();
+    if (!request || !output) return null;
+    const toolName = (tool: string) => (tool.includes("__") ? tool.slice(tool.lastIndexOf("__") + 2) : tool.replace(/^cairn-/, ""));
+    return { request, output, transcript: transcriptRows(events) };
+  }
+  let detailStart = 0;
+  for (const previous of reviewIdxs.filter((index) => index < targetReview).reverse()) {
+    if (events.slice(previous + 1, targetReview).some(genuineUser)) { detailStart = previous + 1; break; }
+  }
+  const nextUser = events.findIndex((event, index) => index > targetReview && genuineUser(event));
+  const cycle = events.slice(detailStart, nextUser >= 0 ? nextUser : events.length);
+
   const request = cycle.filter(genuineUser).map((e) => e.text).join("\n").trim();
   // Deliverable = the agent's VISIBLE messages this cycle (main + subagent). Thinking is process, not the
   // deliverable, so it is excluded here (it still appears in the transcript below).
@@ -76,16 +128,22 @@ export function extractRunCopilot(path: string): RunInput | null {
 
   // ONE chronological transcript of the review cycle: user messages, the agent's thinking, its messages, and
   // its tool calls (skill label/query inline). One section, not dissected — simpler and clearer for the reviewer.
-  const toolName = (t: string) => (t.includes("__") ? t.slice(t.lastIndexOf("__") + 2) : t.replace(/^cairn-/, ""));
-  const rows = cycle.map((e) => {
-    const time = clock(e.ts) ? `[${clock(e.ts)}] ` : "";
-    if (e.marker) return `${time}${e.marker}`;
-    if (e.tool) { const hint = argHint(e.toolArgs); const sub = e.agent ? `SUBAGENT:${e.agent} ` : ""; return `${time}[${sub}TOOL] ${toolName(e.tool)}${hint ? ` "${hint}"` : ""}`; }
-    const base = e.agent ? `SUBAGENT:${e.agent}` : e.role === "user" ? "USER" : "ASSISTANT";
-    const tag = e.thinking ? `${base} THINKING` : base;
-    return `${time}[${tag}] ${e.text}`;
-  });
-  const transcript = `TRANSCRIPT (oldest first):\n${rows.join("\n")}`;
+  return { request, transcript: transcriptRows(cycle), output };
+}
 
-  return { request, transcript, output };
+function transcriptRows(events: Event[]): string {
+  const toolName = (tool: string) =>
+    tool.includes("__") ? tool.slice(tool.lastIndexOf("__") + 2) : tool.replace(/^cairn-/, "");
+  const rows = events.map((event) => {
+    const time = clock(event.ts) ? `[${clock(event.ts)}] ` : "";
+    if (event.marker) return `${time}${event.marker}`;
+    if (event.tool) {
+      const hint = argHint(event.toolArgs);
+      const sub = event.agent ? `SUBAGENT:${event.agent} ` : "";
+      return `${time}[${sub}TOOL] ${toolName(event.tool)}${hint ? ` "${hint}"` : ""}`;
+    }
+    const base = event.agent ? `SUBAGENT:${event.agent}` : event.role === "user" ? "USER" : "ASSISTANT";
+    return `${time}[${event.thinking ? `${base} THINKING` : base}] ${event.text}`;
+  });
+  return `TRANSCRIPT (oldest first):\n${rows.join("\n")}`;
 }

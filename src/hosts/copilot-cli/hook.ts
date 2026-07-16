@@ -421,7 +421,12 @@ async function main(): Promise<void> {
     const file = process.env.AGENT_HARNESS === "1"
       ? harnessStopDecision({ skillUsed: st.skillUsed, pendingReviewCount: st.pendingReviewIds.length, stopNudges: st.stopNudges }).file
       : stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, pendingReviewCount: st.pendingReviewIds.length, stopNudges: st.stopNudges }).file;
-    const text = file ? internalContext(await promptText(file)) : "";
+    const reminder = file ? await promptText(file) : "";
+    const exactPendingIds = st.pendingReviewIds.filter((id) => id && !id.startsWith("__"));
+    const exactReviewReminder = file === "skill-review.md" && exactPendingIds.length
+      ? `${reminder}\nPending exact skill ids: ${exactPendingIds.join(", ")}.\nCall skill_review once for every id in that list.`
+      : reminder;
+    const text = exactReviewReminder ? internalContext(exactReviewReminder) : "";
     if (text) {
       updateLifecycle(stateId, () => ({ ...st, stopNudges: st.stopNudges + 1, stopBlocked: true }));
       emit({ decision: "block", reason: text }); // nudge the agent to review before ending

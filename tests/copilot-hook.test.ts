@@ -297,12 +297,41 @@ test("skill_select requires one review declaration per selected skill", () => {
 
   expect(invoke({ sessionId: "session-multi", toolName: "cairn-skill_select", toolArgs: { ids: ["skill-a", "skill-b"] } }).status).toBe(0);
   expect(lifecycleState(dbPath, "copilot:session-multi").pendingReviewIds).toEqual(["skill-a", "skill-b"]);
+  expect(invoke({ sessionId: "session-multi", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
+  const reminder = spawnSync(process.execPath, [hook, "agent-stop"], {
+    input: JSON.stringify({ sessionId: "session-multi" }),
+    env,
+  }).stdout.toString();
+  expect(reminder).toContain("Pending exact skill ids: skill-a, skill-b");
   expect(invoke({ sessionId: "session-multi", timestamp: 20, toolName: "cairn-skill_review", toolArgs: { id: "skill-a" } }).status).toBe(0);
   expect(lifecycleState(dbPath, "copilot:session-multi").pendingReviewIds).toEqual(["skill-b"]);
   expect(invoke({ sessionId: "session-multi", timestamp: 21, toolName: "cairn-skill_review", toolArgs: { id: "skill-b" } }).status).toBe(0);
   const state = lifecycleState(dbPath, "copilot:session-multi");
   expect(state.pendingReviewIds).toEqual([]);
   expect(state.pendingReviews).toHaveLength(2);
+});
+
+test("review reminders never expose legacy placeholder ids as exact targets", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-legacy-reminder-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  expect(invoke("post-tool", {
+    sessionId: "legacy-reminder",
+    toolName: "cairn-skill_search",
+    toolArgs: { task: "legacy" },
+  }).status).toBe(0);
+  expect(invoke("post-tool", {
+    sessionId: "legacy-reminder",
+    toolName: "cairn-brain_search",
+    toolArgs: {},
+  }).status).toBe(0);
+  const reminder = invoke("agent-stop", { sessionId: "legacy-reminder" }).stdout.toString();
+  expect(reminder).toContain("skill_review");
+  expect(reminder).not.toContain("__legacy__");
+  expect(reminder).not.toContain("Pending exact skill ids:");
 });
 
 test("postToolUse records the exact created skill id from the tool result", () => {

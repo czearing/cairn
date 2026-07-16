@@ -370,6 +370,63 @@ test("successful skill_review is declared at postToolUse and queued after the fi
   expect(reviewJobs(dbPath)).toEqual([{ skill_id: "skill-2", status: "pending" }]);
 });
 
+test("a premature skill_review waits for the visible deliverable before queueing", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-premature-review-${id}.db`);
+  const home = join(tmpdir(), `cairn-premature-review-home-${id}`);
+  const transcriptPath = join(home, ".copilot", "session-state", "premature", "events.jsonl");
+  mkdirSync(join(home, ".copilot", "session-state", "premature"), { recursive: true });
+  const reviewEvents = [
+    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Complete the assigned task." } }),
+    JSON.stringify({ type: "tool.execution_start", timestamp: 2, data: {
+      toolCallId: "premature-review",
+      toolName: "cairn-skill_review",
+      arguments: { id: "skill-premature" },
+    } }),
+    JSON.stringify({ type: "tool.execution_complete", timestamp: 3, data: {
+      toolCallId: "premature-review",
+      success: true,
+    } }),
+  ];
+  writeFileSync(transcriptPath, reviewEvents.join("\n"));
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    USERPROFILE: home,
+    HOME: home,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_MAX_LEARNERS: "0",
+    CAIRN_SKILLS: "1",
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  expect(invoke("post-tool", {
+    sessionId: "premature",
+    toolName: "cairn-brain_search",
+    toolArgs: {},
+  }).status).toBe(0);
+  expect(invoke("post-tool", {
+    sessionId: "premature",
+    toolName: "cairn-skill_select",
+    toolArgs: { ids: ["skill-premature"] },
+  }).status).toBe(0);
+  expect(invoke("post-tool", {
+    sessionId: "premature",
+    timestamp: 2,
+    toolName: "cairn-skill_review",
+    toolArgs: { id: "skill-premature" },
+  }).status).toBe(0);
+  expect(invoke("agent-stop", { sessionId: "premature", transcriptPath }).stdout.toString())
+    .toContain("before a visible deliverable existed");
+  expect(reviewJobs(dbPath)).toEqual([]);
+  writeFileSync(transcriptPath, [
+    ...reviewEvents,
+    JSON.stringify({ type: "assistant.message", timestamp: 4, data: { content: "Finished result." } }),
+  ].join("\n"));
+  expect(invoke("agent-stop", { sessionId: "premature", transcriptPath }).stdout.toString()).toBe("{}");
+  expect(reviewJobs(dbPath)).toEqual([{ skill_id: "skill-premature", status: "pending" }]);
+});
+
 test("a failed skill_review does not clear the pending lifecycle obligation", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-failed-review-state-${id}.db`);
@@ -481,6 +538,16 @@ test("a queued mid-turn human message does not reset completed skill search", ()
   writeFileSync(transcriptPath, [
     JSON.stringify({ type: "user.message", id: "user-1", data: { content: "inspect skills" } }),
     JSON.stringify({ type: "user.message", id: "user-2", data: { content: "and test it" } }),
+    JSON.stringify({ type: "tool.execution_start", timestamp: 30, data: {
+      toolCallId: "queued-review",
+      toolName: "cairn-skill_review",
+      arguments: { id: "skill-queued" },
+    } }),
+    JSON.stringify({ type: "tool.execution_complete", timestamp: 31, data: {
+      toolCallId: "queued-review",
+      success: true,
+    } }),
+    JSON.stringify({ type: "assistant.message", timestamp: 32, data: { content: "Inspection complete." } }),
   ].join("\n"));
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
   const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_SKILLS: "1" };

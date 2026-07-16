@@ -428,6 +428,23 @@ async function main(): Promise<void> {
       return;
     }
     for (const review of st.pendingReviews) {
+      const { extractRunCopilot } = await import("../../skill/transcript-copilot");
+      if (!extractRunCopilot(path, review.skillId)) {
+        if (st.reviewNudges < STOP_CAP) {
+          updateLifecycle(stateId, () => ({
+            ...st,
+            reviewNudges: st.reviewNudges + 1,
+            stopBlocked: true,
+          }));
+          emit({
+            decision: "block",
+            reason: internalContext("The skill review was declared before a visible deliverable existed. Deliver the finished result now; the existing review declaration will be queued after it is present."),
+          });
+          return;
+        }
+        recordMissedReviews(stateId, st.turnSeq, [review.skillId], path);
+        continue;
+      }
       const accepted = await queueLatestReview(path, sessionId, {
         skillId: review.skillId,
         eventId: review.eventId,

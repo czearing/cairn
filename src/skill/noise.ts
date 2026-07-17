@@ -12,6 +12,7 @@
 const ENVELOPE_PREFIXES = [
   "<cairn-internal",
   "<task-notification",
+  "<system_notification",
   "<system_reminder",
   "<system-reminder",
   "<skill-context",

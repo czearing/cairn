@@ -280,7 +280,22 @@ test("extractRunCopilot can capture the latest turn without a skill_review marke
   ].join("\n"));
   const run = extractRunCopilot(path, "", { latestTurn: true })!;
   expect(run.request).toBe("Current task");
-  expect(run.output).toBe("Current deliverable");
+  expect(run.output).toContain("Current deliverable");
+  expect(run.output).toContain("Reminder response");
   expect(run.transcript).not.toContain("Earlier answer");
-  expect(run.transcript).not.toContain("Reminder response");
+  expect(run.transcript).not.toContain("cairn-internal");
+});
+
+test("extractRunCopilot keeps a final deliverable written after a system continuation", () => {
+  const path = join(tmpdir(), `cairn-copilot-continuation-${randomUUID()}.jsonl`);
+  writeFileSync(path, [
+    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Complete both fixes." } }),
+    JSON.stringify({ type: "assistant.message", timestamp: 2, data: { content: "Running the final checks." } }),
+    JSON.stringify({ type: "user.message", timestamp: 3, data: { content: "<system_notification>Shell completed.</system_notification>" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: 4, data: { content: "Both fixes are complete and live." } }),
+  ].join("\n"));
+  const run = extractRunCopilot(path, "", { latestTurn: true })!;
+  expect(run.request).toBe("Complete both fixes.");
+  expect(run.output).toContain("Both fixes are complete and live.");
+  expect(run.transcript).not.toContain("system_notification");
 });

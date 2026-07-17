@@ -87,7 +87,12 @@ export function extractRunCopilot(
     if (lastUser < 0) return null;
     let start = lastUser;
     while (start > 0 && events[start - 1]!.role === "user" && genuineUser(events[start - 1]!)) start--;
-    const cycle = events.slice(start).filter((event) => !event.systemTurn);
+    // System-envelope user messages are continuations of the same human turn, not boundaries. Exclude the
+    // envelope itself, but keep assistant output after it: shell notifications and stop reminders can arrive
+    // before the final deliverable, and dropping every following assistant message loses that deliverable.
+    const cycle = events.slice(start).filter((event) =>
+      !(event.role === "user" && isSystemEnvelope(event.text))
+    );
     const request = cycle.filter(genuineUser).map((event) => event.text).join("\n").trim();
     const output = cycle.filter((event) =>
       event.role === "assistant" && event.text && !event.thinking

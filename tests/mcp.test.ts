@@ -1,12 +1,14 @@
 // End-to-end: spawn the real server over stdio and drive it with an MCP client, exactly how
 // an agent talks to it. Proves the three tools work against the real core.
 import { test, expect, beforeAll, afterAll } from "bun:test";
+import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { getLoadablePath } from "sqlite-vec";
 
 const TEST_DB = join(tmpdir(), `cairn-mcp-${randomUUID()}.db`);
 let client: Client;
@@ -39,6 +41,32 @@ test("brain_create returns a neuron with an id and a viewer url", async () => {
   expect(n.id).toBeTruthy();
   expect(n.answer).toBe("");
   expect(n.url).toContain(`/node/${n.id}`);
+});
+
+test("brain_create works first in a fresh process when the database already contains a vec0 index", async () => {
+  const path = join(tmpdir(), `cairn-mcp-existing-vec-${randomUUID()}.db`);
+  const database = new Database(path);
+  database.loadExtension(getLoadablePath());
+  database.run("CREATE VIRTUAL TABLE existing_vectors USING vec0(id TEXT PRIMARY KEY, embedding float[3])");
+  database.close();
+
+  const transport = new StdioClientTransport({
+    command: "bun",
+    args: ["src/mcp/server.ts"],
+    env: { ...process.env, CAIRN_DB_PATH: path, CAIRN_SKILLS: "1" },
+  });
+  const freshClient = new Client({ name: "cairn-existing-vec-test", version: "1.0.0" });
+  await freshClient.connect(transport);
+  try {
+    const created = parse(await freshClient.callTool({
+      name: "brain_create",
+      arguments: { text: "How does a cold MCP process create its first node?" },
+    }) as { content: { text: string }[] });
+    expect(created.id).toBeTruthy();
+  } finally {
+    await freshClient.close();
+    rmSync(path, { force: true });
+  }
 });
 
 test("brain_create rejects empty text", async () => {

@@ -2,6 +2,7 @@ import { Database as BunDatabase } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { getLoadablePath } from "sqlite-vec";
 import { config } from "./config";
 import { ensureEngineSchema } from "./schema";
 import { startBackgroundSync } from "./sync";
@@ -164,6 +165,7 @@ function openBun(): Db {
   assertNotRealBrainInTests(config.dbPath);
   mkdirSync(dirname(config.dbPath), { recursive: true });
   const d = new BunDatabase(config.dbPath);
+  d.loadExtension(getLoadablePath());
   configureConnection(d, true);
   retry(() => d.transaction(() => ensureSchema(
     (sql) => d.query(sql) as unknown as Stmt,
@@ -193,6 +195,7 @@ function openReader(): Db {
     return { query: () => empty, run: () => {}, transaction: (fn) => fn(), loadExtension: () => {} };
   }
   const d = new BunDatabase(path, { readonly: true });
+  d.loadExtension(getLoadablePath());
   try { configureConnection(d, false); } catch { /* a readonly handle may reject a tuning pragma */ }
   return {
     query: (sql) => d.query(sql) as unknown as Stmt,

@@ -603,6 +603,35 @@ test("a parent-delegated internal prompt satisfies the subagent-local stop gate"
   expect(invoke("agent-stop", { sessionId: "subagent-session" }).stdout.toString()).toBe("{}");
 });
 
+test("a transcriptless tool-call subagent leaves terminal review to its parent", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-tool-call-subagent-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const sessionId = `call_${id}`;
+
+  const start = invoke("user-prompt", { sessionId, prompt: "Review this diff." });
+  expect(start.stdout.toString()).toContain("parent owns skill selection and review");
+  expect(start.stdout.toString()).not.toContain("Available skill catalog");
+  expect(invoke("post-tool", {
+    sessionId,
+    toolName: "cairn-skill_select",
+    toolArgs: { ids: ["skill-review", "skill-test"] },
+  }).status).toBe(0);
+  expect(invoke("agent-stop", { sessionId, transcriptPath: "" }).stdout.toString()).toBe("{}");
+
+  const database = new Database(dbPath);
+  const missedTable = database.query("SELECT 1 present FROM sqlite_master WHERE type='table' AND name='missed_skill_reviews'").get();
+  expect(missedTable ? database.query("SELECT COUNT(*) count FROM missed_skill_reviews").get() : { count: 0 }).toEqual({ count: 0 });
+  const state = database.query("SELECT pending_review_ids pendingIds, pending_reviews pending FROM lifecycle_turns WHERE scope=?")
+    .get(`copilot:${sessionId}`) as { pendingIds: string; pending: string };
+  expect(JSON.parse(state.pendingIds)).toEqual([]);
+  expect(JSON.parse(state.pending)).toEqual([]);
+  database.close();
+});
+
 test("a user-controlled delegated marker cannot satisfy the stop gate", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-untrusted-delegation-${id}.db`);

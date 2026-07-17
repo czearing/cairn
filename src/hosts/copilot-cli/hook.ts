@@ -194,6 +194,7 @@ function parsePayload(raw: string): Payload {
 
 export const shouldStartUserTurn = (prompt: string): boolean =>
   !isSystemEnvelope(prompt);
+const isToolCallSession = (sessionId: string): boolean => sessionId.startsWith("call_");
 
 // Durably enqueue the latest matching skill_review event. Capacity only delays the queued job; acceptance
 // marks the turn reviewed immediately so agentStop never asks the agent to resubmit work it already submitted.
@@ -311,6 +312,14 @@ async function main(): Promise<void> {
       resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
       return void emit({});
     }
+    // Built-in/custom subagents use their host-owned tool-call id as sessionId. Some launch paths do not
+    // expose the parent preToolUse event, so no delegation row exists to claim. They still must not receive
+    // the main-agent workflow or own terminal review; the parent owns both.
+    if (isToolCallSession(sessionId)) {
+      resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
+      const protocol = await promptText("subagent-protocol.md");
+      return void emit(protocol ? { additionalContext: internalContext(protocol) } : {});
+    }
     if (!shouldStartUserTurn(prompt)) return void emit({});
     resetLifecycle(stateId, {}, true);
     const wf = await workflowPrompt();
@@ -414,6 +423,16 @@ async function main(): Promise<void> {
     // agentStop enforces the required workflow first, then queues automatic and legacy-declared reviews over
     // the complete transcript, including the final visible answer.
     if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
+    if (isToolCallSession(sessionId) && !transcriptPath) {
+      const stateId = turnScope(sessionId);
+      updateLifecycle(stateId, (state) => ({
+        ...state,
+        pendingReviewIds: [],
+        pendingReviews: [],
+        stopBlocked: false,
+      }));
+      return void emit({});
+    }
     const path = transcriptPath || eventsPathForSession(sessionId);
     const stateId = turnScope(sessionId);
     const st = readLifecycle(stateId);

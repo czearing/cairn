@@ -19,6 +19,7 @@
 //
 // Per-event context on PreToolUse remains unreachable; the brain_create gate enforces the format intent instead.
 import { readFile } from "node:fs/promises";
+import { Database } from "bun:sqlite";
 import {
   appendFileSync,
 } from "node:fs";
@@ -195,6 +196,27 @@ function parsePayload(raw: string): Payload {
 export const shouldStartUserTurn = (prompt: string): boolean =>
   !isSystemEnvelope(prompt);
 const isToolCallSession = (sessionId: string): boolean => sessionId.startsWith("call_");
+
+export function harnessReviewDeferred(
+  dbPath = process.env.CAIRN_HARNESS_DB || "",
+  agent = process.env.CAIRN_HARNESS_AGENT || ""
+): boolean {
+  if (!dbPath || !agent) return false;
+  try {
+    const database = new Database(dbPath, { readonly: true });
+    try {
+      const latest = database.query(`SELECT status FROM tasks WHERE assignee=?
+        AND (status='waiting' OR claimed_at IS NOT NULL OR completed_at IS NOT NULL)
+        ORDER BY COALESCE(completed_at,claimed_at,created_at) DESC LIMIT 1`)
+        .get(agent) as { status?: string } | null;
+      return latest?.status === "claimed" || latest?.status === "waiting";
+    } finally {
+      database.close();
+    }
+  } catch {
+    return false;
+  }
+}
 
 // Durably enqueue the latest matching skill_review event. Capacity only delays the queued job; acceptance
 // marks the turn reviewed immediately so agentStop never asks the agent to resubmit work it already submitted.
@@ -443,6 +465,18 @@ async function main(): Promise<void> {
     if (text) {
       updateLifecycle(stateId, () => ({ ...st, stopNudges: st.stopNudges + 1, stopBlocked: true }));
       emit({ decision: "block", reason: text });
+      return;
+    }
+    if (process.env.AGENT_HARNESS === "1" && harnessReviewDeferred()) {
+      // An allowed stop ends this Harness run. If the durable task is still active, the retry begins as a
+      // new user turn and selects its skills again; carrying this turn's debt would grade progress narration.
+      updateLifecycle(stateId, () => ({
+        ...st,
+        pendingReviewIds: [],
+        pendingReviews: [],
+        stopBlocked: false,
+      }));
+      emit({});
       return;
     }
     for (const review of st.pendingReviews) {

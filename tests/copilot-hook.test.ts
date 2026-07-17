@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import {
   gateDecision,
   eventsPathForSession,
+  harnessReviewDeferred,
   harnessStopDecision,
   internalContext,
   isTool,
@@ -91,6 +92,104 @@ test("harness stop requires skill lifecycle but not brain use", () => {
   expect(harnessStopDecision({ skillUsed: true, pendingReviewCount: 1, stopNudges: 0 })).toEqual({ file: "" });
   expect(harnessStopDecision({ skillUsed: true, pendingReviewCount: 0, stopNudges: 0 })).toEqual({ file: "" });
 });
+
+test("Harness defers skill review while its durable task is still active", () => {
+  const id = randomUUID();
+  const path = join(tmpdir(), `cairn-harness-review-state-${id}.db`);
+  const database = new Database(path);
+  database.run("CREATE TABLE agents(agent_id TEXT PRIMARY KEY,status TEXT NOT NULL)");
+  database.run(`CREATE TABLE tasks(
+    id TEXT PRIMARY KEY,assignee TEXT NOT NULL,status TEXT NOT NULL,
+    created_at TEXT NOT NULL,claimed_at TEXT,completed_at TEXT
+  )`);
+  database.query("INSERT INTO agents(agent_id,status) VALUES (?,?)").run("developer", "working");
+  database.query("INSERT INTO tasks(id,assignee,status,created_at,claimed_at) VALUES (?,?,?,?,?)")
+    .run("task-1", "developer", "claimed", "2026-07-17T10:00:00Z", "2026-07-17T10:01:00Z");
+  database.query("INSERT INTO tasks(id,assignee,status,created_at) VALUES (?,?,?,?)")
+    .run("newer-buffered", "developer", "buffered", "2026-07-17T11:00:00Z");
+  database.close();
+  expect(harnessReviewDeferred(path, "developer")).toBe(true);
+
+  const waiting = new Database(path);
+  waiting.query("UPDATE tasks SET status='waiting',claimed_at=NULL WHERE id=?").run("task-1");
+  waiting.close();
+  expect(harnessReviewDeferred(path, "developer")).toBe(true);
+
+  const completed = new Database(path);
+  completed.query("UPDATE agents SET status='idle' WHERE agent_id=?").run("developer");
+  completed.query("UPDATE tasks SET status='completed',completed_at=? WHERE id=?")
+    .run("2026-07-17T10:02:00Z", "task-1");
+  completed.close();
+  expect(harnessReviewDeferred(path, "developer")).toBe(false);
+
+  const overlapping = new Database(path);
+  overlapping.query("INSERT INTO tasks(id,assignee,status,created_at) VALUES (?,?,?,?)")
+    .run("older-waiting", "developer", "waiting", "2026-07-17T09:00:00Z");
+  overlapping.query("INSERT INTO tasks(id,assignee,status,created_at) VALUES (?,?,?,?)")
+    .run("newest-pending", "developer", "pending", "2026-07-17T12:00:00Z");
+  overlapping.close();
+  expect(harnessReviewDeferred(path, "developer")).toBe(false);
+  rmSync(path, { force: true });
+});
+
+test("Harness queues automatic review only after durable task completion", () => {
+  const id = randomUUID();
+  const cairnDb = join(tmpdir(), `cairn-harness-review-${id}.db`);
+  const harnessDb = join(tmpdir(), `cairn-harness-task-${id}.db`);
+  const transcriptPath = join(tmpdir(), `cairn-harness-review-${id}.jsonl`);
+  const harness = new Database(harnessDb);
+  harness.run("CREATE TABLE agents(agent_id TEXT PRIMARY KEY,status TEXT NOT NULL)");
+  harness.run(`CREATE TABLE tasks(
+    id TEXT PRIMARY KEY,assignee TEXT NOT NULL,status TEXT NOT NULL,
+    created_at TEXT NOT NULL,claimed_at TEXT,completed_at TEXT
+  )`);
+  harness.query("INSERT INTO agents(agent_id,status) VALUES (?,?)").run("developer", "working");
+  harness.query("INSERT INTO tasks(id,assignee,status,created_at,claimed_at) VALUES (?,?,?,?,?)")
+    .run("task-1", "developer", "claimed", "2026-07-17T10:00:00Z", "2026-07-17T10:01:00Z");
+  harness.close();
+  writeFileSync(transcriptPath, [
+    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Implement the feature." } }),
+    JSON.stringify({ type: "assistant.message", timestamp: 2, data: { content: "Progress update." } }),
+  ].join("\n"));
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    AGENT_HARNESS: "1",
+    CAIRN_DB_PATH: cairnDb,
+    CAIRN_HARNESS_DB: harnessDb,
+    CAIRN_HARNESS_AGENT: "developer",
+    CAIRN_MAX_LEARNERS: "0",
+    CAIRN_SKILLS: "1",
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const select = () => invoke("post-tool", {
+    sessionId: "harness-session",
+    toolName: "cairn-skill_select",
+    toolArgs: { ids: ["implementation-skill"] },
+  });
+
+  expect(select().status).toBe(0);
+  expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString()).toBe("{}");
+  expect(reviewJobs(cairnDb)).toEqual([]);
+
+  expect(invoke("user-prompt", { sessionId: "harness-session", prompt: "Complete the retried task." }).status).toBe(0);
+  expect(select().status).toBe(0);
+  const completed = new Database(harnessDb);
+  completed.query("UPDATE tasks SET status='completed',completed_at=? WHERE id=?")
+    .run("2026-07-17T10:02:00Z", "task-1");
+  completed.close();
+  writeFileSync(transcriptPath, [
+    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Implement the feature." } }),
+    JSON.stringify({ type: "assistant.message", timestamp: 2, data: { content: "The feature is complete." } }),
+  ].join("\n"));
+
+  expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString()).toBe("{}");
+  expect(reviewJobs(cairnDb)).toEqual([{ skill_id: "implementation-skill", status: "pending" }]);
+  rmSync(cairnDb, { force: true });
+  rmSync(harnessDb, { force: true });
+  rmSync(transcriptPath, { force: true });
+}, 20_000);
 
 test("user-prompt reset runs only for real human prompts", () => {
   expect(shouldStartUserTurn("fix the component")).toBe(true);

@@ -77,7 +77,9 @@ export function extractRun(path: string, targetSkillId = "", options: { latestTu
     if (lastUser < 0) return null;
     let start = lastUser;
     while (start > 0 && genuineUser(events[start - 1]!)) start--;
-    const cycle = events.slice(start).filter((event) => !event.systemTurn);
+    const cycle = events.slice(start).filter((event) =>
+      !(event.role === "user" && isSystemEnvelope(event.text))
+    );
     const request = cycle.filter(genuineUser).map((event) => event.text).join("\n").trim();
     const output = cycle.filter((event) => event.role === "assistant" && event.text).map((event) => event.text).join("\n\n").trim();
     if (!request || !output) return null;

@@ -161,6 +161,21 @@ test("extractRun returns null when the only user message is a system envelope (n
   expect(run).toBeNull();                                   // nothing the human asked for: skip learning
 });
 
+test("extractRun latestTurn keeps a final deliverable after a system continuation", () => {
+  const p = join(tmpdir(), `cairn-claude-continuation-${process.pid}.jsonl`);
+  writeFileSync(p, [
+    JSON.stringify({ type: "user", message: { content: "Complete both fixes." } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Running final checks." }] } }),
+    JSON.stringify({ type: "user", message: { content: "<system_notification>Shell completed.</system_notification>" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Both fixes are complete and live." }] } }),
+  ].join("\n"));
+  const run = extractRun(p, "", { latestTurn: true })!;
+  rmSync(p, { force: true });
+  expect(run.request).toBe("Complete both fixes.");
+  expect(run.output).toContain("Both fixes are complete and live.");
+  expect(run.transcript).not.toContain("system_notification");
+});
+
 test("extractRun does not treat a tool-only assistant message as the output", () => {
   const p = join(tmpdir(), `cairn-toolonly-${process.pid}.jsonl`);
   writeFileSync(p, [

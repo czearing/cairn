@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { config } from "../core/config";
 import { copilotReviews, enqueueReview, latestCopilotReview, reviewSupervisorActive, transcriptReviewKey } from "./review-queue";
 
 // The async learn trigger. After a turn finishes, the WHOLE skill-forming process (extract the run ->
@@ -23,12 +23,13 @@ export function isSkillWorker(): boolean {
 
 const SUPERVISOR = () => process.env.CAIRN_REVIEW_SUPERVISOR_PATH || fileURLToPath(new URL("../../scripts/skill-review-supervisor.ts", import.meta.url));
 const MAX_LEARNERS = () => Number(process.env.CAIRN_MAX_LEARNERS || "4");
-const snapshotDir = () => join(process.env.CAIRN_INFLIGHT_DIR || join(homedir(), ".cairn", "inflight"), "reviews");
+export const reviewSnapshotDir = (): string =>
+  join(process.env.CAIRN_INFLIGHT_DIR || join(dirname(config.dbPath), "inflight"), "reviews");
 function snapshotTranscript(transcriptPath: string, id: string): string {
   const name = `${createHash("sha256").update(id).digest("hex")}.jsonl`;
-  const destination = join(snapshotDir(), name);
+  const destination = join(reviewSnapshotDir(), name);
   if (!existsSync(destination)) {
-    mkdirSync(snapshotDir(), { recursive: true });
+    mkdirSync(reviewSnapshotDir(), { recursive: true });
     copyFileSync(transcriptPath, destination);
   }
   return destination;

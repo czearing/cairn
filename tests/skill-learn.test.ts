@@ -1,9 +1,10 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
-import { learnFromTranscript } from "../src/skill/learn";
+import { learnFromTranscript, reviewSnapshotDir } from "../src/skill/learn";
+import { config } from "../src/core/config";
 import { processReviewJob } from "../src/skill/review-worker";
 import {
   claimReviewJobs,
@@ -30,6 +31,17 @@ afterEach(() => {
   delete process.env.CAIRN_REVIEW_MAX_ATTEMPTS;
   delete process.env.CAIRN_REVIEW_STALE_MS;
   clearReviewJobs();
+});
+
+test("review snapshots default beside the configured project database", () => {
+  const previous = process.env.CAIRN_INFLIGHT_DIR;
+  delete process.env.CAIRN_INFLIGHT_DIR;
+  try {
+    expect(reviewSnapshotDir()).toBe(join(dirname(config.dbPath), "inflight", "reviews"));
+  } finally {
+    if (previous === undefined) delete process.env.CAIRN_INFLIGHT_DIR;
+    else process.env.CAIRN_INFLIGHT_DIR = previous;
+  }
 });
 
 test("learnFromTranscript accepts a review even when worker capacity is zero", () => {

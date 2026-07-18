@@ -299,3 +299,25 @@ test("extractRunCopilot keeps a final deliverable written after a system continu
   expect(run.output).toContain("Both fixes are complete and live.");
   expect(run.transcript).not.toContain("system_notification");
 });
+
+test("extractRunCopilot uses host-owned review context instead of injected user messages", () => {
+  const path = join(tmpdir(), `cairn-copilot-authoritative-${randomUUID()}.jsonl`);
+  writeFileSync(path, [
+    JSON.stringify({ type: "user.message", timestamp: "2026-07-18T18:00:00.000Z", data: { content: "Earlier coding task" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: "2026-07-18T18:00:01.000Z", data: { content: "Earlier answer" } }),
+    JSON.stringify({ type: "user.message", timestamp: "2026-07-18T18:08:31.000Z", data: { content: "Clean up errored tasks" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: "2026-07-18T18:08:32.000Z", data: { content: "Cleaning through the API." } }),
+    JSON.stringify({ type: "user.message", timestamp: "2026-07-18T18:09:02.000Z", data: { content: "Injected unrelated benchmark task" } }),
+    JSON.stringify({ type: "assistant.message", timestamp: "2026-07-18T18:10:00.000Z", data: { content: "Cleanup result." } }),
+    JSON.stringify({
+      type: "cairn.review_context",
+      timestamp: "2026-07-18T18:10:01.000Z",
+      data: { requests: ["Clean up errored tasks"], startTs: Date.parse("2026-07-18T18:08:30.000Z") },
+    }),
+  ].join("\n"));
+  const run = extractRunCopilot(path, "", { latestTurn: true })!;
+  expect(run.request).toBe("Clean up errored tasks");
+  expect(run.output).toContain("Cleanup result.");
+  expect(run.transcript).not.toContain("Earlier coding task");
+  expect(run.transcript).not.toContain("Injected unrelated benchmark task");
+});

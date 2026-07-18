@@ -39,24 +39,38 @@ function argHint(raw: unknown): string {
 export function extractRunCopilot(
   path: string,
   targetSkillId = "",
-  options: { latestTurn?: boolean } = {}
+  options: {
+    latestTurn?: boolean;
+    reviewContext?: { requests: string[]; startTs: number };
+  } = {}
 ): RunInput | null {
   let lines: string[];
   try { lines = readFileSync(path, "utf8").split("\n").filter(Boolean); } catch { return null; }
 
   const agentName = new Map<string, string>(); // agentId -> a short human name, learned from subagent.started
   const events: Event[] = [];
+  let reviewContext = options.reviewContext;
   let systemTurn = false;
   for (const line of lines) {
-    let o: { type?: string; agentId?: unknown; timestamp?: unknown; data?: { content?: unknown; reasoningText?: unknown; toolName?: unknown; arguments?: unknown; agentName?: unknown; agentDisplayName?: unknown } };
+    let o: { type?: string; agentId?: unknown; timestamp?: unknown; data?: { content?: unknown; reasoningText?: unknown; toolName?: unknown; arguments?: unknown; agentName?: unknown; agentDisplayName?: unknown; requests?: unknown; startTs?: unknown } };
     try { o = JSON.parse(line); } catch { continue; }
     const type = str(o.type);
     const data = o.data ?? {};
-    const ts = typeof o.timestamp === "number" ? o.timestamp : 0;
+    const ts = typeof o.timestamp === "number"
+      ? o.timestamp
+      : typeof o.timestamp === "string"
+        ? Date.parse(o.timestamp) || 0
+        : 0;
     const agentId = str(o.agentId);
     const agent = agentId ? (agentName.get(agentId) || "subagent") : undefined;
 
-    if (type === "subagent.started") {
+    if (type === "cairn.review_context") {
+      const requests = Array.isArray(data.requests) ? data.requests.filter((value): value is string =>
+        typeof value === "string" && value.trim().length > 0
+      ) : [];
+      const startTs = typeof data.startTs === "number" ? data.startTs : 0;
+      if (!reviewContext && requests.length) reviewContext = { requests, startTs };
+    } else if (type === "subagent.started") {
       const name = str(data.agentDisplayName) || str(data.agentName) || "subagent";
       if (agentId) agentName.set(agentId, name);
       events.push({ type, role: "other", text: "", marker: `↳ spawned subagent: ${name}`, ts });
@@ -83,6 +97,30 @@ export function extractRunCopilot(
   const reviewIdxs = events.map((e, i) => (e.tool && isReviewTool(e.tool) ? i : -1)).filter((i) => i >= 0);
   const genuineUser = (e: Event) => e.role === "user" && e.text && !isSystemEnvelope(e.text);
   if (options.latestTurn) {
+    if (reviewContext) {
+      let start = events.findIndex((event) => event.ts > 0 && event.ts >= reviewContext!.startTs);
+      if (start < 0) {
+        start = events.findIndex((event) =>
+          event.role === "user" && reviewContext!.requests.includes(event.text)
+        );
+      }
+      if (start < 0) return null;
+      const cycle = [
+        ...reviewContext.requests.map((text, index): Event => ({
+          type: "user.message",
+          role: "user",
+          text,
+          ts: reviewContext!.startTs + index,
+        })),
+        ...events.slice(start).filter((event) => event.role !== "user"),
+      ];
+      const request = reviewContext.requests.join("\n").trim();
+      const output = cycle.filter((event) =>
+        event.role === "assistant" && event.text && !event.thinking
+      ).map((event) => event.text).join("\n\n").trim();
+      if (!request || !output) return null;
+      return { request, output, transcript: transcriptRows(cycle) };
+    }
     const lastUser = events.findLastIndex(genuineUser);
     if (lastUser < 0) return null;
     let start = lastUser;

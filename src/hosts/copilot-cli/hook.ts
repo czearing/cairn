@@ -26,7 +26,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { isSystemEnvelope } from "../../skill/noise";
-import { recordHostEvent } from "../../core/host-events";
+import { hostEvents, recordHostEvent } from "../../core/host-events";
 import { formatSkillCatalog, selectedSkillBlock, skillIdsFromTask } from "../../skill/catalog";
 import {
   claimDelegation,
@@ -197,6 +197,29 @@ export const shouldStartUserTurn = (prompt: string): boolean =>
   !isSystemEnvelope(prompt);
 const isToolCallSession = (sessionId: string): boolean => sessionId.startsWith("call_");
 
+function copilotReviewContext(sessionId: string): { requests: string[]; startTs: number } | undefined {
+  const events = hostEvents("copilot", sessionId);
+  const prompts = events.flatMap((event, index) => {
+    if (event.hookType !== "user-prompt") return [];
+    const payload = safeJson(event.rawJson) as { prompt?: unknown } | undefined;
+    const prompt = typeof payload?.prompt === "string" ? payload.prompt.trim() : "";
+    return prompt && shouldStartUserTurn(prompt) ? [{ index, prompt, recordedTs: event.recordedTs }] : [];
+  });
+  const latest = prompts.at(-1);
+  if (!latest) return undefined;
+  const current = [latest];
+  for (let i = prompts.length - 2; i >= 0; i--) {
+    const candidate = prompts[i]!;
+    const intervening = events.slice(candidate.index + 1, current[0]!.index);
+    if (intervening.some((event) => event.hookType !== "user-prompt")) break;
+    current.unshift(candidate);
+  }
+  return {
+    requests: current.map((entry) => entry.prompt),
+    startTs: current[0]!.recordedTs,
+  };
+}
+
 export function harnessReviewDeferred(
   dbPath = process.env.CAIRN_HARNESS_DB || "",
   agent = process.env.CAIRN_HARNESS_AGENT || ""
@@ -230,6 +253,7 @@ async function queueLatestReview(
     subagentOnly?: boolean;
     eventId?: string;
     backend?: string;
+    reviewContext?: { requests: string[]; startTs: number };
   } = {}
 ): Promise<boolean> {
   if (!transcriptPath || !sessionId) return false;
@@ -245,6 +269,7 @@ async function queueLatestReview(
           : transcriptReviewKey(transcriptPath, options.skillId, sessionId),
         sessionId,
         backend: options.backend ?? "copilot",
+        reviewContext: options.reviewContext ?? copilotReviewContext(sessionId),
       });
     }
     return learnCopilotReviews(transcriptPath, sessionId, options);
@@ -458,6 +483,7 @@ async function main(): Promise<void> {
     const path = transcriptPath || eventsPathForSession(sessionId);
     const stateId = turnScope(sessionId);
     const st = readLifecycle(stateId);
+    const reviewContext = copilotReviewContext(sessionId);
     const file = process.env.AGENT_HARNESS === "1"
       ? harnessStopDecision({ skillUsed: st.skillUsed, pendingReviewCount: st.pendingReviewIds.length, stopNudges: st.stopNudges }).file
       : stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, pendingReviewCount: st.pendingReviewIds.length, stopNudges: st.stopNudges }).file;
@@ -500,6 +526,7 @@ async function main(): Promise<void> {
       const accepted = await queueLatestReview(path, sessionId, {
         skillId: review.skillId,
         eventId: review.eventId,
+        reviewContext,
       });
       if (!accepted) {
         if (st.reviewNudges >= STOP_CAP) {
@@ -517,7 +544,7 @@ async function main(): Promise<void> {
     }
     if (st.pendingReviewIds.length) {
       const { extractRunCopilot } = await import("../../skill/transcript-copilot");
-      if (!extractRunCopilot(path, "", { latestTurn: true })) {
+      if (!extractRunCopilot(path, "", { latestTurn: true, reviewContext })) {
         if (st.reviewNudges < STOP_CAP) {
           updateLifecycle(stateId, () => ({ ...st, reviewNudges: st.reviewNudges + 1, stopBlocked: true }));
           emit({
@@ -533,6 +560,7 @@ async function main(): Promise<void> {
             skillId,
             eventId: `auto-${st.turnSeq}-${skillId}`,
             backend: "copilot-auto",
+            reviewContext,
           });
           if (!accepted) {
             if (st.reviewNudges >= STOP_CAP) {

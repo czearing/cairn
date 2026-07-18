@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { config } from "../core/config";
 import { copilotReviews, enqueueReview, latestCopilotReview, reviewSupervisorActive, transcriptReviewKey } from "./review-queue";
@@ -25,12 +25,24 @@ const SUPERVISOR = () => process.env.CAIRN_REVIEW_SUPERVISOR_PATH || fileURLToPa
 const MAX_LEARNERS = () => Number(process.env.CAIRN_MAX_LEARNERS || "4");
 export const reviewSnapshotDir = (): string =>
   join(process.env.CAIRN_INFLIGHT_DIR || join(dirname(config.dbPath), "inflight"), "reviews");
-function snapshotTranscript(transcriptPath: string, id: string): string {
+export interface CopilotReviewContext {
+  requests: string[];
+  startTs: number;
+}
+
+function snapshotTranscript(transcriptPath: string, id: string, context?: CopilotReviewContext): string {
   const name = `${createHash("sha256").update(id).digest("hex")}.jsonl`;
   const destination = join(reviewSnapshotDir(), name);
   if (!existsSync(destination)) {
     mkdirSync(reviewSnapshotDir(), { recursive: true });
     copyFileSync(transcriptPath, destination);
+    if (context?.requests.length) {
+      appendFileSync(destination, `\n${JSON.stringify({
+        type: "cairn.review_context",
+        timestamp: Date.now(),
+        data: context,
+      })}\n`);
+    }
   }
   return destination;
 }
@@ -62,13 +74,13 @@ export function drainReviewQueue(): number {
 export function learnFromTranscript(
   transcriptPath: string,
   skillId: string,
-  options: { id?: string; sessionId?: string; backend?: string } = {}
+  options: { id?: string; sessionId?: string; backend?: string; reviewContext?: CopilotReviewContext } = {}
 ): boolean {
   if (isSkillWorker() || !transcriptPath || !skillId.trim()) return false;
   try {
     const sessionId = options.sessionId ?? "";
     const id = options.id ?? transcriptReviewKey(transcriptPath, skillId, sessionId);
-    const jobTranscriptPath = snapshotTranscript(transcriptPath, id);
+    const jobTranscriptPath = snapshotTranscript(transcriptPath, id, options.reviewContext);
     const accepted = enqueueReview({
       id,
       sessionId,

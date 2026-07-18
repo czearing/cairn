@@ -17,6 +17,7 @@ import {
   shouldStartUserTurn,
   stopDecision,
 } from "../src/hosts/copilot-cli/hook";
+import { extractRunCopilot } from "../src/skill/transcript-copilot";
 
 function reviewJobs(dbPath: string): { skill_id: string; status?: string }[] {
   const database = new Database(dbPath);
@@ -180,7 +181,7 @@ test("Harness queues automatic review only after durable task completion", () =>
     .run("2026-07-17T10:02:00Z", "task-1");
   completed.close();
   writeFileSync(transcriptPath, [
-    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Implement the feature." } }),
+    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Complete the retried task." } }),
     JSON.stringify({ type: "assistant.message", timestamp: 2, data: { content: "The feature is complete." } }),
   ].join("\n"));
 
@@ -752,6 +753,7 @@ test("agentStop automatically reviews selected skills after the visible delivera
   writeFileSync(transcriptPath, [
     JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Finish this task." } }),
     JSON.stringify({ type: "assistant.message", timestamp: 2, data: { content: "Finished deliverable." } }),
+    JSON.stringify({ type: "user.message", timestamp: 3, data: { content: "Injected unrelated task." } }),
   ].join("\n"));
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
   const env = {
@@ -777,9 +779,12 @@ test("agentStop automatically reviews selected skills after the visible delivera
   }).status).toBe(0);
   expect(invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString()).toBe("{}");
   const reviewDatabase = new Database(dbPath);
-  expect(reviewDatabase.query("SELECT skill_id AS skillId,backend,status FROM review_jobs").all()).toEqual([
+  const jobs = reviewDatabase.query("SELECT skill_id AS skillId,backend,status,transcript_path AS transcriptPath FROM review_jobs").all() as
+    { skillId: string; backend: string; status: string; transcriptPath: string }[];
+  expect(jobs.map(({ transcriptPath: _transcriptPath, ...job }) => job)).toEqual([
     { skillId: "selected-skill", backend: "copilot-auto", status: "pending" },
   ]);
+  expect(extractRunCopilot(jobs[0]!.transcriptPath, "", { latestTurn: true })?.request).toBe("Finish this task.");
   reviewDatabase.close();
   const database = new Database(dbPath);
   const state = database.query("SELECT pending_review_ids AS pending FROM lifecycle_turns WHERE scope = ?")

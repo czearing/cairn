@@ -300,6 +300,52 @@ test("extractRunCopilot keeps a final deliverable written after a system continu
   expect(run.transcript).not.toContain("system_notification");
 });
 
+test("extractRunCopilot grades durable file content instead of only the final status line", () => {
+  const path = join(tmpdir(), `cairn-copilot-artifact-${randomUUID()}.jsonl`);
+  writeFileSync(path, [
+    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Create a complete audit report." } }),
+    JSON.stringify({
+      type: "tool.execution_start",
+      timestamp: 2,
+      data: {
+        toolName: "apply_patch",
+        arguments: "*** Begin Patch\n*** Add File: AUDIT.md\n+# Audit\n\n| Finding | Evidence |\n|---|---|\n| D1 | file.md:12 |\n*** End Patch",
+      },
+    }),
+    JSON.stringify({ type: "assistant.message", timestamp: 3, data: { content: "Created `AUDIT.md`." } }),
+  ].join("\n"));
+
+  const run = extractRunCopilot(path, "", { latestTurn: true })!;
+
+  expect(run.output).toContain("Created `AUDIT.md`.");
+  expect(run.output).toContain("DURABLE ARTIFACT WRITES");
+  expect(run.output).toContain("| D1 | file.md:12 |");
+});
+
+test("extractRunCopilot grades a durable Harness task result instead of only its final summary", () => {
+  const path = join(tmpdir(), `cairn-copilot-task-result-${randomUUID()}.jsonl`);
+  writeFileSync(path, [
+    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Audit character continuity." } }),
+    JSON.stringify({
+      type: "tool.execution_start",
+      timestamp: 2,
+      data: {
+        toolName: "cairn-harness-task_complete",
+        arguments: {
+          result: "## Character audit\n\n| Finding | Evidence |\n|---|---|\n| C1 | STORY_BIBLE.md:42 |",
+        },
+      },
+    }),
+    JSON.stringify({ type: "assistant.message", timestamp: 3, data: { content: "Completed deliverable." } }),
+  ].join("\n"));
+
+  const run = extractRunCopilot(path, "", { latestTurn: true })!;
+
+  expect(run.output).toContain("Completed deliverable.");
+  expect(run.output).toContain("Harness task completion result");
+  expect(run.output).toContain("| C1 | STORY_BIBLE.md:42 |");
+});
+
 test("extractRunCopilot uses host-owned review context instead of injected user messages", () => {
   const path = join(tmpdir(), `cairn-copilot-authoritative-${randomUUID()}.jsonl`);
   writeFileSync(path, [

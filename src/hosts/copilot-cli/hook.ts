@@ -75,8 +75,7 @@ const promptWithCatalog = async (file: string): Promise<string> => {
   try { return `${base}\n\n${formatSkillCatalog()}`; }
   catch { return base; }
 };
-const workflowPrompt = (): Promise<string> =>
-  promptWithCatalog(process.env.AGENT_HARNESS === "1" ? "harness-agent.md" : "user-message.md");
+const workflowPrompt = (): Promise<string> => promptWithCatalog("user-message.md");
 
 // MCP tools arrive server-prefixed ("cairn-brain_search") or bare/namespaced ("brain_search" /
 // "mcp__cairn__brain_search"); accept any of those forms.
@@ -110,14 +109,6 @@ export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; pendin
   if (s.stopNudges >= STOP_CAP) return { file: "" };
   if (!s.skillUsed) return { file: "skill-search-reminder.md" };
   if (!s.brainUsed) return { file: "turn-reminder.md" };
-  return { file: "" };
-}
-
-export function harnessStopDecision(s: { skillUsed: boolean; pendingReviewCount: number; stopNudges: number }): {
-  file: string;
-} {
-  if (s.stopNudges >= STOP_CAP) return { file: "" };
-  if (!s.skillUsed) return { file: "skill-search-reminder.md" };
   return { file: "" };
 }
 
@@ -232,7 +223,7 @@ export function harnessReviewDeferred(
         AND (status='waiting' OR claimed_at IS NOT NULL OR completed_at IS NOT NULL)
         ORDER BY COALESCE(completed_at,claimed_at,created_at) DESC LIMIT 1`)
         .get(agent) as { status?: string } | null;
-      return latest?.status === "claimed" || latest?.status === "waiting";
+      return latest?.status === "waiting";
     } finally {
       database.close();
     }
@@ -351,8 +342,9 @@ async function main(): Promise<void> {
     // receive a duplicate sessionStart copy.
     // Also reset the per-turn latch so the agentStop gate is scoped to this turn.
     //
-    // Copilot can re-fire this hook for a blocked continuation. Preserve the cap only for that continuation,
-    // then let the next genuine user turn start with a fresh budget.
+    // Internal stop continuations are filtered by shouldStartUserTurn and preserve the existing state.
+    // Every genuine prompt starts a fully fresh budget; preserving only exhausted nudges while clearing
+    // skill/brain usage would let a resumed Harness task bypass both gates.
     const stateId = turnScope(sessionId);
     const delegatedIds = claimDelegation(sessionId, stateId);
     if (delegatedIds.length) {
@@ -368,7 +360,7 @@ async function main(): Promise<void> {
       return void emit(protocol ? { additionalContext: internalContext(protocol) } : {});
     }
     if (!shouldStartUserTurn(prompt)) return void emit({});
-    resetLifecycle(stateId, {}, true);
+    resetLifecycle(stateId);
     const wf = await workflowPrompt();
     emit(wf ? { additionalContext: internalContext(wf) } : {});
     return;
@@ -484,9 +476,12 @@ async function main(): Promise<void> {
     const stateId = turnScope(sessionId);
     const st = readLifecycle(stateId);
     const reviewContext = copilotReviewContext(sessionId);
-    const file = process.env.AGENT_HARNESS === "1"
-      ? harnessStopDecision({ skillUsed: st.skillUsed, pendingReviewCount: st.pendingReviewIds.length, stopNudges: st.stopNudges }).file
-      : stopDecision({ brainUsed: st.brainUsed, skillUsed: st.skillUsed, pendingReviewCount: st.pendingReviewIds.length, stopNudges: st.stopNudges }).file;
+    const file = stopDecision({
+      brainUsed: st.brainUsed,
+      skillUsed: st.skillUsed,
+      pendingReviewCount: st.pendingReviewIds.length,
+      stopNudges: st.stopNudges,
+    }).file;
     const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
       updateLifecycle(stateId, () => ({ ...st, stopNudges: st.stopNudges + 1, stopBlocked: true }));
@@ -494,8 +489,8 @@ async function main(): Promise<void> {
       return;
     }
     if (process.env.AGENT_HARNESS === "1" && harnessReviewDeferred()) {
-      // An allowed stop ends this Harness run. If the durable task is still active, the retry begins as a
-      // new user turn and selects its skills again; carrying this turn's debt would grade progress narration.
+      // A waiting task will resume in a new turn after its dependency completes. Do not grade the
+      // interim handoff; terminal claimed runs are host-completed after this hook and must be reviewed now.
       updateLifecycle(stateId, () => ({
         ...st,
         pendingReviewIds: [],

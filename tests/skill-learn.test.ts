@@ -129,13 +129,27 @@ test("a failed skill_review call is not accepted from the transcript", () => {
 
 test("only one warm review supervisor owns the queue lease", () => {
   const now = Date.now();
-  expect(acquireReviewSupervisor("owner-a", 1, now, 1000)).toBe(true);
+  expect(acquireReviewSupervisor("owner-a", process.pid, now, 1000)).toBe(true);
   expect(reviewSupervisorActive(now, 1000)).toBe(true);
-  expect(acquireReviewSupervisor("owner-b", 2, now + 500, 1000)).toBe(false);
+  expect(acquireReviewSupervisor("owner-b", process.pid, now + 500, 1000)).toBe(false);
   expect(heartbeatReviewSupervisor("owner-a", now + 700)).toBe(true);
-  expect(acquireReviewSupervisor("owner-b", 2, now + 1200, 1000)).toBe(false);
+  expect(acquireReviewSupervisor("owner-b", process.pid, now + 1200, 1000)).toBe(false);
   releaseReviewSupervisor("owner-a");
-  expect(acquireReviewSupervisor("owner-b", 2, now + 1201, 1000)).toBe(true);
+  expect(acquireReviewSupervisor("owner-b", process.pid, now + 1201, 1000)).toBe(true);
+});
+
+test("a replacement review supervisor immediately recovers orphaned running jobs", () => {
+  const now = Date.now();
+  enqueueReview({ id: "orphaned", skillId: "s", transcriptPath: "C:\\orphaned.jsonl", backend: "copilot", now });
+  expect(acquireReviewSupervisor("owner-a", process.pid, now, 1000)).toBe(true);
+  expect(claimReviewJobs(1)[0]).toEqual(expect.objectContaining({ id: "orphaned", attempts: 1 }));
+
+  expect(acquireReviewSupervisor("owner-b", process.pid + 1_000_000, now + 1001, 1000)).toBe(true);
+  expect(claimReviewJobs(1)[0]).toEqual(expect.objectContaining({
+    id: "orphaned",
+    status: "running",
+    attempts: 2,
+  }));
 });
 
 test("failed reviews retain their immutable snapshot for diagnosis", async () => {

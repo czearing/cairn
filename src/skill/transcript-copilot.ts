@@ -9,7 +9,8 @@ import { isSystemEnvelope } from "./noise";
 // refinement, guidance, and corrections are all graded. On top of that we give the reviewer, for context:
 //   • every USER message in the whole session (condensed to timestamp + text), incl. earlier cycles;
 //   • the list of skills the agent loaded/created this cycle (skill_search / skill_create / skill_review);
-//   • the full ordered process of THIS cycle with timestamps, subagent activity tagged inline.
+//   • the full ordered process of THIS cycle with timestamps, subagent activity tagged inline;
+//   • durable artifact writes and Harness task completion results, so a terse final status cannot hide the work.
 // Subagent messages/tools are interleaved in this same log (agentId-tagged), so a subagent's deliverable is
 // captured too. Host system-envelope user messages (notifications, reminders) never count as a human prompt.
 
@@ -29,11 +30,51 @@ interface Event {
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 const clock = (ts: number): string => (ts > 0 ? new Date(ts).toISOString().slice(11, 19) : "");
 const isReviewTool = (name: string): boolean => name.endsWith("skill_review") || name.includes("skill_review");
+const normalizedTool = (name: string): string =>
+  name.includes("__") ? name.slice(name.lastIndexOf("__") + 2) : name.replace(/^cairn-/, "");
 // A tool's args arrive as a JSON string or object; pull a short human hint (the query/label) for the loaded list.
 function argHint(raw: unknown): string {
   let o: { task?: unknown; title?: unknown; label?: unknown; query?: unknown; what?: unknown; id?: unknown } = {};
   try { o = typeof raw === "string" ? JSON.parse(raw) : (raw ?? {}) as typeof o; } catch { return ""; }
   return str(o.title) || str(o.label) || str(o.task) || str(o.query) || str(o.what) || str(o.id);
+}
+
+function artifactWrite(event: Event): string {
+  if (!event.tool) return "";
+  const tool = normalizedTool(event.tool);
+  if (tool === "apply_patch" && typeof event.toolArgs === "string") {
+    return event.toolArgs.trim();
+  }
+  if (tool.endsWith("task_complete") && event.toolArgs) {
+    let args: Record<string, unknown>;
+    try {
+      args = typeof event.toolArgs === "string"
+        ? JSON.parse(event.toolArgs) as Record<string, unknown>
+        : event.toolArgs as Record<string, unknown>;
+    } catch {
+      return "";
+    }
+    const result = str(args.result) || str(args.output) || str(args.body) || str(args.summary);
+    return result ? `Harness task completion result:\n${result}` : "";
+  }
+  if (!["create", "edit", "write"].includes(tool) || !event.toolArgs || typeof event.toolArgs !== "object") {
+    return "";
+  }
+  const args = event.toolArgs as Record<string, unknown>;
+  const path = str(args.path) || str(args.file_path) || str(args.filename);
+  const content = str(args.content) || str(args.new_string) || str(args.text);
+  return content ? `${path ? `File: ${path}\n` : ""}${content}` : "";
+}
+
+function deliverableOutput(events: Event[]): string {
+  const messages = events.filter((event) =>
+    event.role === "assistant" && event.text && !event.thinking
+  ).map((event) => event.text).join("\n\n").trim();
+  const artifacts = events.map(artifactWrite).filter(Boolean);
+  const durable = artifacts.length
+    ? `DURABLE ARTIFACT WRITES:\n${artifacts.join("\n\n---\n\n")}`
+    : "";
+  return [messages, durable].filter(Boolean).join("\n\n").trim();
 }
 
 export function extractRunCopilot(
@@ -115,9 +156,7 @@ export function extractRunCopilot(
         ...events.slice(start).filter((event) => event.role !== "user"),
       ];
       const request = reviewContext.requests.join("\n").trim();
-      const output = cycle.filter((event) =>
-        event.role === "assistant" && event.text && !event.thinking
-      ).map((event) => event.text).join("\n\n").trim();
+      const output = deliverableOutput(cycle);
       if (!request || !output) return null;
       return { request, output, transcript: transcriptRows(cycle) };
     }
@@ -132,9 +171,7 @@ export function extractRunCopilot(
       !(event.role === "user" && isSystemEnvelope(event.text))
     );
     const request = cycle.filter(genuineUser).map((event) => event.text).join("\n").trim();
-    const output = cycle.filter((event) =>
-      event.role === "assistant" && event.text && !event.thinking
-    ).map((event) => event.text).join("\n\n").trim();
+    const output = deliverableOutput(cycle);
     if (!request || !output) return null;
     return { request, output, transcript: transcriptRows(cycle) };
   }
@@ -151,7 +188,7 @@ export function extractRunCopilot(
   if (targetReview === undefined && targetSkillId) return null;
   if (targetReview === undefined) {
     const request = events.filter(genuineUser).map((event) => event.text).join("\n").trim();
-    const output = events.filter((event) => event.role === "assistant" && event.text && !event.thinking).map((event) => event.text).join("\n\n").trim();
+    const output = deliverableOutput(events);
     if (!request || !output) return null;
     const toolName = (tool: string) => (tool.includes("__") ? tool.slice(tool.lastIndexOf("__") + 2) : tool.replace(/^cairn-/, ""));
     return { request, output, transcript: transcriptRows(events) };
@@ -164,9 +201,9 @@ export function extractRunCopilot(
   const cycle = events.slice(detailStart, nextUser >= 0 ? nextUser : events.length);
 
   const request = cycle.filter(genuineUser).map((e) => e.text).join("\n").trim();
-  // Deliverable = the agent's VISIBLE messages this cycle (main + subagent). Thinking is process, not the
-  // deliverable, so it is excluded here (it still appears in the transcript below).
-  const output = cycle.filter((e) => e.role === "assistant" && e.text && !e.thinking).map((e) => e.text).join("\n\n").trim();
+  // Deliverable = visible messages plus durable artifact/task content. Thinking is process, not the deliverable,
+  // so it is excluded here (it still appears in the transcript below).
+  const output = deliverableOutput(cycle);
   if (!request || !output) return null;
 
   // ONE chronological transcript of the review cycle: user messages, the agent's thinking, its messages, and
@@ -175,15 +212,13 @@ export function extractRunCopilot(
 }
 
 function transcriptRows(events: Event[]): string {
-  const toolName = (tool: string) =>
-    tool.includes("__") ? tool.slice(tool.lastIndexOf("__") + 2) : tool.replace(/^cairn-/, "");
   const rows = events.map((event) => {
     const time = clock(event.ts) ? `[${clock(event.ts)}] ` : "";
     if (event.marker) return `${time}${event.marker}`;
     if (event.tool) {
       const hint = argHint(event.toolArgs);
       const sub = event.agent ? `SUBAGENT:${event.agent} ` : "";
-      return `${time}[${sub}TOOL] ${toolName(event.tool)}${hint ? ` "${hint}"` : ""}`;
+      return `${time}[${sub}TOOL] ${normalizedTool(event.tool)}${hint ? ` "${hint}"` : ""}`;
     }
     const base = event.agent ? `SUBAGENT:${event.agent}` : event.role === "user" ? "USER" : "ASSISTANT";
     return `${time}[${event.thinking ? `${base} THINKING` : base}] ${event.text}`;

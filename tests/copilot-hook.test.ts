@@ -9,7 +9,6 @@ import {
   gateDecision,
   eventsPathForSession,
   harnessReviewDeferred,
-  harnessStopDecision,
   internalContext,
   isTool,
   postToolFiles,
@@ -88,13 +87,7 @@ test("stopDecision stops nudging once the per-turn cap is reached (no infinite l
   expect(stopDecision({ brainUsed: false, skillUsed: true, pendingReviewCount: 1, stopNudges: STOP_CAP })).toEqual({ file: "" });
 });
 
-test("harness stop requires skill lifecycle but not brain use", () => {
-  expect(harnessStopDecision({ skillUsed: false, pendingReviewCount: 0, stopNudges: 0 })).toEqual({ file: "skill-search-reminder.md" });
-  expect(harnessStopDecision({ skillUsed: true, pendingReviewCount: 1, stopNudges: 0 })).toEqual({ file: "" });
-  expect(harnessStopDecision({ skillUsed: true, pendingReviewCount: 0, stopNudges: 0 })).toEqual({ file: "" });
-});
-
-test("Harness defers skill review while its durable task is still active", () => {
+test("Harness defers skill review only while its durable task is waiting", () => {
   const id = randomUUID();
   const path = join(tmpdir(), `cairn-harness-review-state-${id}.db`);
   const database = new Database(path);
@@ -109,7 +102,7 @@ test("Harness defers skill review while its durable task is still active", () =>
   database.query("INSERT INTO tasks(id,assignee,status,created_at) VALUES (?,?,?,?)")
     .run("newer-buffered", "developer", "buffered", "2026-07-17T11:00:00Z");
   database.close();
-  expect(harnessReviewDeferred(path, "developer")).toBe(true);
+  expect(harnessReviewDeferred(path, "developer")).toBe(false);
 
   const waiting = new Database(path);
   waiting.query("UPDATE tasks SET status='waiting',claimed_at=NULL WHERE id=?").run("task-1");
@@ -133,7 +126,7 @@ test("Harness defers skill review while its durable task is still active", () =>
   rmSync(path, { force: true });
 });
 
-test("Harness queues automatic review only after durable task completion", () => {
+test("Harness queues automatic review after a durable wait resolves", () => {
   const id = randomUUID();
   const cairnDb = join(tmpdir(), `cairn-harness-review-${id}.db`);
   const harnessDb = join(tmpdir(), `cairn-harness-task-${id}.db`);
@@ -146,7 +139,7 @@ test("Harness queues automatic review only after durable task completion", () =>
   )`);
   harness.query("INSERT INTO agents(agent_id,status) VALUES (?,?)").run("developer", "working");
   harness.query("INSERT INTO tasks(id,assignee,status,created_at,claimed_at) VALUES (?,?,?,?,?)")
-    .run("task-1", "developer", "claimed", "2026-07-17T10:00:00Z", "2026-07-17T10:01:00Z");
+    .run("task-1", "developer", "waiting", "2026-07-17T10:00:00Z", "2026-07-17T10:01:00Z");
   harness.close();
   writeFileSync(transcriptPath, [
     JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Implement the feature." } }),
@@ -169,13 +162,20 @@ test("Harness queues automatic review only after durable task completion", () =>
     toolName: "cairn-skill_select",
     toolArgs: { ids: ["implementation-skill"] },
   });
+  const searchBrain = () => invoke("post-tool", {
+    sessionId: "harness-session",
+    toolName: "cairn-brain_search",
+    toolArgs: { query: "implementation guidance" },
+  });
 
   expect(select().status).toBe(0);
+  expect(searchBrain().status).toBe(0);
   expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString()).toBe("{}");
   expect(reviewJobs(cairnDb)).toEqual([]);
 
   expect(invoke("user-prompt", { sessionId: "harness-session", prompt: "Complete the retried task." }).status).toBe(0);
   expect(select().status).toBe(0);
+  expect(searchBrain().status).toBe(0);
   const completed = new Database(harnessDb);
   completed.query("UPDATE tasks SET status='completed',completed_at=? WHERE id=?")
     .run("2026-07-17T10:02:00Z", "task-1");
@@ -191,6 +191,35 @@ test("Harness queues automatic review only after durable task completion", () =>
   rmSync(harnessDb, { force: true });
   rmSync(transcriptPath, { force: true });
 }, 20_000);
+
+test("Harness user prompts receive the complete user Cairn workflow", () => {
+  const id = randomUUID();
+  const cairnDb = join(tmpdir(), `cairn-harness-prompt-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const invoke = (sessionId: string, agentHarness?: string) =>
+    spawnSync(process.execPath, [hook, "user-prompt"], {
+      input: JSON.stringify({ sessionId, prompt: "Complete the task." }),
+      env: {
+        ...process.env,
+        AGENT_HARNESS: agentHarness,
+        CAIRN_DB_PATH: cairnDb,
+        CAIRN_MAX_LEARNERS: "0",
+        CAIRN_SKILLS: "1",
+      },
+    });
+  const direct = invoke("direct-prompt-parity");
+  const harness = invoke("harness-prompt-parity", "1");
+
+  expect(direct.status).toBe(0);
+  expect(harness.status).toBe(0);
+  const directOutput = JSON.parse(direct.stdout.toString()) as { additionalContext: string };
+  const harnessOutput = JSON.parse(harness.stdout.toString()) as { additionalContext: string };
+  expect(harnessOutput.additionalContext).toBe(directOutput.additionalContext);
+  expect(harnessOutput.additionalContext).toContain("## Read the Shared Brain First");
+  expect(harnessOutput.additionalContext).toContain("## Decompose Into Nodes");
+  expect(harnessOutput.additionalContext).toContain("Topical similarity is not a fit");
+  rmSync(cairnDb, { force: true });
+});
 
 test("user-prompt reset runs only for real human prompts", () => {
   expect(shouldStartUserTurn("fix the component")).toBe(true);
@@ -645,6 +674,30 @@ test("system reminder prompts preserve the turn and a genuine user prompt resets
 
   expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "second" }).status).toBe(0);
   expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
+});
+
+test("a genuine Harness resume cannot inherit an exhausted stop cap without its workflow state", () => {
+  const id = randomUUID();
+  const home = join(tmpdir(), `cairn-harness-resume-home-${id}`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, USERPROFILE: home, HOME: home, AGENT_HARNESS: "1", CAIRN_SKILLS: "0" };
+  const invoke = (mode: string, payload: object = { sessionId: "harness-resume" }) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+
+  expect(invoke("user-prompt", { sessionId: "harness-resume", prompt: "root work" }).status).toBe(0);
+  expect(invoke("agent-stop").stdout.toString()).toContain("skill_select");
+  expect(invoke("post-tool", {
+    sessionId: "harness-resume",
+    toolName: "cairn-skill_select",
+    toolArgs: { ids: ["remediation"] },
+  }).status).toBe(0);
+  expect(invoke("agent-stop").stdout.toString()).toContain("brain_search");
+
+  expect(invoke("user-prompt", {
+    sessionId: "harness-resume",
+    prompt: "Role: Editor. Resume the root after delegated work completed.",
+  }).status).toBe(0);
+  expect(invoke("agent-stop").stdout.toString()).toContain("skill_select");
 });
 
 test("a queued mid-turn human message does not reset completed skill search", () => {

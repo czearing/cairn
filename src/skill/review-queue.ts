@@ -78,6 +78,27 @@ function recoverStale(d: Database, now: number): void {
   );
 }
 
+function recoverInterrupted(d: Database, now: number): void {
+  const max = MAX_ATTEMPTS();
+  d.run(
+    `UPDATE review_jobs
+       SET status = CASE WHEN attempts >= ? THEN 'failed' ELSE 'pending' END,
+           error = 'supervisor stopped before completing',
+           updated_ts = ?
+     WHERE status = 'running'`,
+    [max, now]
+  );
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as { code?: string }).code === "EPERM";
+  }
+}
+
 export function enqueueReview(input: EnqueueReview): { accepted: boolean; created: boolean; job?: ReviewJob } {
   if (!input.id.trim() || !input.skillId.trim() || !input.transcriptPath.trim()) return { accepted: false, created: false };
   const now = input.now ?? Date.now();
@@ -199,12 +220,13 @@ export function acquireReviewSupervisor(
   const d = openQueue();
   try {
     d.run("BEGIN IMMEDIATE");
-    const current = d.query("SELECT owner, heartbeat_ts AS heartbeatTs FROM review_supervisor WHERE singleton = 1")
-      .get() as { owner: string; heartbeatTs: number } | undefined;
-    if (current && current.owner !== owner && current.heartbeatTs >= now - staleMs) {
+    const current = d.query("SELECT owner, pid, heartbeat_ts AS heartbeatTs FROM review_supervisor WHERE singleton = 1")
+      .get() as { owner: string; pid: number; heartbeatTs: number } | undefined;
+    if (current && current.owner !== owner && current.heartbeatTs >= now - staleMs && pidAlive(current.pid)) {
       d.run("COMMIT");
       return false;
     }
+    if (!current || current.owner !== owner) recoverInterrupted(d, now);
     d.query(`INSERT INTO review_supervisor (singleton, owner, pid, heartbeat_ts) VALUES (1, ?, ?, ?)
       ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner, pid=excluded.pid, heartbeat_ts=excluded.heartbeat_ts`)
       .run(owner, pid, now);
@@ -240,9 +262,9 @@ export function reviewSupervisorActive(
 ): boolean {
   const d = openQueue();
   try {
-    const row = d.query("SELECT heartbeat_ts AS heartbeatTs FROM review_supervisor WHERE singleton = 1")
-      .get() as { heartbeatTs: number } | undefined;
-    return Boolean(row && row.heartbeatTs >= now - staleMs);
+    const row = d.query("SELECT pid, heartbeat_ts AS heartbeatTs FROM review_supervisor WHERE singleton = 1")
+      .get() as { pid: number; heartbeatTs: number } | undefined;
+    return Boolean(row && row.heartbeatTs >= now - staleMs && pidAlive(row.pid));
   } finally {
     d.close();
   }

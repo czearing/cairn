@@ -43,6 +43,7 @@ import { recordMissedReviews } from "../../skill/missed-review";
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 const emit = (obj: object) => process.stdout.write(JSON.stringify(obj));
 export const internalContext = (text: string): string => text ? `<cairn-internal>\n${text}\n</cairn-internal>` : "";
+const COMPLETION_REMINDER = "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
 
 // Read stdin but NEVER block the host indefinitely. `Bun.stdin.text()` only resolves on EOF, so if the
 // CLI invokes a hook without closing its stdin (observed on some Copilot/Claude CLI versions, and for
@@ -498,6 +499,11 @@ async function main(): Promise<void> {
         stopBlocked: false,
       }));
       emit({});
+      return;
+    }
+    if (!st.completionNudged) {
+      updateLifecycle(stateId, () => ({ ...st, completionNudged: true, stopBlocked: true }));
+      emit({ decision: "block", reason: internalContext(COMPLETION_REMINDER) });
       return;
     }
     for (const review of st.pendingReviews) {

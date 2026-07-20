@@ -23,6 +23,8 @@ const SKILL_REMINDER =
   "Before acting, read the injected catalog and call skill_select with every skill id you will use, or skill_create with a broad description and initial numbered plan. You will not be reminded again this turn.";
 const AUTO_REVIEW_REMINDER =
   "Deliver the finished visible result now. Cairn will review every selected skill automatically after the response exists.";
+const COMPLETION_REMINDER =
+  "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
 
 // Awaited write so the buffer is fully flushed before we force-exit (a bare process.exit() right
 // after process.stdout.write() can truncate piped output).
@@ -152,6 +154,7 @@ async function main(): Promise<void> {
       if (event.kind === "turn_finished") {
         const skillState = skillTurnState(session);
         if (!skillState.selected && !stopHookActive) out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
+        if (!stopHookActive) out = out ? `${out}\n\n${COMPLETION_REMINDER}` : COMPLETION_REMINDER;
         if (skillState.pendingReviewIds.length && !out) {
           const transcriptPath = (payload as { transcript_path?: string }).transcript_path;
           const { extractRun } = await import("../../skill/transcript");

@@ -133,6 +133,7 @@ test("Claude Stop defers automatic skill review until all stop gates pass", asyn
     transcript_path: transcriptPath,
   }));
   expect(blocked.reason).toContain("brain");
+  expect(blocked.reason).toContain("completed every requested task");
   expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
 
   writeFileSync(
@@ -182,10 +183,18 @@ test("Claude legacy skill_review declarations are queued only at terminal Stop",
   });
   expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
 
+  const completion = JSON.parse(await fire({
+    hook_event_name: "Stop",
+    session_id: sessionId,
+    transcript_path: transcriptPath,
+  }));
+  expect(completion.reason).toContain("completed every requested task");
+  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
   expect(await fire({
     hook_event_name: "Stop",
     session_id: sessionId,
     transcript_path: transcriptPath,
+    stop_hook_active: true,
   })).toBe("");
   expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toEqual([
     expect.objectContaining({ skillId, backend: "claude-auto", status: "pending" }),

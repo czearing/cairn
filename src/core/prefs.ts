@@ -32,7 +32,7 @@ export function readPrefs(): string[] {
 export function prefsBlock(): string {
   const lines = readPrefs();
   if (lines.length === 0) return "";
-  return "User preferences: honor these in every response:\n" + lines.map((l) => `- ${l}`).join("\n");
+  return "User preferences — honor these in every response:\n" + lines.map((l) => `- ${l}`).join("\n");
 }
 
 function write(lines: string[]): void {

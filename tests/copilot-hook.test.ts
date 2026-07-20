@@ -185,6 +185,8 @@ test("Harness queues automatic review after a durable wait resolves", () => {
     JSON.stringify({ type: "assistant.message", timestamp: 2, data: { content: "The feature is complete." } }),
   ].join("\n"));
 
+  expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString())
+    .toContain("completed every requested task");
   expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString()).toBe("{}");
   expect(reviewJobs(cairnDb)).toEqual([{ skill_id: "implementation-skill", status: "pending" }]);
   rmSync(cairnDb, { force: true });
@@ -512,7 +514,9 @@ test("successful skill_review is declared at postToolUse and queued after the fi
   ].join("\n"));
   const stop = invoke("agent-stop", { sessionId: "session-2" });
   expect(stop.status).toBe(0);
-  expect(stop.stdout.toString()).toBe("{}");
+  expect(stop.stdout.toString()).toContain("completed every requested task");
+  expect(reviewJobs(dbPath)).toEqual([]);
+  expect(invoke("agent-stop", { sessionId: "session-2" }).stdout.toString()).toBe("{}");
   expect(reviewJobs(dbPath)).toEqual([{ skill_id: "skill-2", status: "pending" }]);
 });
 
@@ -562,6 +566,8 @@ test("a premature skill_review waits for the visible deliverable before queueing
     toolName: "cairn-skill_review",
     toolArgs: { id: "skill-premature" },
   }).status).toBe(0);
+  expect(invoke("agent-stop", { sessionId: "premature", transcriptPath }).stdout.toString())
+    .toContain("completed every requested task");
   expect(invoke("agent-stop", { sessionId: "premature", transcriptPath }).stdout.toString())
     .toContain("before a visible deliverable existed");
   expect(reviewJobs(dbPath)).toEqual([]);
@@ -621,6 +627,8 @@ test("a blocked continuation defers skill learning until every stop gate passes"
     JSON.stringify({ type: "tool.execution_complete", timestamp: 21, data: { toolCallId: "review-3", success: true } }),
     JSON.stringify({ type: "assistant.message", timestamp: 30, data: { content: "Audit complete." } }),
   ].join("\n"));
+  expect(invoke("agent-stop", { sessionId: "session-3", transcriptPath }).stdout.toString())
+    .toContain("completed every requested task");
   expect(invoke("agent-stop", { sessionId: "session-3", transcriptPath }).stdout.toString()).toBe("{}");
   expect(reviewJobs(dbPath)).toEqual([{ skill_id: "skill-3", status: "pending" }]);
 });
@@ -648,6 +656,7 @@ test("persistent review enqueue failure respects the stop continuation cap", () 
   expect(invoke("post-tool", { sessionId: "session-4", timestamp: 21, toolName: "cairn-skill_review", toolArgs: { id: "skill-4" } }).status).toBe(0);
   expect(invoke("agent-stop", { sessionId: "session-4", transcriptPath: home }).stdout.toString()).toContain('"decision":"block"');
   expect(invoke("agent-stop", { sessionId: "session-4", transcriptPath: home }).stdout.toString()).toContain('"decision":"block"');
+  expect(invoke("agent-stop", { sessionId: "session-4", transcriptPath: home }).stdout.toString()).toContain('"decision":"block"');
   expect(invoke("agent-stop", { sessionId: "session-4", transcriptPath: home }).stdout.toString()).toBe("{}");
 });
 
@@ -670,6 +679,7 @@ test("system reminder prompts preserve the turn and a genuine user prompt resets
     sessionId: "session-cap",
     prompt: "<system_reminder>continue required workflow</system_reminder>",
   }).stdout.toString()).toBe("{}");
+  expect(invoke("agent-stop").stdout.toString()).toContain("completed every requested task");
   expect(invoke("agent-stop").stdout.toString()).toBe("{}");
 
   expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "second" }).status).toBe(0);
@@ -727,6 +737,8 @@ test("a queued mid-turn human message does not reset completed skill search", ()
   expect(invoke("post-tool", { sessionId: "session-queued", toolName: "cairn-skill_select", toolArgs: { ids: ["skill-queued"] } }).status).toBe(0);
   expect(invoke("post-tool", { sessionId: "session-queued", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
   expect(invoke("post-tool", { sessionId: "session-queued", timestamp: 30, toolName: "cairn-skill_review", toolArgs: { id: "skill-queued" } }).status).toBe(0);
+  expect(invoke("agent-stop", { sessionId: "session-queued", transcriptPath }).stdout.toString())
+    .toContain("completed every requested task");
   expect(invoke("agent-stop", { sessionId: "session-queued", transcriptPath }).stdout.toString()).toBe("{}");
 });
 
@@ -753,6 +765,8 @@ test("a parent-delegated internal prompt satisfies the subagent-local stop gate"
   const start = invoke("user-prompt", { sessionId: "subagent-session", prompt });
   expect(start.status).toBe(0);
   expect(start.stdout.toString()).toBe("{}");
+  expect(invoke("agent-stop", { sessionId: "subagent-session" }).stdout.toString())
+    .toContain("completed every requested task");
   expect(invoke("agent-stop", { sessionId: "subagent-session" }).stdout.toString()).toBe("{}");
 });
 
@@ -830,6 +844,10 @@ test("agentStop automatically reviews selected skills after the visible delivera
     toolName: "cairn-brain_search",
     toolArgs: {},
   }).status).toBe(0);
+  const completion = invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString();
+  expect(completion).toContain('"decision":"block"');
+  expect(completion).toContain("completed every requested task");
+  expect(reviewJobs(dbPath)).toEqual([]);
   expect(invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString()).toBe("{}");
   const reviewDatabase = new Database(dbPath);
   const jobs = reviewDatabase.query("SELECT skill_id AS skillId,backend,status,transcript_path AS transcriptPath FROM review_jobs").all() as
@@ -881,6 +899,7 @@ test("automatic review enqueue failure respects the stop continuation cap", () =
     toolName: "cairn-brain_search",
     toolArgs: {},
   }).status).toBe(0);
+  expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString()).toContain('"decision":"block"');
   expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString()).toContain('"decision":"block"');
   expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString()).toContain('"decision":"block"');
   expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString()).toBe("{}");

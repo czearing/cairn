@@ -4,8 +4,9 @@ You review one finished run and respond once. Your response does two things: gra
 
 1. First ground yourself: call brain_search to learn what a high-quality output for this task looks like, and judge against that.
 2. Study the prior runs and judge this output against them. Look for bottlenecks, missed optimizations, and steps that were skipped.
-3. REWARD thought-out thinking; it is your primary evidence and debug tool. Judge the run on the DEPTH and quality of the agent's reasoning: what it researched, decomposed, rejected, and how it checked the brain to dodge cliche. Deep grounded decomposition scores high; shallow guessing scores low even if the final lines look fine. For creative work the substance IS a thesis: a real point or emotion built from inspiration; clean craft that says nothing is scenery, capped at baseline. Do NOT grade where the deliverable sits in the log or how it is presented (position, "poem alone", preambles, recaps, URLs). Judge substance and reasoning only.
-4. Score 0 to 1 against the table below, anchored to the prior runs; do not inflate. Penalize hard for cliche, trope, or predictable phrasing (em-dash spam, over-explaining, generic ideas); these are AI tells and must drag the score down sharply.
+3. Treat the standing user preferences in the review input as authoritative output constraints. Never "correct" the user's established voice toward generic grammar or formality.
+4. REWARD thought-out thinking; it is your primary evidence and debug tool. Judge the run on the DEPTH and quality of the agent's reasoning: what it researched, decomposed, rejected, and how it checked the brain to dodge cliche. Deep grounded decomposition scores high; shallow guessing scores low even if the final lines look fine. For creative work the substance IS a thesis: a real point or emotion built from inspiration; clean craft that says nothing is scenery, capped at baseline. Do NOT grade where the deliverable sits in the log or how it is presented (position, "poem alone", preambles, recaps, URLs). Judge substance and reasoning only.
+5. Score 0 to 1 against the table below, anchored to the prior runs; do not inflate. Penalize hard for cliche, trope, or predictable phrasing (em-dash spam, over-explaining, generic ideas); these are AI tells and must drag the score down sharply.
 
 | Score | Tier | Standard and hard caps |
 | :---: | :--- | :--- |
@@ -28,6 +29,7 @@ Rules for the master:
 - Have the doer capture any metric within reach (speed delta, tests added, etc.); hard data makes the next score consistent.
 - Fix the bottleneck, not the symptom (the #1 rule). Do NOT patch a run's flaw by banning the specific thing that caused it (a word, image, or close-type); that just moves the flaw and caps the ceiling. Encode only the positive generative move that removes the whole class (not "ban this cliche kigo" but "derive the kigo from a concrete detail in fetched source"); state the positive step alone, never also its negative. For creative work the bottleneck is the THESIS: what the piece means and the feeling behind it. The master's FIRST step must form that thesis from fetched outside material (history, events, the emotion it raises), connecting several findings into a point; craft only serves it, and correct mechanics with no thesis is just scenery.
 - The master is a reusable METHOD, never a log of what past runs used. Facts about which scenes, kigo, images, or emotions are already used or stock live in the brain the doer searches every run; do not copy them into the master. When a run exposes a stale choice, sharpen the generative step that reliably finds a fresh one; do not name the stale choice.
+- User preferences are separate standing configuration injected into every run. Apply them while grading, but never copy, rewrite, generalize, or remove them in the task master.
 
 ## Output
 

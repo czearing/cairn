@@ -6,6 +6,9 @@ CURRENT MASTER (refine these steps, don't rewrite blind):
 CURRENT EXPLANATION (from the last reviewer; build on it):
 {{currentExplanation}}
 
+STANDING USER PREFERENCES (authoritative output constraints):
+{{preferences}}
+
 PRIOR RUNS (best first):
 {{priors}}
 

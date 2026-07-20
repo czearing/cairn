@@ -1,6 +1,7 @@
 import { test, expect, beforeEach } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fromCapture } from "../src/skill/reviewer";
+import { learnUserPrompt } from "../src/skill/prompts";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -15,6 +16,31 @@ test("learner prompt does not suggest reviewer subagents", () => {
   );
   expect(prompt).not.toContain("or add a subagent reviewer");
   expect(prompt).not.toContain("Reviewer spawning");
+});
+
+test("learner receives standing preferences as authoritative constraints", () => {
+  const prompt = learnUserPrompt(
+    "review this PR",
+    "comment",
+    "transcript",
+    ["code review"],
+    [],
+    "1. review the diff",
+    "Keep findings proven.",
+    "User preferences: honor these in every response:\n- no em dashes\n- omit the final period",
+  );
+  expect(prompt).toContain("STANDING USER PREFERENCES (authoritative output constraints)");
+  expect(prompt).toContain("- no em dashes");
+  expect(prompt).toContain("- omit the final period");
+});
+
+test("learner keeps preferences outside the task master", () => {
+  const prompt = readFileSync(
+    new URL("../src/skill/prompts/learn-system.md", import.meta.url),
+    "utf8",
+  );
+  expect(prompt).toContain("never copy, rewrite, generalize, or remove them in the task master");
+  expect(prompt).toContain("Never \"correct\" the user's established voice");
 });
 
 test("fromCapture accepts a complete labeled submission, splitting master from explanation", () => {

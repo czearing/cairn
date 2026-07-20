@@ -38,8 +38,15 @@ To update later, run `cairn update`. It pulls the latest code, reinstalls, and r
 | `cairn verify` | Creates and recalls a memory in a throwaway database to confirm it works. |
 | `cairn update` | Updates to the latest version and reapplies the config. |
 | `cairn uninstall` | Removes the hooks and MCP registration. Your saved memories stay. |
+| `cairn pref list` | Lists standing output and style preferences injected into every user turn and skill review. |
+| `cairn pref add "..."` | Adds an explicit standing preference. |
+| `cairn pref rm <number>` | Removes a standing preference by list position or exact text. |
 | `cairn install --dry-run` | Shows what install would change, without writing anything. |
 | `cairn --version` | Prints the installed version. |
+
+Preferences are deterministic configuration stored in `~/.cairn/preferences.md`, not inferred brain
+memories. Automatic skill reviews grade against them but cannot rewrite them or fold them into a
+task-specific skill master.
 
 ## The tools
 

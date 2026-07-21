@@ -37,7 +37,6 @@ async function main(): Promise<void> {
   const { getEventName, normalizeClaudeCode } = await import("./normalize");
   const { respond, denyPreTool, modifyPreTool } = await import("./respond");
   const { rootId, openBranchExists } = await import("../../core/audit");
-  const { mcpAvailable } = await import("../../mcp/presence");
 
   const raw = await Bun.stdin.text();
 
@@ -64,7 +63,6 @@ async function main(): Promise<void> {
   // like Stop so the same record/split-leaves enforcement runs (the response shape is identical).
   const hookName = (payload as { hook_event_name?: unknown }).hook_event_name;
   if (hookName === "SessionStart") {
-    if (!mcpAvailable()) return;
     const content = await inject({ kind: "user_message", text: "" });
     if (content) await emit(respond("SessionStart", content));
     return;
@@ -77,13 +75,6 @@ async function main(): Promise<void> {
 
   const event = await normalizeClaudeCode(payload);
   if (!event) return;
-  const stopHookActive = hookName === "Stop" && (payload as { stop_hook_active?: unknown }).stop_hook_active === true;
-  if (!mcpAvailable()) {
-    if (event.kind === "turn_finished" && !stopHookActive) {
-      await emit(respond("Stop", COMPLETION_REMINDER));
-    }
-    return;
-  }
 
   // Depth-first gate: a new node that links ONLY to the root is denied while open branches
   // remain. Finish (or descend) an open branch before starting another straight off the root.
@@ -124,7 +115,15 @@ async function main(): Promise<void> {
     } catch { /* fall through to normal handling */ }
   }
 
-  const content = stopHookActive ? null : await inject(event);
+  const stopHookActive = hookName === "Stop" && (payload as { stop_hook_active?: unknown }).stop_hook_active === true;
+  const session = (payload as { session_id?: string }).session_id ?? "";
+  const { lifecycleScope, readLifecycle } = await import("../../skill/lifecycle");
+  const observed = readLifecycle(lifecycleScope("claude", session)).cairnToolObserved;
+  const enforceWorkflow = process.env.CAIRN_ENFORCE_STOP_GATES === "1"
+    || observed;
+  const content = stopHookActive || (event.kind === "turn_finished" && !enforceWorkflow)
+    ? null
+    : await inject(event);
 
   // Reward depth, not count: praise a new node ONLY when it was linked under a non-root parent
   // (genuine descent). Flat root-children earn no praise.
@@ -145,23 +144,39 @@ async function main(): Promise<void> {
   // ends any turn — so the next turn starts clean even when it is a resume after compaction, which fires no
   // user_message (that gap left a stale searched=true latch and silently suppressed the reminder all session).
   // On turn end, also fire background learning. Best-effort and isolated.
-  const session = (payload as { session_id?: string }).session_id ?? "";
   if ((await import("../../core/config")).skillsEnabled()) {
     try {
       const { skillInject, skillLearn, skillsExist } = await import("../../skill/hook");
-      const { resetSkillTurn, noteLegacySkillReview, noteSkillReviewed, noteSkillSelection, skillTurnState, claimSkillReminder, isActionTool, isSkillSelection, isSkillReview } = await import("../../skill/turngate");
+      const {
+        resetSkillTurn, noteCairnToolObserved, noteLegacySkillReview, noteSkillReviewed,
+        noteSkillSelection, skillTurnState, claimSkillReminder, isActionTool, isCairnTool,
+        isSkillSelection, isSkillReview,
+      } = await import("../../skill/turngate");
       if (event.kind === "user_message") { resetSkillTurn(session); await skillInject(event.text, session); }
-      else if (event.kind === "tool_completed" && isSkillReview(event.tool)) {
-        const id = typeof event.input.id === "string" ? event.input.id : "";
-        if (id) noteLegacySkillReview(session, id);
-      }
-      else if (event.kind === "tool_completed" && isSkillSelection(event.tool)) noteSkillSelection(session, event.tool, event.input, event.output);
-      else if (event.kind === "tool_pending" && isActionTool(event.tool) && skillsExist() && claimSkillReminder(session)) {
+      else if (event.kind === "tool_completed") {
+        if (isCairnTool(event.tool)) noteCairnToolObserved(session);
+        if (isSkillReview(event.tool)) {
+          const id = typeof event.input.id === "string" ? event.input.id : "";
+          if (id) noteLegacySkillReview(session, id);
+        } else if (isSkillSelection(event.tool)) {
+          noteSkillSelection(session, event.tool, event.input, event.output);
+        }
+      } else if (
+        event.kind === "tool_pending"
+        && isActionTool(event.tool)
+        && skillsExist()
+        && (process.env.CAIRN_ENFORCE_STOP_GATES === "1" || skillTurnState(session).cairnToolObserved)
+        && claimSkillReminder(session)
+      ) {
         out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
       }
       if (event.kind === "turn_finished") {
         const skillState = skillTurnState(session);
-        if (!skillState.selected && !stopHookActive) out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
+        const canEnforce = process.env.CAIRN_ENFORCE_STOP_GATES === "1"
+          || skillState.cairnToolObserved;
+        if (canEnforce && !skillState.selected && !stopHookActive) {
+          out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
+        }
         if (!stopHookActive) out = out ? `${out}\n\n${COMPLETION_REMINDER}` : COMPLETION_REMINDER;
         if (skillState.pendingReviewIds.length && !out) {
           const transcriptPath = (payload as { transcript_path?: string }).transcript_path;

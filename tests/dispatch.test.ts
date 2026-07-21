@@ -7,12 +7,12 @@ import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-async function fire(payload: object, env: Record<string, string> = {}): Promise<string> {
+async function fire(payload: object): Promise<string> {
   const proc = Bun.spawn(["bun", "src/hosts/claude-code/dispatch.ts"], {
     stdin: new TextEncoder().encode(JSON.stringify(payload)),
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, ...env }, // inherit the test's throwaway CAIRN_DB_PATH (preload)
+    env: { ...process.env }, // inherit the test's throwaway CAIRN_DB_PATH (preload)
   });
   const out = await new Response(proc.stdout).text();
   await proc.exited;
@@ -124,20 +124,19 @@ test("Claude accepts a host-native Skill invocation without requiring a Cairn se
   })).toBe("");
 });
 
-test("Claude fails open when its MCP server is disconnected", async () => {
-  const sessionId = `claude-disconnected-${randomUUID()}`;
+test("Claude fails open when a resumed model manifest exposes no Cairn tools", async () => {
+  const sessionId = `claude-stale-manifest-${randomUUID()}`;
   const transcriptPath = join(tmpdir(), `${sessionId}.jsonl`);
   writeFileSync(transcriptPath, "");
-  expect(await fire({
-    hook_event_name: "UserPromptSubmit",
-    session_id: sessionId,
-    prompt: "Finish the task.",
-  }, { CAIRN_MCP_AVAILABLE: "0" })).toBe("");
+  const previous = process.env.CAIRN_ENFORCE_STOP_GATES;
+  process.env.CAIRN_ENFORCE_STOP_GATES = "0";
   const stop = JSON.parse(await fire({
-    hook_event_name: "Stop",
-    session_id: sessionId,
-    transcript_path: transcriptPath,
-  }, { CAIRN_MCP_AVAILABLE: "0" }));
+      hook_event_name: "Stop",
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+    }));
+  if (previous == null) delete process.env.CAIRN_ENFORCE_STOP_GATES;
+  else process.env.CAIRN_ENFORCE_STOP_GATES = previous;
   expect(stop.reason).toContain("completed every requested task");
   expect(stop.reason).not.toContain("brain");
   expect(stop.reason).not.toContain("skill");

@@ -230,6 +230,4 @@ const hotState = globalThis as typeof globalThis & { __cairnConnected?: boolean 
 if (!hotState.__cairnConnected) {
   hotState.__cairnConnected = true;
   await server.connect(new StdioServerTransport());
-  const { startMcpPresence } = await import("./presence");
-  startMcpPresence();
 }

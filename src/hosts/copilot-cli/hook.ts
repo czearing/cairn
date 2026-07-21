@@ -39,7 +39,6 @@ import {
 } from "../../skill/lifecycle";
 import { skillResultId } from "../../skill/tool-result";
 import { recordMissedReviews } from "../../skill/missed-review";
-import { mcpAvailable } from "../../mcp/presence";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 const emit = (obj: object) => process.stdout.write(JSON.stringify(obj));
@@ -87,6 +86,10 @@ const isNativeSkillTool = (name: string): boolean => {
   const normalized = name.toLowerCase();
   return normalized === "skill" || normalized.endsWith("__skill");
 };
+const isCairnMcpTool = (name: string): boolean => [
+  "brain_search", "brain_create", "brain_mutate", "brain_delete",
+  "skill_select", "skill_create", "skill_search", "skill_load", "skill_edit", "skill_review",
+].some((tool) => isTool(name, tool));
 const isTask = (name: string): boolean => /^(task|agent)$/i.test(name) || name === "Task" || name === "Agent";
 
 // ── Pure decision helpers (exported for unit tests) ────────────────────────────────────────────
@@ -311,13 +314,11 @@ async function main(): Promise<void> {
   try { recordHostEvent("copilot", mode ?? "", raw, rawPayload); } catch { /* event indexing never blocks the host */ }
 
   if (mode === "session-start") {
-    if (!mcpAvailable()) return void emit({});
     const text = await workflowPrompt();
     emit(text ? { additionalContext: internalContext(text) } : {});
     return;
   }
   if (mode === "subagent-start") {
-    if (!mcpAvailable()) return void emit({});
     const text = await promptText("subagent-protocol.md");
     emit(text ? { additionalContext: internalContext(text) } : {});
     return;
@@ -369,14 +370,12 @@ async function main(): Promise<void> {
     }
     if (!shouldStartUserTurn(prompt)) return void emit({});
     resetLifecycle(stateId);
-    if (!mcpAvailable()) return void emit({});
     const wf = await workflowPrompt();
     emit(wf ? { additionalContext: internalContext(wf) } : {});
     return;
   }
 
   if (mode === "pre-tool") {
-    if (!mcpAvailable()) return void emit({});
     // preToolUse command hooks are FAIL-CLOSED (a crash denies the tool), so default to allow and only
     // ever deny on an explicit gate match.
     if (process.env.CAIRN_COPILOT_NO_GATE) return void emit({});
@@ -414,32 +413,33 @@ async function main(): Promise<void> {
   }
 
   if (mode === "post-tool") {
-    if (!mcpAvailable()) return void emit({});
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const stateId = turnScope(sessionId, agentId);
     updateLifecycle(stateId, (current) => {
       const next = { ...current };
-      if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) next.brainUsed = true;
+      const succeeded = toolResultSucceeded(result);
+      if (isCairnMcpTool(toolName) && succeeded) next.cairnToolObserved = true;
+      if ((isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) && succeeded) next.brainUsed = true;
       if (isNativeSkillTool(toolName) && toolResultSucceeded(result)) next.skillUsed = true;
-      if (isTool(toolName, "skill_select")) {
+      if (isTool(toolName, "skill_select") && succeeded) {
         const ids = Array.isArray(args.ids) ? args.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0) : [];
         if (ids.length) {
           next.skillUsed = true;
           next.pendingReviewIds = [...new Set([...next.pendingReviewIds, ...ids])];
         }
       }
-      if (isTool(toolName, "skill_create")) {
+      if (isTool(toolName, "skill_create") && succeeded) {
         next.skillUsed = true;
         next.pendingReviewIds = [...new Set([...next.pendingReviewIds, skillResultId(result) || "__created__"])];
       }
-      if (isTool(toolName, "skill_search")) {
+      if (isTool(toolName, "skill_search") && succeeded) {
         const id = skillResultId(result);
         if (id) {
           next.skillUsed = true;
           next.pendingReviewIds = [...new Set([...next.pendingReviewIds, id])];
         }
       }
-      if (isTool(toolName, "skill_load")) {
+      if (isTool(toolName, "skill_load") && succeeded) {
         const id = typeof args.id === "string" ? args.id : "";
         if (id) {
           next.skillUsed = true;
@@ -463,6 +463,7 @@ async function main(): Promise<void> {
       return next;
     });
 
+    if (isCairnMcpTool(toolName) && !toolResultSucceeded(result)) return void emit({});
     const answer = typeof args.answer === "string" ? args.answer : "";
     const blocks = (await Promise.all(postToolFiles(toolName, answer).map(promptText))).filter((t) => t.length > 0);
     const text = internalContext(blocks.join("\n\n"));
@@ -488,7 +489,8 @@ async function main(): Promise<void> {
     const stateId = turnScope(sessionId);
     const st = readLifecycle(stateId);
     const reviewContext = copilotReviewContext(sessionId);
-    const file = mcpAvailable() ? stopDecision({
+    const enforceWorkflow = process.env.CAIRN_ENFORCE_STOP_GATES === "1" || st.cairnToolObserved;
+    const file = enforceWorkflow ? stopDecision({
       brainUsed: st.brainUsed,
       skillUsed: st.skillUsed,
       pendingReviewCount: st.pendingReviewIds.length,

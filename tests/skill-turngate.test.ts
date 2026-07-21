@@ -3,7 +3,10 @@ import { rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { resetSkillTurn, noteSkillReviewed, noteSkillSelection, skillTurnState, claimSkillReminder, isActionTool, isSkillSelection } from "../src/skill/turngate";
+import {
+  resetSkillTurn, noteSkillReviewed, noteSkillSelection, skillTurnState,
+  claimSkillReminder, isActionTool, isCairnTool, isSkillSelection,
+} from "../src/skill/turngate";
 
 const DIR = join(tmpdir(), `cairn-turn-${randomUUID()}`);
 beforeEach(() => {
@@ -22,6 +25,7 @@ test("the reminder fires exactly once per turn when the agent acts before select
 test("selecting first suppresses the reminder entirely", () => {
   resetSkillTurn("S");
   noteSkillSelection("S", "skill_select", { ids: ["a"] });
+  expect(skillTurnState("S").cairnToolObserved).toBe(true);
   expect(claimSkillReminder("S")).toBe(false);   // so it is never reminded
 });
 
@@ -83,11 +87,17 @@ test("action tools are the ones that act; searches and reads are not", () => {
   expect(isSkillSelection("skill_search")).toBe(true); // legacy compatibility
   expect(isSkillSelection("Skill")).toBe(true); // host-native skill loader
   expect(isSkillSelection("brain_search")).toBe(false);
+  expect(isCairnTool("mcp__cairn__brain_search")).toBe(true);
+  expect(isCairnTool("Skill")).toBe(false);
 });
 
 test("a host-native skill satisfies the turn gate without a Cairn review id", () => {
   resetSkillTurn("S");
   noteSkillSelection("S", "Skill", { skill: "cairn-harness" }, { ok: true });
-  expect(skillTurnState("S")).toMatchObject({ selected: true, pendingReviewIds: [] });
+  expect(skillTurnState("S")).toMatchObject({
+    selected: true,
+    pendingReviewIds: [],
+    cairnToolObserved: false,
+  });
   expect(claimSkillReminder("S")).toBe(false);
 });

@@ -55,7 +55,7 @@ const ACTION_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "Bas
 const baseName = (tool: string) => (tool.includes("__") ? tool.slice(tool.lastIndexOf("__") + 2) : tool);
 export function isActionTool(tool: string): boolean { return ACTION_TOOLS.has(baseName(tool)); }
 export function isSkillSelection(tool: string): boolean {
-  return ["skill_select", "skill_create", "skill_search"].includes(baseName(tool));
+  return ["skill", "skill_select", "skill_create", "skill_search"].includes(baseName(tool).toLowerCase());
 }
 export function isSkillReview(tool: string): boolean { return baseName(tool) === "skill_review"; }
 

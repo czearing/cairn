@@ -82,6 +82,10 @@ const workflowPrompt = (): Promise<string> => promptWithCatalog("user-message.md
 // "mcp__cairn__brain_search"); accept any of those forms.
 export const isTool = (name: string, want: string): boolean =>
   name === want || name.endsWith(want) || name.includes(want);
+const isNativeSkillTool = (name: string): boolean => {
+  const normalized = name.toLowerCase();
+  return normalized === "skill" || normalized.endsWith("__skill");
+};
 const isTask = (name: string): boolean => /^(task|agent)$/i.test(name) || name === "Task" || name === "Agent";
 
 // ── Pure decision helpers (exported for unit tests) ────────────────────────────────────────────
@@ -410,6 +414,7 @@ async function main(): Promise<void> {
     updateLifecycle(stateId, (current) => {
       const next = { ...current };
       if (isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) next.brainUsed = true;
+      if (isNativeSkillTool(toolName) && toolResultSucceeded(result)) next.skillUsed = true;
       if (isTool(toolName, "skill_select")) {
         const ids = Array.isArray(args.ids) ? args.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0) : [];
         if (ids.length) {

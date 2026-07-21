@@ -107,6 +107,23 @@ test("Claude delegates only skills selected in host-owned lifecycle state", asyn
   expect(JSON.parse(out).hookSpecificOutput.updatedInput.prompt).toContain(`Selected skill: poetry writing (${skillId})`);
 });
 
+test("Claude accepts a host-native Skill invocation without requiring a Cairn selection", async () => {
+  const sessionId = `claude-native-skill-${randomUUID()}`;
+  await fire({
+    hook_event_name: "PostToolUse",
+    session_id: sessionId,
+    tool_name: "Skill",
+    tool_input: { skill: "cairn-harness" },
+    tool_output: { ok: true },
+  });
+  expect(await fire({
+    hook_event_name: "PreToolUse",
+    session_id: sessionId,
+    tool_name: "Bash",
+    tool_input: { command: "echo ready" },
+  })).toBe("");
+});
+
 test("Claude Stop defers automatic skill review until all stop gates pass", async () => {
   const { listReviewJobs } = await import("../src/skill/review-queue");
   const skillId = randomUUID();

@@ -3,6 +3,7 @@ Run this on every task, including trivial/creative ones (yes, a haiku). Reason: 
 # Instructions
 ## Skills
 Before work, choose one:
+- Host skill: If an exact installed host-native skill applies, invoke the host `skill` tool. This satisfies the skill gate and is not reviewed by Cairn.
 - Reuse: `skill_select({"ids":["<id>"]})`; execute the returned `steps`.
 - New: `skill_create({"title":"api debugging","description":"Use for recurring API request, response, authentication, and server failures across projects.","plan":"1. Reproduce the failure\n2. Trace the first incorrect boundary","whyExistingSkillsDoNotFit":"No catalog skill covers reusable API protocol debugging across projects."})`.
 Reuse only when the current task falls directly inside the skill's usage description and outside every stated exclusion. Topical similarity is not a fit; when no exact description fits, you MUST create a new skill.

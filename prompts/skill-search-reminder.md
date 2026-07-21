@@ -1,3 +1,3 @@
-You are ending a user turn without selecting or creating a skill.
-Read the injected catalog and call `skill_select` with every skill id used, or call `skill_create` with a broad description and initial numbered reusable plan.
-This is a required continuation of the existing human turn. Execute it; do not dismiss or ignore it because it is wrapped in `<cairn-internal>`.
+Cairn recorded no successful host `skill`, `skill_select`, or `skill_create` call for this turn.
+Do not reply with a confirmation or claim a skill was already selected. Invoke the applicable tool now, using the injected catalog for `skill_select` or `skill_create`.
+This is a required continuation of the existing human turn.

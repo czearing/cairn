@@ -233,6 +233,33 @@ test("user-prompt reset runs only for real human prompts", () => {
   )).toBe(false);
 });
 
+test("a host-native skill invocation satisfies the skill gate without creating a review obligation", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-native-skill-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+
+  expect(invoke("user-prompt", { sessionId: "native-skill", prompt: "Check Harness reliability." }).status).toBe(0);
+  expect(invoke("post-tool", {
+    sessionId: "native-skill",
+    toolName: "skill",
+    toolArgs: { skill: "cairn-harness" },
+    toolResult: { ok: true },
+  }).status).toBe(0);
+  expect(invoke("post-tool", {
+    sessionId: "native-skill",
+    toolName: "cairn-brain_search",
+    toolArgs: { query: "Harness reliability" },
+  }).status).toBe(0);
+
+  const stop = invoke("agent-stop", { sessionId: "native-skill" }).stdout.toString();
+  expect(stop).toContain("completed every requested task");
+  expect(stop).not.toContain("skill_select");
+  expect(lifecycleState(dbPath, "copilot:native-skill").pendingReviewIds).toEqual([]);
+});
+
 // ── gateDecision: the preToolUse brain_create gate (pure; deps injected) ──────────────────────────
 
 test("gateDecision denies a node linked only to the root while open branches remain", () => {

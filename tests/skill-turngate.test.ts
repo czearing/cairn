@@ -81,5 +81,13 @@ test("action tools are the ones that act; searches and reads are not", () => {
   expect(isSkillSelection("mcp__cairn__skill_select")).toBe(true);
   expect(isSkillSelection("skill_create")).toBe(true);
   expect(isSkillSelection("skill_search")).toBe(true); // legacy compatibility
+  expect(isSkillSelection("Skill")).toBe(true); // host-native skill loader
   expect(isSkillSelection("brain_search")).toBe(false);
+});
+
+test("a host-native skill satisfies the turn gate without a Cairn review id", () => {
+  resetSkillTurn("S");
+  noteSkillSelection("S", "Skill", { skill: "cairn-harness" }, { ok: true });
+  expect(skillTurnState("S")).toMatchObject({ selected: true, pendingReviewIds: [] });
+  expect(claimSkillReminder("S")).toBe(false);
 });

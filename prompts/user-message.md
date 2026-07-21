@@ -8,6 +8,7 @@ Before work, choose one:
 - New: `skill_create({"title":"api debugging","description":"Use for recurring API request, response, authentication, and server failures across projects.","plan":"1. Reproduce the failure\n2. Trace the first incorrect boundary","whyExistingSkillsDoNotFit":"No catalog skill covers reusable API protocol debugging across projects."})`.
 Reuse only when the current task falls directly inside the skill's usage description and outside every stated exclusion. Topical similarity is not a fit; when no exact description fits, you MUST create a new skill.
 Cairn reviews every selected skill automatically after your final visible response. Do not call `skill_review`. Use `skill_edit` only to permanently correct reusable steps.
+If Cairn tools are unavailable or disconnected, do not retry or block the user's task. Continue without Cairn and mention the outage once.
 
 ## Read the Shared Brain First
 1. Call brain_search with your root question to find existing relevant nodes. For creative tasks DO NOT repeat existing outputs.

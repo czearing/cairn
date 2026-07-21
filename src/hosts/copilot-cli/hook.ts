@@ -39,6 +39,7 @@ import {
 } from "../../skill/lifecycle";
 import { skillResultId } from "../../skill/tool-result";
 import { recordMissedReviews } from "../../skill/missed-review";
+import { mcpAvailable } from "../../mcp/presence";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 const emit = (obj: object) => process.stdout.write(JSON.stringify(obj));
@@ -310,11 +311,13 @@ async function main(): Promise<void> {
   try { recordHostEvent("copilot", mode ?? "", raw, rawPayload); } catch { /* event indexing never blocks the host */ }
 
   if (mode === "session-start") {
+    if (!mcpAvailable()) return void emit({});
     const text = await workflowPrompt();
     emit(text ? { additionalContext: internalContext(text) } : {});
     return;
   }
   if (mode === "subagent-start") {
+    if (!mcpAvailable()) return void emit({});
     const text = await promptText("subagent-protocol.md");
     emit(text ? { additionalContext: internalContext(text) } : {});
     return;
@@ -366,12 +369,14 @@ async function main(): Promise<void> {
     }
     if (!shouldStartUserTurn(prompt)) return void emit({});
     resetLifecycle(stateId);
+    if (!mcpAvailable()) return void emit({});
     const wf = await workflowPrompt();
     emit(wf ? { additionalContext: internalContext(wf) } : {});
     return;
   }
 
   if (mode === "pre-tool") {
+    if (!mcpAvailable()) return void emit({});
     // preToolUse command hooks are FAIL-CLOSED (a crash denies the tool), so default to allow and only
     // ever deny on an explicit gate match.
     if (process.env.CAIRN_COPILOT_NO_GATE) return void emit({});
@@ -409,6 +414,7 @@ async function main(): Promise<void> {
   }
 
   if (mode === "post-tool") {
+    if (!mcpAvailable()) return void emit({});
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const stateId = turnScope(sessionId, agentId);
     updateLifecycle(stateId, (current) => {
@@ -482,12 +488,12 @@ async function main(): Promise<void> {
     const stateId = turnScope(sessionId);
     const st = readLifecycle(stateId);
     const reviewContext = copilotReviewContext(sessionId);
-    const file = stopDecision({
+    const file = mcpAvailable() ? stopDecision({
       brainUsed: st.brainUsed,
       skillUsed: st.skillUsed,
       pendingReviewCount: st.pendingReviewIds.length,
       stopNudges: st.stopNudges,
-    }).file;
+    }).file : "";
     const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
       updateLifecycle(stateId, () => ({ ...st, stopNudges: st.stopNudges + 1, stopBlocked: true }));

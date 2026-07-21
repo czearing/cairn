@@ -28,6 +28,7 @@ process.env.CAIRN_INFLIGHT_DIR = join(tmpdir(), `cairn-test-inflight-${randomUUI
 // The skill layer is ON by default in production now; the test run keeps it ON so the skill-feature
 // tests exercise the real path. The gating tests below toggle CAIRN_SKILLS locally to check both states.
 process.env.CAIRN_SKILLS = "1";
+process.env.CAIRN_MCP_AVAILABLE = "1";
 
 // Queue behavior is tested synchronously; never leave detached learner supervisors behind from hook fixtures.
 process.env.CAIRN_MAX_LEARNERS = "0";

@@ -37,6 +37,7 @@ async function main(): Promise<void> {
   const { getEventName, normalizeClaudeCode } = await import("./normalize");
   const { respond, denyPreTool, modifyPreTool } = await import("./respond");
   const { rootId, openBranchExists } = await import("../../core/audit");
+  const { mcpAvailable } = await import("../../mcp/presence");
 
   const raw = await Bun.stdin.text();
 
@@ -63,6 +64,7 @@ async function main(): Promise<void> {
   // like Stop so the same record/split-leaves enforcement runs (the response shape is identical).
   const hookName = (payload as { hook_event_name?: unknown }).hook_event_name;
   if (hookName === "SessionStart") {
+    if (!mcpAvailable()) return;
     const content = await inject({ kind: "user_message", text: "" });
     if (content) await emit(respond("SessionStart", content));
     return;
@@ -75,6 +77,13 @@ async function main(): Promise<void> {
 
   const event = await normalizeClaudeCode(payload);
   if (!event) return;
+  const stopHookActive = hookName === "Stop" && (payload as { stop_hook_active?: unknown }).stop_hook_active === true;
+  if (!mcpAvailable()) {
+    if (event.kind === "turn_finished" && !stopHookActive) {
+      await emit(respond("Stop", COMPLETION_REMINDER));
+    }
+    return;
+  }
 
   // Depth-first gate: a new node that links ONLY to the root is denied while open branches
   // remain. Finish (or descend) an open branch before starting another straight off the root.
@@ -115,7 +124,6 @@ async function main(): Promise<void> {
     } catch { /* fall through to normal handling */ }
   }
 
-  const stopHookActive = hookName === "Stop" && (payload as { stop_hook_active?: unknown }).stop_hook_active === true;
   const content = stopHookActive ? null : await inject(event);
 
   // Reward depth, not count: praise a new node ONLY when it was linked under a non-root parent

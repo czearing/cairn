@@ -260,6 +260,38 @@ test("a host-native skill invocation satisfies the skill gate without creating a
   expect(lifecycleState(dbPath, "copilot:native-skill").pendingReviewIds).toEqual([]);
 });
 
+test("a disconnected MCP server disables impossible workflow injection and stop gates", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-disconnected-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_MCP_AVAILABLE: "0",
+    CAIRN_SKILLS: "1",
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+
+  expect(invoke("session-start", { sessionId: "disconnected" }).stdout.toString()).toBe("{}");
+  expect(invoke("user-prompt", { sessionId: "disconnected", prompt: "Finish the task." }).stdout.toString()).toBe("{}");
+  expect(invoke("pre-tool", {
+    sessionId: "disconnected",
+    toolName: "Task",
+    toolArgs: { prompt: "Delegate work." },
+  }).stdout.toString()).toBe("{}");
+  expect(invoke("post-tool", {
+    sessionId: "disconnected",
+    toolName: "Task",
+    toolArgs: { prompt: "Delegate work." },
+  }).stdout.toString()).toBe("{}");
+  const stop = invoke("agent-stop", { sessionId: "disconnected" }).stdout.toString();
+  expect(stop).toContain("completed every requested task");
+  expect(stop).not.toContain("brain_search");
+  expect(stop).not.toContain("skill_select");
+  expect(invoke("agent-stop", { sessionId: "disconnected" }).stdout.toString()).toBe("{}");
+});
+
 // ── gateDecision: the preToolUse brain_create gate (pure; deps injected) ──────────────────────────
 
 test("gateDecision denies a node linked only to the root while open branches remain", () => {

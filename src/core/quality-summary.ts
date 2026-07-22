@@ -88,14 +88,19 @@ export function qualitySummary(days = 7): QualitySummary {
       runs: number; active: number; closed: number; completed: number; workflow: number; failures: number;
     };
   const brain = db.query(`WITH returned AS (
-      SELECT DISTINCT run_id,entity_hash FROM quality_events
-      WHERE ts>=? AND kind='brain_returned' AND entity_hash!=''
+      SELECT DISTINCT e.run_id,e.entity_hash FROM quality_events e
+      JOIN quality_runs r USING(run_id)
+      WHERE e.ts>=? AND r.ended_ts>0 AND e.kind='brain_returned' AND e.entity_hash!=''
     ), used AS (
-      SELECT DISTINCT run_id,entity_hash FROM quality_events
-      WHERE ts>=? AND kind IN ('brain_referenced','brain_mutated') AND entity_hash!=''
+      SELECT DISTINCT e.run_id,e.entity_hash FROM quality_events e
+      JOIN quality_runs r USING(run_id)
+      WHERE e.ts>=? AND r.ended_ts>0
+        AND e.kind IN ('brain_referenced','brain_mutated') AND e.entity_hash!=''
     ), observed AS (
-      SELECT entity_hash,COUNT(DISTINCT session_hash) AS sessions FROM quality_events
-      WHERE ts>=? AND entity_type='brain' AND entity_hash!='' GROUP BY entity_hash
+      SELECT e.entity_hash,COUNT(DISTINCT e.session_hash) AS sessions FROM quality_events e
+      JOIN quality_runs r USING(run_id)
+      WHERE e.ts>=? AND r.ended_ts>0 AND e.entity_type='brain' AND e.entity_hash!=''
+      GROUP BY e.entity_hash
     )
     SELECT (SELECT COUNT(*) FROM returned) AS returnedNodes,
       (SELECT COUNT(*) FROM returned r JOIN used u USING(run_id,entity_hash)) AS usedReturnedNodes,
@@ -105,10 +110,10 @@ export function qualitySummary(days = 7): QualitySummary {
       returnedNodes: number; usedReturnedNodes: number; observedNodes: number; crossSessionNodes: number;
     };
   const skills = db.query(`SELECT
-    COUNT(DISTINCT CASE WHEN kind='skill_selected' THEN entity_hash END) AS selectedSkills,
-    COUNT(DISTINCT CASE WHEN kind='skill_edited' THEN entity_hash END) AS editedSkills,
-    COALESCE(SUM(CASE WHEN kind='visibility_failure' THEN 1 ELSE 0 END),0) AS visibilityFailures
-    FROM quality_events WHERE ts>=?`).get(sinceTs) as {
+    COUNT(DISTINCT CASE WHEN r.ended_ts>0 AND e.kind='skill_selected' THEN e.entity_hash END) AS selectedSkills,
+    COUNT(DISTINCT CASE WHEN r.ended_ts>0 AND e.kind='skill_edited' THEN e.entity_hash END) AS editedSkills,
+    COALESCE(SUM(CASE WHEN e.kind='visibility_failure' THEN 1 ELSE 0 END),0) AS visibilityFailures
+    FROM quality_events e JOIN quality_runs r USING(run_id) WHERE e.ts>=?`).get(sinceTs) as {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
     };
   const dimensions = db.query(`SELECT host,model,MAX(started_ts) AS latest

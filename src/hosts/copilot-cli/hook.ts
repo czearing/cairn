@@ -44,6 +44,8 @@ const PROMPTS = new URL("../../../prompts/", import.meta.url);
 const emit = (obj: object) => process.stdout.write(JSON.stringify(obj));
 export const internalContext = (text: string): string => text ? `<cairn-internal>\n${text}\n</cairn-internal>` : "";
 const COMPLETION_REMINDER = "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
+const CAIRN_VISIBILITY_REMINDER =
+  "Before submitting, attempt the injected Cairn brain and skill workflow now. If Cairn tools are unavailable in this session, do not retry or block on them; finish the user's task.";
 
 // Read stdin but NEVER block the host indefinitely. `Bun.stdin.text()` only resolves on EOF, so if the
 // CLI invokes a hook without closing its stdin (observed on some Copilot/Claude CLI versions, and for
@@ -418,6 +420,7 @@ async function main(): Promise<void> {
     updateLifecycle(stateId, (current) => {
       const next = { ...current };
       const succeeded = toolResultSucceeded(result);
+      if (isCairnMcpTool(toolName)) next.cairnToolAttempted = true;
       if (isCairnMcpTool(toolName) && succeeded) next.cairnToolObserved = true;
       if ((isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) && succeeded) next.brainUsed = true;
       if (isNativeSkillTool(toolName) && toolResultSucceeded(result)) next.skillUsed = true;
@@ -490,6 +493,15 @@ async function main(): Promise<void> {
     const st = readLifecycle(stateId);
     const reviewContext = copilotReviewContext(sessionId);
     const enforceWorkflow = process.env.CAIRN_ENFORCE_STOP_GATES === "1" || st.cairnToolObserved;
+    if (!enforceWorkflow && !st.cairnToolAttempted && !st.cairnVisibilityNudged) {
+      updateLifecycle(stateId, () => ({
+        ...st,
+        cairnVisibilityNudged: true,
+        stopBlocked: true,
+      }));
+      emit({ decision: "block", reason: internalContext(CAIRN_VISIBILITY_REMINDER) });
+      return;
+    }
     const file = enforceWorkflow ? stopDecision({
       brainUsed: st.brainUsed,
       skillUsed: st.skillUsed,

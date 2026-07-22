@@ -26,13 +26,18 @@ export function noteSkillSelection(session: string, tool: string, input: Record<
   updateLifecycle(scope(session), (state) => ({
     ...state,
     skillUsed: true,
+    cairnToolAttempted: state.cairnToolAttempted || !native,
     cairnToolObserved: state.cairnToolObserved || !native,
     pendingReviewIds: [...new Set([...state.pendingReviewIds, ...ids])],
   }));
 }
 
 export function noteCairnToolObserved(session: string): void {
-  updateLifecycle(scope(session), (state) => ({ ...state, cairnToolObserved: true }));
+  updateLifecycle(scope(session), (state) => ({
+    ...state,
+    cairnToolAttempted: true,
+    cairnToolObserved: true,
+  }));
 }
 
 export function noteSkillReviewed(session: string, id: string): void {

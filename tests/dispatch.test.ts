@@ -137,9 +137,14 @@ test("Claude fails open when a resumed model manifest exposes no Cairn tools", a
     }));
   if (previous == null) delete process.env.CAIRN_ENFORCE_STOP_GATES;
   else process.env.CAIRN_ENFORCE_STOP_GATES = previous;
+  expect(stop.reason).toContain("attempt the injected Cairn brain and skill workflow");
   expect(stop.reason).toContain("completed every requested task");
-  expect(stop.reason).not.toContain("brain");
-  expect(stop.reason).not.toContain("skill");
+  expect(await fire({
+    hook_event_name: "Stop",
+    session_id: sessionId,
+    transcript_path: transcriptPath,
+    stop_hook_active: true,
+  })).toBe("");
   rmSync(transcriptPath, { force: true });
 });
 

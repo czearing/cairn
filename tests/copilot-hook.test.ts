@@ -274,6 +274,8 @@ test("a stale model tool manifest fails open until a Cairn tool is successfully 
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
 
   expect(invoke("user-prompt", { sessionId: "stale-manifest", prompt: "Finish the task." }).status).toBe(0);
+  const ignored = invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString();
+  expect(ignored).toContain("attempt the injected Cairn brain and skill workflow");
   expect(invoke("post-tool", {
     sessionId: "stale-manifest",
     toolName: "cairn-brain_search",
@@ -282,7 +284,7 @@ test("a stale model tool manifest fails open until a Cairn tool is successfully 
   }).status).toBe(0);
   const unavailable = invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString();
   expect(unavailable).toContain("completed every requested task");
-  expect(unavailable).not.toContain("skill_select");
+  expect(unavailable).not.toContain("attempt the injected Cairn");
 
   expect(invoke("user-prompt", { sessionId: "stale-manifest", prompt: "Try again." }).status).toBe(0);
   expect(invoke("post-tool", {
@@ -292,6 +294,28 @@ test("a stale model tool manifest fails open until a Cairn tool is successfully 
     toolResult: { success: true },
   }).status).toBe(0);
   expect(invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString()).toContain("skill_select");
+});
+
+test("an ignored healthy Cairn workflow gets one retry before failing open", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-ignored-workflow-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_ENFORCE_STOP_GATES: "0",
+    CAIRN_SKILLS: "1",
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+
+  expect(invoke("user-prompt", { sessionId: "ignored-workflow", prompt: "Finish the task." }).status).toBe(0);
+  expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
+    .toContain("attempt the injected Cairn brain and skill workflow");
+  expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
+    .toContain("completed every requested task");
+  expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString()).toBe("{}");
+  rmSync(dbPath, { force: true });
 });
 
 // ── gateDecision: the preToolUse brain_create gate (pure; deps injected) ──────────────────────────

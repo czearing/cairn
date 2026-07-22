@@ -25,6 +25,8 @@ const AUTO_REVIEW_REMINDER =
   "Deliver the finished visible result now. Cairn will review every selected skill automatically after the response exists.";
 const COMPLETION_REMINDER =
   "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
+const CAIRN_VISIBILITY_REMINDER =
+  "Before submitting, attempt the injected Cairn brain and skill workflow now. If Cairn tools are unavailable in this session, do not retry or block on them; finish the user's task.";
 
 // Awaited write so the buffer is fully flushed before we force-exit (a bare process.exit() right
 // after process.stdout.write() can truncate piped output).
@@ -117,17 +119,34 @@ async function main(): Promise<void> {
 
   const stopHookActive = hookName === "Stop" && (payload as { stop_hook_active?: unknown }).stop_hook_active === true;
   const session = (payload as { session_id?: string }).session_id ?? "";
-  const { lifecycleScope, readLifecycle } = await import("../../skill/lifecycle");
-  const observed = readLifecycle(lifecycleScope("claude", session)).cairnToolObserved;
+  const { lifecycleScope, readLifecycle, updateLifecycle } = await import("../../skill/lifecycle");
+  const lifecycleId = lifecycleScope("claude", session);
+  const lifecycleState = readLifecycle(lifecycleId);
+  const observed = lifecycleState.cairnToolObserved;
   const enforceWorkflow = process.env.CAIRN_ENFORCE_STOP_GATES === "1"
     || observed;
+  let visibilityReminder = "";
+  if (
+    event.kind === "turn_finished"
+    && !enforceWorkflow
+    && !stopHookActive
+    && !lifecycleState.cairnToolAttempted
+    && !lifecycleState.cairnVisibilityNudged
+  ) {
+    updateLifecycle(lifecycleId, (state) => ({
+      ...state,
+      cairnVisibilityNudged: true,
+      stopBlocked: true,
+    }));
+    visibilityReminder = CAIRN_VISIBILITY_REMINDER;
+  }
   const content = stopHookActive || (event.kind === "turn_finished" && !enforceWorkflow)
     ? null
     : await inject(event);
 
   // Reward depth, not count: praise a new node ONLY when it was linked under a non-root parent
   // (genuine descent). Flat root-children earn no praise.
-  let out = content ?? "";
+  let out = [content, visibilityReminder].filter(Boolean).join("\n\n");
   if (content && event.kind === "tool_completed" && isBrainCreate(event.tool)) {
     const edges = Array.isArray(event.input.edges) ? (event.input.edges as string[]) : [];
     const root = rootId();

@@ -34,6 +34,7 @@ async function load(){
   card("Fixed / message",`${fmt(u.impact.currentPromptTokens)} tokens`),
   card("Measured / message",`${fmt(u.impact.measuredTokensPerPrompt)} tokens`),
   card("Completed runs",pct(q.completedRate),q.completedRate===100?"good":""),
+  card("Active runs",fmt(q.activeRuns)),
   card("Workflow pass",pct(q.workflowRate),q.workflowRate===100?"good":""),
   card("Search to use",`${pct(q.searchToUseRate)} · ${q.usedReturnedNodes}/${q.returnedNodes}`),
   card("Cross-session reuse",`${pct(q.crossSessionReuseRate)} · ${q.crossSessionNodes}/${q.observedNodes}`),

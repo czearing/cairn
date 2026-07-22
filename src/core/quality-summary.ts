@@ -12,6 +12,7 @@ export interface QualityMetrics {
 
 export interface QualitySummary {
   runs: number;
+  activeRuns: number;
   completedRate: number;
   workflowRate: number;
   toolFailures: number;
@@ -49,7 +50,7 @@ function releaseMetrics(sinceTs: number, release: string): QualityMetrics | null
     ROUND(AVG(injected_tokens + COALESCE((
       SELECT SUM(input_tokens+output_tokens) FROM quality_events e WHERE e.run_id=r.run_id
     ),0)),1) AS tokensPerRun
-    FROM quality_runs r WHERE started_ts>=? AND release_fingerprint=?`)
+    FROM quality_runs r WHERE started_ts>=? AND release_fingerprint=? AND ended_ts>0`)
     .get(sinceTs, release) as Omit<QualityMetrics, "release"> | null;
   return row?.runs ? { release, ...row } : null;
 }
@@ -59,11 +60,13 @@ export function qualitySummary(days = 7): QualitySummary {
   if (!db) return empty();
   const sinceTs = Date.now() - Math.max(1, days) * 86_400_000;
   const runs = db.query(`SELECT COUNT(*) AS runs,
+    COALESCE(SUM(CASE WHEN ended_ts=0 THEN 1 ELSE 0 END),0) AS active,
+    COALESCE(SUM(CASE WHEN ended_ts>0 THEN 1 ELSE 0 END),0) AS closed,
     COALESCE(SUM(completed),0) AS completed,
     COALESCE(SUM(workflow_passed),0) AS workflow,
     COALESCE(SUM(tool_failures),0) AS failures
     FROM quality_runs WHERE started_ts>=?`).get(sinceTs) as {
-      runs: number; completed: number; workflow: number; failures: number;
+      runs: number; active: number; closed: number; completed: number; workflow: number; failures: number;
     };
   const brain = db.query(`WITH returned AS (
       SELECT DISTINCT run_id,entity_hash FROM quality_events
@@ -90,14 +93,16 @@ export function qualitySummary(days = 7): QualitySummary {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
     };
   const releases = db.query(`SELECT release_fingerprint AS release,MAX(started_ts) AS latest
-    FROM quality_runs WHERE started_ts>=? GROUP BY release_fingerprint ORDER BY latest DESC LIMIT 2`)
+    FROM quality_runs WHERE started_ts>=? AND ended_ts>0
+    GROUP BY release_fingerprint ORDER BY latest DESC LIMIT 2`)
     .all(sinceTs) as { release: string }[];
   const current = releaseMetrics(sinceTs, releases[0]?.release || "");
   const baseline = releaseMetrics(sinceTs, releases[1]?.release || "");
   return {
     runs: runs.runs,
-    completedRate: percent(runs.completed, runs.runs),
-    workflowRate: percent(runs.workflow, runs.runs),
+    activeRuns: runs.active,
+    completedRate: percent(runs.completed, runs.closed),
+    workflowRate: percent(runs.workflow, runs.closed),
     toolFailures: runs.failures,
     searchToUseRate: percent(brain.usedReturnedNodes, brain.returnedNodes),
     ...brain,
@@ -117,7 +122,7 @@ export function qualitySummary(days = 7): QualitySummary {
 
 function empty(): QualitySummary {
   return {
-    runs: 0, completedRate: 0, workflowRate: 0, toolFailures: 0, visibilityFailures: 0,
+    runs: 0, activeRuns: 0, completedRate: 0, workflowRate: 0, toolFailures: 0, visibilityFailures: 0,
     searchToUseRate: 0, returnedNodes: 0, usedReturnedNodes: 0,
     crossSessionReuseRate: 0, crossSessionNodes: 0, observedNodes: 0,
     selectedSkills: 0, editedSkills: 0, skillEditRate: 0,

@@ -66,10 +66,15 @@ test("quality telemetry derives reuse and release deltas without storing content
     ...current, completed: true, workflowPassed: true, skillUsed: true,
     brainUsed: true, stopNudges: 0,
   });
+  beginQualityRun({
+    ...identity("quality-active"), promptHash: promptFingerprint("active"),
+    catalogVersion: "catalog-c", injectedChars: 200,
+  });
 
   const summary = qualitySummary(1);
   expect(summary).toMatchObject({
-    runs: 2,
+    runs: 3,
+    activeRuns: 1,
     completedRate: 100,
     workflowRate: 100,
     toolFailures: 1,

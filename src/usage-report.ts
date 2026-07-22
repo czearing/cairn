@@ -38,7 +38,7 @@ export function printUsageReport(days: number, json = false): void {
   }
   line();
   line(c.bold("Quality & reuse"));
-  line(`runs ${quality.runs}  completed ${quality.completedRate}%  ` +
+  line(`runs ${quality.runs} (${quality.activeRuns} active)  completed ${quality.completedRate}%  ` +
     `workflow ${quality.workflowRate}%  tool failures ${quality.toolFailures}`);
   line(`brain search-to-use ${quality.searchToUseRate}% ` +
     `(${quality.usedReturnedNodes}/${quality.returnedNodes})  ` +

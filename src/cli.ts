@@ -118,6 +118,14 @@ switch (cmd) {
     printUsageReport(days, process.argv.includes("--json"));
     break;
   }
+  case "prompt-eval": {
+    const { runPromptEvaluation } = await import("./prompt-eval/cli");
+    process.exitCode = runPromptEvaluation();
+    break;
+  }
+  case "prompt-evidence":
+    (await import("./prompt-eval/capture-cli")).runPromptEvidenceCapture();
+    break;
   case "seed":
     await import("../examples/seed");
     break;
@@ -139,6 +147,8 @@ Usage:
   cairn ui          Serve the read-only viewer (deep-linkable at /node/<id>)
   cairn skills      Live monitor of the background skill learner (scores + master rewrites)
   cairn usage       Local context/tool usage report (--days=7, --json)
+  cairn prompt-eval Compare isolated baseline/candidate evidence without touching live agents
+  cairn prompt-evidence Extract structured evidence from an explicit non-live benchmark DB
   cairn seed        Write a few demo neurons to the brain
 
 Config (env): CAIRN_DB_PATH, CAIRN_EMBED_PROVIDER, CAIRN_RELEVANCE_THRESHOLD …

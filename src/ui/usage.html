@@ -42,7 +42,8 @@ async function load(){
   card("Coverage",lag?`lower bound · ${lag}m lag`:"current",lag?"warning":"good")
  ].join("");
  document.querySelector("#costs").innerHTML=u.groups.map(g=>`<tr><td>${[g.host,g.source,g.toolName].filter(Boolean).join(" / ")}</td><td>${fmt(g.events)}</td><td>${fmt(g.estimatedTokens)}</td><td>${fmt(Math.round(g.estimatedTokens/g.events))}</td><td>${fmt(g.failures)}</td></tr>`).join("");
- document.querySelector("#release").textContent=q.delta?`Tokens/run ${q.delta.tokensPerRun>=0?"+":""}${q.delta.tokensPerRun}; completion ${q.delta.completedRate>=0?"+":""}${q.delta.completedRate}pp; workflow ${q.delta.workflowRate>=0?"+":""}${q.delta.workflowRate}pp; failures ${q.delta.toolFailureRate>=0?"+":""}${q.delta.toolFailureRate}pp`:"Collecting baseline: two release fingerprints are required for a delta.";
+ const deltas=q.comparisons.filter(x=>x.delta);
+ document.querySelector("#release").innerHTML=deltas.length?deltas.map(x=>`<div>${x.host}${x.model?` / ${x.model}`:""}: tokens/run ${x.delta.tokensPerRun>=0?"+":""}${x.delta.tokensPerRun}; completion ${x.delta.completedRate>=0?"+":""}${x.delta.completedRate}pp; workflow ${x.delta.workflowRate>=0?"+":""}${x.delta.workflowRate}pp; failures ${x.delta.toolFailureRate>=0?"+":""}${x.delta.toolFailureRate}pp</div>`).join(""):"Collecting per-host baselines: two release fingerprints are required for a delta.";
 }
 document.querySelector("#days").addEventListener("change",load);load();setInterval(load,15000);
 </script>

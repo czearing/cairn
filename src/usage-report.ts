@@ -46,12 +46,15 @@ export function printUsageReport(days: number, json = false): void {
     `(${quality.crossSessionNodes}/${quality.observedNodes})`);
   line(`skills selected ${quality.selectedSkills}  edited ${quality.editedSkills} ` +
     `(${quality.skillEditRate}%)  visibility failures ${quality.visibilityFailures}`);
-  if (quality.delta) {
-    line(`release delta  tokens/run ${signed(quality.delta.tokensPerRun)}  ` +
-      `completion ${signed(quality.delta.completedRate)}pp  ` +
-      `workflow ${signed(quality.delta.workflowRate)}pp  ` +
-      `failures ${signed(quality.delta.toolFailureRate)}pp`);
-  } else {
+  const deltas = quality.comparisons.filter((item) => item.delta);
+  for (const item of deltas) {
+    line(`${item.host}${item.model ? `/${item.model}` : ""} release delta  ` +
+      `tokens/run ${signed(item.delta!.tokensPerRun)}  ` +
+      `completion ${signed(item.delta!.completedRate)}pp  ` +
+      `workflow ${signed(item.delta!.workflowRate)}pp  ` +
+      `failures ${signed(item.delta!.toolFailureRate)}pp`);
+  }
+  if (!deltas.length) {
     line(c.dim("release delta  collecting baseline (two release fingerprints required)"));
   }
 }

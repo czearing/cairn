@@ -89,6 +89,8 @@ test("quality telemetry derives reuse and release deltas without storing content
   expect(summary.current).not.toBeNull();
   expect(summary.baseline).not.toBeNull();
   expect(summary.delta).not.toBeNull();
+  expect(summary.comparisons).toHaveLength(1);
+  expect(summary.comparisons[0]?.host).toBe("copilot");
 
   const db = new Database(process.env.CAIRN_DB_PATH!, { readonly: true });
   const columns = db.query("PRAGMA table_info(quality_events)").all() as { name: string }[];

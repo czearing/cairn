@@ -10,6 +10,14 @@ export interface QualityMetrics {
   averageStopNudges: number;
 }
 
+export interface ReleaseComparison {
+  host: string;
+  model: string;
+  current: QualityMetrics;
+  baseline: QualityMetrics | null;
+  delta: QualitySummary["delta"];
+}
+
 export interface QualitySummary {
   runs: number;
   activeRuns: number;
@@ -26,6 +34,7 @@ export interface QualitySummary {
   selectedSkills: number;
   editedSkills: number;
   skillEditRate: number;
+  comparisons: ReleaseComparison[];
   current: QualityMetrics | null;
   baseline: QualityMetrics | null;
   delta: {
@@ -39,7 +48,9 @@ export interface QualitySummary {
 const percent = (part: number, total: number): number =>
   total > 0 ? Math.round(part * 1000 / total) / 10 : 0;
 
-function releaseMetrics(sinceTs: number, release: string): QualityMetrics | null {
+function releaseMetrics(
+  sinceTs: number, release: string, host: string, model: string
+): QualityMetrics | null {
   const db = qualityDatabase();
   if (!db || !release) return null;
   const row = db.query(`SELECT COUNT(*) AS runs,
@@ -50,10 +61,18 @@ function releaseMetrics(sinceTs: number, release: string): QualityMetrics | null
     ROUND(AVG(injected_tokens + COALESCE((
       SELECT SUM(input_tokens+output_tokens) FROM quality_events e WHERE e.run_id=r.run_id
     ),0)),1) AS tokensPerRun
-    FROM quality_runs r WHERE started_ts>=? AND release_fingerprint=? AND ended_ts>0`)
-    .get(sinceTs, release) as Omit<QualityMetrics, "release"> | null;
+    FROM quality_runs r WHERE started_ts>=? AND release_fingerprint=? AND host=?
+      AND model=? AND ended_ts>0`)
+    .get(sinceTs, release, host, model) as Omit<QualityMetrics, "release"> | null;
   return row?.runs ? { release, ...row } : null;
 }
+
+const delta = (current: QualityMetrics, baseline: QualityMetrics | null) => baseline ? {
+  tokensPerRun: Math.round((current.tokensPerRun - baseline.tokensPerRun) * 10) / 10,
+  completedRate: Math.round((current.completedRate - baseline.completedRate) * 10) / 10,
+  workflowRate: Math.round((current.workflowRate - baseline.workflowRate) * 10) / 10,
+  toolFailureRate: Math.round((current.toolFailureRate - baseline.toolFailureRate) * 10) / 10,
+} : null;
 
 export function qualitySummary(days = 7): QualitySummary {
   const db = qualityDatabase();
@@ -92,12 +111,20 @@ export function qualitySummary(days = 7): QualitySummary {
     FROM quality_events WHERE ts>=?`).get(sinceTs) as {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
     };
-  const releases = db.query(`SELECT release_fingerprint AS release,MAX(started_ts) AS latest
+  const dimensions = db.query(`SELECT host,model,MAX(started_ts) AS latest
     FROM quality_runs WHERE started_ts>=? AND ended_ts>0
-    GROUP BY release_fingerprint ORDER BY latest DESC LIMIT 2`)
-    .all(sinceTs) as { release: string }[];
-  const current = releaseMetrics(sinceTs, releases[0]?.release || "");
-  const baseline = releaseMetrics(sinceTs, releases[1]?.release || "");
+    GROUP BY host,model ORDER BY latest DESC`).all(sinceTs) as { host: string; model: string }[];
+  const comparisons = dimensions.flatMap(({ host, model }) => {
+    const releases = db.query(`SELECT release_fingerprint AS release,MAX(started_ts) AS latest
+      FROM quality_runs WHERE started_ts>=? AND ended_ts>0 AND host=? AND model=?
+      GROUP BY release_fingerprint ORDER BY latest DESC LIMIT 2`)
+      .all(sinceTs, host, model) as { release: string }[];
+    const current = releaseMetrics(sinceTs, releases[0]?.release || "", host, model);
+    if (!current) return [];
+    const baseline = releaseMetrics(sinceTs, releases[1]?.release || "", host, model);
+    return [{ host, model, current, baseline, delta: delta(current, baseline) }];
+  });
+  const latest = comparisons[0];
   return {
     runs: runs.runs,
     activeRuns: runs.active,
@@ -109,14 +136,10 @@ export function qualitySummary(days = 7): QualitySummary {
     crossSessionReuseRate: percent(brain.crossSessionNodes, brain.observedNodes),
     ...skills,
     skillEditRate: percent(skills.editedSkills, skills.selectedSkills),
-    current,
-    baseline,
-    delta: current && baseline ? {
-      tokensPerRun: Math.round((current.tokensPerRun - baseline.tokensPerRun) * 10) / 10,
-      completedRate: Math.round((current.completedRate - baseline.completedRate) * 10) / 10,
-      workflowRate: Math.round((current.workflowRate - baseline.workflowRate) * 10) / 10,
-      toolFailureRate: Math.round((current.toolFailureRate - baseline.toolFailureRate) * 10) / 10,
-    } : null,
+    comparisons,
+    current: latest?.current || null,
+    baseline: latest?.baseline || null,
+    delta: latest?.delta || null,
   };
 }
 
@@ -125,7 +148,7 @@ function empty(): QualitySummary {
     runs: 0, activeRuns: 0, completedRate: 0, workflowRate: 0, toolFailures: 0, visibilityFailures: 0,
     searchToUseRate: 0, returnedNodes: 0, usedReturnedNodes: 0,
     crossSessionReuseRate: 0, crossSessionNodes: 0, observedNodes: 0,
-    selectedSkills: 0, editedSkills: 0, skillEditRate: 0,
+    selectedSkills: 0, editedSkills: 0, skillEditRate: 0, comparisons: [],
     current: null, baseline: null, delta: null,
   };
 }

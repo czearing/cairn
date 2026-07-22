@@ -129,10 +129,12 @@ test("usage CLI emits machine-readable aggregates", () => {
   const report = JSON.parse(result.stdout.toString()) as {
     totals: { events: number };
     impact: { currentPromptTokens: number };
+    quality: unknown;
     groups: unknown[];
   };
   expect(report.totals.events).toBeGreaterThan(0);
   expect(report.impact.currentPromptTokens).toBeGreaterThan(0);
+  expect(report.quality).toBeDefined();
   expect(Array.isArray(report.groups)).toBe(true);
 });
 
@@ -147,4 +149,6 @@ test("usage CLI prints decision metrics directly", () => {
   expect(output).toContain("measured/message");
   expect(output).toContain("context");
   expect(output).toContain("tools");
+  expect(output).toContain("Quality & reuse");
+  expect(output).toContain("cross-session reuse");
 });

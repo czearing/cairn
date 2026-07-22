@@ -26,8 +26,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isSystemEnvelope } from "../../skill/noise";
 import { recordHostEvent } from "../../core/host-events";
+import {
+  beginQualityRun,
+  finishQualityRun,
+  promptFingerprint,
+  recordQualityState,
+  recordQualityTool,
+} from "../../core/quality-record";
 import { recordUsage } from "../../core/usage";
-import { formatSkillCatalog, selectedSkillBlock, skillIdsFromTask } from "../../skill/catalog";
+import { formatSkillCatalog, selectedSkillBlock, skillCatalogSnapshot, skillIdsFromTask } from "../../skill/catalog";
 import {
   claimDelegation,
   lifecycleScope,
@@ -86,6 +93,10 @@ const promptWithCatalog = async (file: string): Promise<string> => {
   catch { return base; }
 };
 const workflowPrompt = (): Promise<string> => promptWithCatalog("user-message.md");
+const catalogVersion = (): string => {
+  try { return skillCatalogSnapshot().version; }
+  catch { return ""; }
+};
 
 // MCP tools arrive server-prefixed ("cairn-brain_search") or bare/namespaced ("brain_search" /
 // "mcp__cairn__brain_search"); accept any of those forms.
@@ -175,6 +186,7 @@ interface Payload {
   prompt: string;
   eventId: string;
   toolCallId: string;
+  durationMs: number;
 }
 function parsePayload(raw: string): Payload {
   try {
@@ -195,9 +207,10 @@ function parsePayload(raw: string): Payload {
       prompt: (j.prompt as string) ?? "",
       eventId: j.timestamp == null ? "" : String(j.timestamp),
       toolCallId: (j.toolCallId as string) ?? (j.tool_call_id as string) ?? (firstCall?.id as string) ?? "",
+      durationMs: Number(j.durationMs ?? j.duration_ms ?? 0),
     };
   } catch {
-    return { sessionId: "", agentId: "", agentName: "", toolName: "", args: {}, result: undefined, transcriptPath: "", prompt: "", eventId: "", toolCallId: "" };
+    return { sessionId: "", agentId: "", agentName: "", toolName: "", args: {}, result: undefined, transcriptPath: "", prompt: "", eventId: "", toolCallId: "", durationMs: 0 };
   }
 }
 
@@ -253,7 +266,7 @@ async function main(): Promise<void> {
   const rawPayload = safeJson(raw);
   let hostEventKey = "";
   try { hostEventKey = recordHostEvent("copilot", mode ?? "", raw, rawPayload); } catch { /* event indexing never blocks the host */ }
-  const { sessionId, agentId, agentName, toolName, args, result, transcriptPath, prompt, eventId, toolCallId } = parsePayload(raw);
+  const { sessionId, agentId, agentName, toolName, args, result, transcriptPath, prompt, eventId, toolCallId, durationMs } = parsePayload(raw);
   let turnSeq = 0;
   try { turnSeq = readLifecycle(turnScope(sessionId, agentId)).turnSeq; } catch { /* telemetry is optional */ }
   const usageSource = `${mode || "hook"}${toolName ? `:${toolName}` : ""}`;
@@ -301,21 +314,35 @@ async function main(): Promise<void> {
     const stateId = turnScope(sessionId);
     const delegatedIds = claimDelegation(sessionId, stateId);
     if (delegatedIds.length) {
-      resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
+      const state = resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
+      beginQualityRun({
+        host: "copilot", sessionId, turnSeq: state.turnSeq, promptHash: "",
+        catalogVersion: catalogVersion(), injectedChars: 0,
+      });
       return void emit({});
     }
     // Built-in/custom subagents use their host-owned tool-call id as sessionId. Some launch paths do not
     // expose the parent preToolUse event, so no delegation row exists to claim. They still must not receive
     // the main-agent workflow; the parent owns skill maintenance.
     if (isToolCallSession(sessionId)) {
-      resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
+      const state = resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
       const protocol = await promptText("subagent-protocol.md");
+      beginQualityRun({
+        host: "copilot", sessionId, turnSeq: state.turnSeq,
+        promptHash: promptFingerprint(protocol), catalogVersion: catalogVersion(),
+        injectedChars: internalContext(protocol).length,
+      });
       return void emit(protocol ? { additionalContext: internalContext(protocol) } : {});
     }
     if (!shouldStartUserTurn(prompt)) return void emit({});
-    resetLifecycle(stateId);
-    if (emittedUsage) emittedUsage.turnSeq = readLifecycle(stateId).turnSeq;
+    const state = resetLifecycle(stateId);
+    if (emittedUsage) emittedUsage.turnSeq = state.turnSeq;
     const wf = await workflowPrompt();
+    beginQualityRun({
+      host: "copilot", sessionId, turnSeq: state.turnSeq,
+      promptHash: promptFingerprint(wf), catalogVersion: catalogVersion(),
+      injectedChars: internalContext(wf).length,
+    });
     emit(wf ? { additionalContext: internalContext(wf) } : {});
     return;
   }
@@ -360,7 +387,7 @@ async function main(): Promise<void> {
   if (mode === "post-tool") {
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const stateId = turnScope(sessionId, agentId);
-    updateLifecycle(stateId, (current) => {
+    const state = updateLifecycle(stateId, (current) => {
       const next = { ...current };
       const succeeded = toolResultSucceeded(result);
       if (isCairnMcpTool(toolName)) next.cairnToolAttempted = true;
@@ -395,6 +422,11 @@ async function main(): Promise<void> {
 
       return next;
     });
+    recordQualityTool({
+      host: "copilot", sessionId, turnSeq: state.turnSeq,
+      eventKey: hostEventKey || `${eventId}:${toolCallId}`, toolName, args, result,
+      success: toolResultSucceeded(result), durationMs,
+    });
 
     if (isCairnMcpTool(toolName) && !toolResultSucceeded(result)) return void emit({});
     const answer = typeof args.answer === "string" ? args.answer : "";
@@ -415,6 +447,11 @@ async function main(): Promise<void> {
         pendingReviews: [],
         stopBlocked: false,
       }));
+      finishQualityRun({
+        host: "copilot", sessionId, turnSeq: readLifecycle(stateId).turnSeq,
+        completed: true, workflowPassed: true, skillUsed: true, brainUsed: true,
+        stopNudges: 0, status: "subagent",
+      });
       return void emit({});
     }
     const stateId = turnScope(sessionId);
@@ -426,6 +463,11 @@ async function main(): Promise<void> {
         cairnVisibilityNudged: true,
         stopBlocked: true,
       }));
+      recordQualityState({
+        host: "copilot", sessionId, turnSeq: st.turnSeq,
+        eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:visibility`,
+        kind: "visibility_failure",
+      });
       emit({ decision: "block", reason: internalContext(CAIRN_VISIBILITY_REMINDER) });
       return;
     }
@@ -437,6 +479,11 @@ async function main(): Promise<void> {
     const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
       updateLifecycle(stateId, () => ({ ...st, stopNudges: st.stopNudges + 1, stopBlocked: true }));
+      recordQualityState({
+        host: "copilot", sessionId, turnSeq: st.turnSeq,
+        eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:workflow`,
+        kind: "stop_blocked",
+      });
       emit({ decision: "block", reason: text });
       return;
     }
@@ -448,15 +495,30 @@ async function main(): Promise<void> {
         pendingReviews: [],
         stopBlocked: false,
       }));
+      finishQualityRun({
+        host: "copilot", sessionId, turnSeq: st.turnSeq, completed: false,
+        workflowPassed: st.brainUsed && st.skillUsed, skillUsed: st.skillUsed,
+        brainUsed: st.brainUsed, stopNudges: st.stopNudges, status: "deferred",
+      });
       emit({});
       return;
     }
     if (!st.completionNudged) {
       updateLifecycle(stateId, () => ({ ...st, completionNudged: true, stopBlocked: true }));
+      recordQualityState({
+        host: "copilot", sessionId, turnSeq: st.turnSeq,
+        eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:completion`,
+        kind: "stop_blocked",
+      });
       emit({ decision: "block", reason: internalContext(COMPLETION_REMINDER) });
       return;
     }
     updateLifecycle(stateId, () => ({ ...st, pendingReviewIds: [], pendingReviews: [], stopBlocked: false }));
+    finishQualityRun({
+      host: "copilot", sessionId, turnSeq: st.turnSeq, completed: true,
+      workflowPassed: st.brainUsed && st.skillUsed, skillUsed: st.skillUsed,
+      brainUsed: st.brainUsed, stopNudges: st.stopNudges,
+    });
     releaseDelegation(sessionId);
     emit({});
     return;

@@ -56,6 +56,17 @@ test("/api/skills hides pending skills", async () => {
   deleteSkill("ui-pending");
 });
 
+test("/usage serves the local telemetry dashboard and API", async () => {
+  const page = await fetch(`http://localhost:${server.port}/usage`);
+  expect(page.status).toBe(200);
+  expect(await page.text()).toContain("Cairn livesite telemetry");
+  const api = await fetch(`http://localhost:${server.port}/api/usage?days=1`);
+  expect(api.status).toBe(200);
+  const body = await api.json() as { usage?: unknown; quality?: unknown };
+  expect(body.usage).toBeDefined();
+  expect(body.quality).toBeDefined();
+});
+
 test("write endpoints: create, edit, link/unlink, delete", async () => {
   const base = `http://localhost:${server.port}`;
   const j = (r: Response) => r.json() as Promise<any>;

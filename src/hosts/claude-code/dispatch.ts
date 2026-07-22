@@ -57,6 +57,7 @@ async function main(): Promise<void> {
     );
   } catch { /* event indexing never blocks the host */ }
   const payloadSession = String((payload as { session_id?: unknown }).session_id ?? "");
+  const qualityEventKey = hostEventKey || `${payloadSession}:${String((payload as { hook_event_name?: unknown }).hook_event_name ?? "")}`;
   const observedContext = async (source: string, text: string): Promise<string> => {
     try {
       const { recordUsage } = await import("../../core/usage");
@@ -172,6 +173,33 @@ async function main(): Promise<void> {
     }
   }
 
+  try {
+    const quality = await import("../../core/quality-record");
+    const turngate = await import("../../skill/turngate");
+    if (event.kind === "user_message") {
+      turngate.resetSkillTurn(session);
+      let catalogVersion = "";
+      try {
+        catalogVersion = (await import("../../skill/catalog")).skillCatalogSnapshot().version;
+      } catch { /* a fresh read-only hook database has no skill table yet */ }
+      const state = turngate.skillTurnState(session);
+      quality.beginQualityRun({
+        host: "claude", sessionId: session, turnSeq: state.turnSeq,
+        promptHash: quality.promptFingerprint(content || ""), catalogVersion,
+        injectedChars: content?.length || 0,
+        model: String((payload as { model?: unknown }).model ?? ""),
+      });
+    } else if (event.kind === "tool_completed") {
+      const state = turngate.skillTurnState(session);
+      quality.recordQualityTool({
+        host: "claude", sessionId: session, turnSeq: state.turnSeq,
+        eventKey: qualityEventKey, toolName: event.tool, args: event.input,
+        result: event.output, success: quality.qualityResultSucceeded(event.output),
+        durationMs: Number((payload as { duration_ms?: unknown }).duration_ms ?? 0),
+      });
+    }
+  } catch { /* quality telemetry never blocks the host */ }
+
   // Skill layer, ON by default (turn off with "skills": false in ~/.cairn/config.json or CAIRN_SKILLS=0). The
   // agent retrieves skills ITSELF via the skill_search tool (taught in the base prompt) rather than via a
   // cosine auto-injection that mispicks near-duplicates. We enforce that with one per-turn reminder: record
@@ -184,11 +212,12 @@ async function main(): Promise<void> {
     try {
       const { skillInject, skillsExist } = await import("../../skill/hook");
       const {
-        resetSkillTurn, noteCairnToolObserved,
-        noteSkillSelection, skillTurnState, claimSkillReminder, isActionTool, isCairnTool,
-        isSkillSelection,
+        noteCairnToolObserved, noteSkillSelection, skillTurnState, claimSkillReminder,
+        isActionTool, isCairnTool, isSkillSelection,
       } = await import("../../skill/turngate");
-      if (event.kind === "user_message") { resetSkillTurn(session); await skillInject(event.text, session); }
+      if (event.kind === "user_message") {
+        await skillInject(event.text, session);
+      }
       else if (event.kind === "tool_completed") {
         if (isCairnTool(event.tool)) noteCairnToolObserved(session);
         if (isSkillSelection(event.tool)) {
@@ -211,9 +240,29 @@ async function main(): Promise<void> {
           out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
         }
         if (!stopHookActive) out = out ? `${out}\n\n${COMPLETION_REMINDER}` : COMPLETION_REMINDER;
-        if (!out) resetSkillTurn(session);
       }
     } catch { /* skills are best-effort */ }
+  }
+
+  if (event.kind === "turn_finished") {
+    try {
+      const quality = await import("../../core/quality-record");
+      const turngate = await import("../../skill/turngate");
+      const state = turngate.skillTurnState(session);
+      if (out) {
+        quality.recordQualityState({
+          host: "claude", sessionId: session, turnSeq: state.turnSeq,
+          eventKey: qualityEventKey, kind: visibilityReminder ? "visibility_failure" : "stop_blocked",
+        });
+      } else {
+        quality.finishQualityRun({
+          host: "claude", sessionId: session, turnSeq: state.turnSeq,
+          completed: true, workflowPassed: Boolean(event.usedBrain && state.selected),
+          skillUsed: state.selected, brainUsed: event.usedBrain, stopNudges: 0,
+        });
+        turngate.resetSkillTurn(session);
+      }
+    } catch { /* quality telemetry never blocks the host */ }
   }
 
   if (!out) return;

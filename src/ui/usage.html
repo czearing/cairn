@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cairn telemetry</title>
+<style>
+:root{color-scheme:dark;background:#0b0d10;color:#eef1f5;font:14px/1.45 system-ui}
+body{max-width:1180px;margin:0 auto;padding:32px}h1{font-size:24px;margin:0}p{color:#929baa}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+select{background:#151920;color:inherit;border:1px solid #303744;border-radius:8px;padding:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.card,table{background:#12161c;border:1px solid #262c36;border-radius:12px}
+.card{padding:16px}.label{color:#929baa;font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+.value{font-size:26px;font-weight:700;margin-top:5px}.good{color:#62d89c}.bad{color:#ff7a88}
+section{margin-top:24px}table{width:100%;border-collapse:collapse;overflow:hidden}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #222833}th{color:#929baa;font-size:12px}
+td:nth-child(n+2),th:nth-child(n+2){text-align:right}.warning{color:#f6c76a}
+</style>
+</head>
+<body>
+<header><div><h1>Cairn livesite telemetry</h1><p>Local, opt-in, structured metrics only</p></div>
+<select id="days"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option></select></header>
+<div class="grid" id="cards"></div>
+<section><h2>Cost surfaces</h2><table><thead><tr><th>Surface</th><th>Calls</th><th>Tokens</th><th>Average</th><th>Failures</th></tr></thead><tbody id="costs"></tbody></table></section>
+<section><h2>Release comparison</h2><div class="card" id="release">Collecting baseline</div></section>
+<script>
+const fmt=n=>Number(n||0).toLocaleString(),pct=n=>`${Number(n||0).toFixed(1)}%`;
+const card=(label,value,cls="")=>`<div class="card"><div class="label">${label}</div><div class="value ${cls}">${value}</div></div>`;
+async function load(){
+ const days=document.querySelector("#days").value,r=await fetch(`/api/usage?days=${days}`).then(x=>x.json()),u=r.usage,q=r.quality;
+ const lag=Math.round(u.impact.toolTelemetryLagMs/60000);
+ document.querySelector("#cards").innerHTML=[
+  card("Fixed / message",`${fmt(u.impact.currentPromptTokens)} tokens`),
+  card("Measured / message",`${fmt(u.impact.measuredTokensPerPrompt)} tokens`),
+  card("Completed runs",pct(q.completedRate),q.completedRate===100?"good":""),
+  card("Workflow pass",pct(q.workflowRate),q.workflowRate===100?"good":""),
+  card("Search to use",`${pct(q.searchToUseRate)} · ${q.usedReturnedNodes}/${q.returnedNodes}`),
+  card("Cross-session reuse",`${pct(q.crossSessionReuseRate)} · ${q.crossSessionNodes}/${q.observedNodes}`),
+  card("Tool failures",fmt(q.toolFailures),q.toolFailures?"bad":"good"),
+  card("Coverage",lag?`lower bound · ${lag}m lag`:"current",lag?"warning":"good")
+ ].join("");
+ document.querySelector("#costs").innerHTML=u.groups.map(g=>`<tr><td>${[g.host,g.source,g.toolName].filter(Boolean).join(" / ")}</td><td>${fmt(g.events)}</td><td>${fmt(g.estimatedTokens)}</td><td>${fmt(Math.round(g.estimatedTokens/g.events))}</td><td>${fmt(g.failures)}</td></tr>`).join("");
+ document.querySelector("#release").textContent=q.delta?`Tokens/run ${q.delta.tokensPerRun>=0?"+":""}${q.delta.tokensPerRun}; completion ${q.delta.completedRate>=0?"+":""}${q.delta.completedRate}pp; workflow ${q.delta.workflowRate>=0?"+":""}${q.delta.workflowRate}pp; failures ${q.delta.toolFailureRate>=0?"+":""}${q.delta.toolFailureRate}pp`:"Collecting baseline: two release fingerprints are required for a delta.";
+}
+document.querySelector("#days").addEventListener("change",load);load();setInterval(load,15000);
+</script>
+</body>
+</html>

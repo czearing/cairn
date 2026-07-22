@@ -37,6 +37,13 @@ async function handler(req: Request): Promise<Response> {
     }
     return Response.json({ skills: all });
   }
+  if (pathname === "/api/usage" && m === "GET") {
+    const days = Math.max(1, Number(searchParams.get("days") || "7"));
+    const { usageSummary } = await import("../core/usage");
+    const { qualitySummary } = await import("../core/quality-summary");
+    return Response.json({ usage: usageSummary(days), quality: qualitySummary(days) });
+  }
+  if (pathname === "/usage") return asset("usage.html", "text/html; charset=utf-8");
   // Delete a skill (and its runs + version history) by id, for the /skills page delete button.
   if (pathname.startsWith("/api/skills/") && m === "DELETE") {
     const id = decodeURIComponent(pathname.slice("/api/skills/".length));

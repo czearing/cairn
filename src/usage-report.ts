@@ -1,10 +1,12 @@
 import { usageSummary } from "./core/usage";
+import { qualitySummary } from "./core/quality-summary";
 import { c, line } from "./term";
 
 export function printUsageReport(days: number, json = false): void {
   const report = usageSummary(days);
+  const quality = qualitySummary(days);
   if (json) {
-    console.log(JSON.stringify(report, null, 2));
+    console.log(JSON.stringify({ ...report, quality }, null, 2));
     return;
   }
 
@@ -34,4 +36,24 @@ export function printUsageReport(days: number, json = false): void {
       `${String(group.events).padStart(5)}  ${label}`
     );
   }
+  line();
+  line(c.bold("Quality & reuse"));
+  line(`runs ${quality.runs}  completed ${quality.completedRate}%  ` +
+    `workflow ${quality.workflowRate}%  tool failures ${quality.toolFailures}`);
+  line(`brain search-to-use ${quality.searchToUseRate}% ` +
+    `(${quality.usedReturnedNodes}/${quality.returnedNodes})  ` +
+    `cross-session reuse ${quality.crossSessionReuseRate}% ` +
+    `(${quality.crossSessionNodes}/${quality.observedNodes})`);
+  line(`skills selected ${quality.selectedSkills}  edited ${quality.editedSkills} ` +
+    `(${quality.skillEditRate}%)  visibility failures ${quality.visibilityFailures}`);
+  if (quality.delta) {
+    line(`release delta  tokens/run ${signed(quality.delta.tokensPerRun)}  ` +
+      `completion ${signed(quality.delta.completedRate)}pp  ` +
+      `workflow ${signed(quality.delta.workflowRate)}pp  ` +
+      `failures ${signed(quality.delta.toolFailureRate)}pp`);
+  } else {
+    line(c.dim("release delta  collecting baseline (two release fingerprints required)"));
+  }
 }
+
+const signed = (value: number): string => `${value > 0 ? "+" : ""}${value}`;

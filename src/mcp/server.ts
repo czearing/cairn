@@ -1,6 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { writeFileSync } from "node:fs";
 import { z } from "zod";
 import { config } from "../core/config";
 import { jsonChars, recordUsage } from "../core/usage";
@@ -184,83 +183,19 @@ server.tool(
 
 // Agent-facing DIRECT refinement. Lets the agent fix a skill's master the moment it learns a better way —
 // classically, the user says "that was wrong, do X next time" — so the correction lands in the master
-// immediately and the very next run uses it, instead of waiting for the background grader to catch up.
+// immediately and the very next run uses it.
 server.tool(
   "skill_edit",
   "Refine a selected or created skill's master prompt directly when the user corrects the method. Pass its exact id and numbered imperative steps.",
   {
     id: z.string().describe("The exact selected or created skill id."),
     master: z.string().describe("The rewritten master: numbered imperative steps only, no rationale/preamble."),
-    explanation: z.string().optional().describe("Optional rationale for the next reviewer (why this is better); never shown to the doer."),
+    explanation: z.string().optional().describe("Optional maintenance note explaining why the revised method is better."),
   },
   async ({ id, master, explanation }) => measured("skill_edit", { id, master, explanation }, async () => {
     const { skillEdit } = await import("../skill/hook");
     const r = await skillEdit(id, master, explanation);
     return r.ok ? json(r) : fail(r.error || "skill_edit failed");
-  })
-);
-
-// The LEARNER's submission tool. It is registered ONLY in the learner context (when CAIRN_SKILL_OUTPUT_PATH
-// is set — the background `copilot -p`/`claude -p` learner bakes that env into its own cairn server). The
-// MAIN agent's cairn server has no such env, so skill_output is NEVER exposed to it — the agent uses
-// skill_select / skill_create / skill_review, and can no longer mistakenly call this internal tool.
-if (process.env.CAIRN_SKILL_OUTPUT_PATH) {
-  server.tool(
-    "skill_output",
-    "The learner submits its finished review here, ONCE, as the last action after reasoning out loud: the 0..1 quality score, what worked / what failed / one concrete improvement, and the rewritten master prompt a future agent will load. The task's label is already decided and supplied by the loop, so do NOT pass it.",
-    {
-      score: z.number().describe("Quality of the graded output, 0..1."),
-      right: z.string().describe("What the output did well."),
-      wrong: z.string().describe("What the output got wrong or missed."),
-      improve: z.string().describe("One concrete change for next time."),
-      master: z.string().describe("The rewritten master prompt: the numbered steps ONLY (no rationale paragraph). This is the only text injected into the doer."),
-      explanation: z.string().describe("The 2-to-4-sentence rationale for the next reviewer (why the best runs win, what excellent looks like, the failure mode to avoid). Never shown to the doer."),
-    },
-    async ({ score, right, wrong, improve, master, explanation }) => measured(
-      "skill_output",
-      { score, right, wrong, improve, master, explanation },
-      async () => {
-      // The label is the loop's, not the learner's: it was decided before this call and passed in via
-      // CAIRN_SKILL_FORCED_LABEL. An empty forced label means a non-task (no skill, empty master ok).
-      const lbl = (process.env.CAIRN_SKILL_FORCED_LABEL ?? "").trim();
-      // Validate hard, then ERROR back so the learner resends correctly, never accept a half-formed review.
-      const problems: string[] = [];
-      if (lbl) {
-        if (!Number.isFinite(score) || score < 0 || score > 1) problems.push("score must be a number in [0,1]");
-        if (!master.trim()) problems.push("master must be a non-empty rewritten prompt (numbered steps) for a labeled task");
-        if (!explanation.trim()) problems.push("explanation must be a non-empty rationale for a labeled task");
-        if (!right.trim() && !wrong.trim() && !improve.trim()) problems.push("provide at least one of right/wrong/improve");
-      } else if (master.trim() || explanation.trim()) {
-        problems.push("master and explanation must be empty when label is empty (a non-task forms no skill)");
-      }
-      if (problems.length) return fail(`skill_output rejected, call it again with every field correct: ${problems.join("; ")}`);
-      const p = process.env.CAIRN_SKILL_OUTPUT_PATH;
-      if (p) { try { writeFileSync(p, JSON.stringify({ label: lbl, score, right, wrong, improve, master, explanation })); } catch { /* capture is best-effort */ } }
-      return json({ ok: true });
-    })
-  );
-}
-
-// The agent declares exact selected or created skill ids, so the reviewer never classifies a turn.
-
-// The AGENT's "this deliverable is finished, review it as skill <id>" signal. The agent knows what it just
-// did — it selected an injected catalog skill, or minted one with skill_create — so it declares that
-// skill's ID here and the reviewer's only job is to grade this deliverable against that skill and iterate its
-// master. Referencing the concrete id (not a re-typed label) means the run can never drift onto a near-
-// duplicate. The tool validates the id and acknowledges. The host records the declaration at postToolUse and
-// enqueues it at agentStop, after required continuations and the final visible answer.
-server.tool(
-  "skill_review",
-  "Legacy compatibility only. Current hosts review selected skills automatically after the final visible response; do not call this tool in new sessions.",
-  {
-    id: z.string().describe("The selected or created skill id this deliverable belongs to."),
-  },
-  async ({ id }) => measured("skill_review", { id }, async () => {
-    if (!id.trim()) return fail("id is required (pass the selected or created skill id)");
-    const { reviewableSkill } = await import("../skill/store");
-    if (!reviewableSkill(id.trim())) return fail("unknown or retired skill id; pass an id from the current injected catalog or skill_create");
-    // The transcript path lives with the host hook, not here, so this tool only acknowledges the declaration.
-    return json({ ok: true });
   })
 );
 

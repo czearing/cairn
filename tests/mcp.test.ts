@@ -5,7 +5,7 @@ import { Database } from "bun:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { getLoadablePath } from "sqlite-vec";
@@ -31,9 +31,9 @@ const call = (name: string, args: Record<string, unknown>) =>
   }>;
 const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.text);
 
-test("exposes the AGENT-facing tools (skill_output is learner-only, not exposed here)", async () => {
+test("exposes only the agent-owned brain and skill tools", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_edit", "skill_review", "skill_search", "skill_select"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_edit", "skill_search", "skill_select"]);
 });
 
 test("brain_create returns a neuron with an id and a viewer url", async () => {
@@ -183,66 +183,7 @@ test("brain_delete removes a thought", async () => {
   expect(parse(await call("brain_delete", { id: n.id })).deleted).toBe(false);
 });
 
-test("skill_output bakes in the loop's forced label and HARD-rejects incomplete ones", async () => {
-  const dbPath = join(tmpdir(), `cairn-so-${randomUUID()}.db`);
-  // The label is supplied by the loop via CAIRN_SKILL_FORCED_LABEL, never by the learner, so spin up one
-  // server per label scenario (the env is fixed per process, like a real learner spawn).
-  const spawn = async (forcedLabel?: string) => {
-    const outPath = join(tmpdir(), `cairn-out-${randomUUID()}.json`);
-    const env: Record<string, string> = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILL_OUTPUT_PATH: outPath };
-    if (forcedLabel !== undefined) env.CAIRN_SKILL_FORCED_LABEL = forcedLabel;
-    const transport = new StdioClientTransport({ command: "bun", args: ["src/mcp/server.ts"], env });
-    const c = new Client({ name: "cairn-so-test", version: "1.0.0" });
-    await c.connect(transport);
-    const call = (args: Record<string, unknown>) => c.callTool({ name: "skill_output", arguments: args }) as Promise<{ isError?: boolean; content: { text: string }[] }>;
-    return { c, call, outPath };
-  };
-
-  // Labeled task: the loop supplies "haiku"; the learner submits NO label, and the capture bakes it in.
-  const L = await spawn("haiku");
-  try {
-    const review = { score: 0.78, right: "clean cut", wrong: "stock imagery", improve: "fresher second image", master: "1. pick a kigo\n2. count 5-7-5", explanation: "The best runs cut two clean images and avoid stock phrasing." };
-    const ok = await L.call(review);
-    expect(JSON.parse(ok.content[0]!.text).ok).toBe(true);
-    expect(JSON.parse(readFileSync(L.outPath, "utf8"))).toEqual({ label: "haiku", ...review }); // loop's label baked in
-
-    // A review with NO master errors back, telling the learner to resend; it does not write.
-    try { rmSync(L.outPath); } catch { /* ignore */ }
-    const noMaster = await L.call({ ...review, master: "" });
-    expect(noMaster.isError).toBe(true);
-    expect(noMaster.content[0]!.text).toMatch(/master must be a non-empty/i);
-    expect(existsSync(L.outPath)).toBe(false); // nothing captured on rejection
-
-    // A review with NO explanation errors back too (the reviewer-only rationale is required).
-    const noExplanation = await L.call({ ...review, explanation: "" });
-    expect(noExplanation.isError).toBe(true);
-    expect(noExplanation.content[0]!.text).toMatch(/explanation must be a non-empty/i);
-
-    // A score out of [0,1] is rejected.
-    const badScore = await L.call({ ...review, score: 1.7 });
-    expect(badScore.isError).toBe(true);
-    expect(badScore.content[0]!.text).toMatch(/score must be a number/i);
-  } finally {
-    await L.c.close();
-    try { rmSync(L.outPath); } catch { /* ignore */ }
-  }
-
-  // Non-task: the loop forced an EMPTY label. A master is rejected; empty master+explanation is accepted.
-  const N = await spawn("");
-  try {
-    const withMaster = await N.call({ score: 0, right: "", wrong: "", improve: "", master: "some steps", explanation: "" });
-    expect(withMaster.isError).toBe(true);
-    expect(withMaster.content[0]!.text).toMatch(/must be empty when label is empty/i);
-
-    const nonTask = await N.call({ score: 0, right: "", wrong: "", improve: "", master: "", explanation: "" });
-    expect(JSON.parse(nonTask.content[0]!.text).ok).toBe(true);
-  } finally {
-    await N.c.close();
-    try { rmSync(N.outPath); } catch { /* ignore */ }
-  }
-});
-
-test("skill_create mints a new skill (idempotent, returns its id) and skill_review acks a valid id", async () => {
+test("skill_create mints a new skill and remains idempotent", async () => {
   const metadata = {
     title: "Flash Fiction",
     description: "Use for writing complete 500-word stories and compact fictional scenes with a clear turn and deliberate ending.",
@@ -256,10 +197,6 @@ test("skill_create mints a new skill (idempotent, returns its id) and skill_revi
   const again = parse(await call("skill_create", { ...metadata, title: "flash fiction" }));
   expect(again).toMatchObject({ created: false, id: created.id }); // idempotent: same normalized label -> same id
 
-  const rev = await call("skill_review", { id: created.id });
-  expect(parse(rev)).toMatchObject({ ok: true }); // acknowledge only; the id rides via the host hook
-  const bad = await call("skill_review", { id: "does-not-exist" });
-  expect(bad.isError).toBe(true); // an unknown id is rejected, never silently accepted (no drift onto a junk skill)
 });
 
 test("skill_create rejects narrow or unjustified capabilities", async () => {

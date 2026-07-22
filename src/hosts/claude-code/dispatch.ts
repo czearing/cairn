@@ -21,8 +21,6 @@ const isBrainCreate = (t: string) => t === "brain_create" || t.endsWith("__brain
 // Fired once per turn (PreToolUse) if the agent reaches for an action tool without having called skill_search.
 const SKILL_REMINDER =
   "Before acting, read the injected catalog and call skill_select with every skill id you will use, or skill_create with a broad description and initial numbered plan. You will not be reminded again this turn.";
-const AUTO_REVIEW_REMINDER =
-  "Deliver the finished visible result now. Cairn will review every selected skill automatically after the response exists.";
 const COMPLETION_REMINDER =
   "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
 const CAIRN_VISIBILITY_REMINDER =
@@ -88,8 +86,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // A subagent (Task tool) finished. SubagentStop is a PARENT-session event. Learning is now agent-driven (the
-  // agent calls skill_review after the subagent returns), so we do NOT auto-learn here — we only skip the
+  // A subagent (Task tool) finished. SubagentStop is a PARENT-session event, so skip the
   // Stop-shaped nudge that would otherwise fire back into a finished subagent.
   if (hookName === "SubagentStop") return;
 
@@ -182,22 +179,19 @@ async function main(): Promise<void> {
   // cleared at BOTH turn boundaries — the user_message that starts a normal turn AND the turn_finished that
   // ends any turn — so the next turn starts clean even when it is a resume after compaction, which fires no
   // user_message (that gap left a stale searched=true latch and silently suppressed the reminder all session).
-  // On turn end, also fire background learning. Best-effort and isolated.
+  // On turn end, clear the turn state after all reminders have been satisfied.
   if ((await import("../../core/config")).skillsEnabled()) {
     try {
-      const { skillInject, skillLearn, skillsExist } = await import("../../skill/hook");
+      const { skillInject, skillsExist } = await import("../../skill/hook");
       const {
-        resetSkillTurn, noteCairnToolObserved, noteLegacySkillReview, noteSkillReviewed,
+        resetSkillTurn, noteCairnToolObserved,
         noteSkillSelection, skillTurnState, claimSkillReminder, isActionTool, isCairnTool,
-        isSkillSelection, isSkillReview,
+        isSkillSelection,
       } = await import("../../skill/turngate");
       if (event.kind === "user_message") { resetSkillTurn(session); await skillInject(event.text, session); }
       else if (event.kind === "tool_completed") {
         if (isCairnTool(event.tool)) noteCairnToolObserved(session);
-        if (isSkillReview(event.tool)) {
-          const id = typeof event.input.id === "string" ? event.input.id : "";
-          if (id) noteLegacySkillReview(session, id);
-        } else if (isSkillSelection(event.tool)) {
+        if (isSkillSelection(event.tool)) {
           noteSkillSelection(session, event.tool, event.input, event.output);
         }
       } else if (
@@ -217,26 +211,6 @@ async function main(): Promise<void> {
           out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
         }
         if (!stopHookActive) out = out ? `${out}\n\n${COMPLETION_REMINDER}` : COMPLETION_REMINDER;
-        if (skillState.pendingReviewIds.length && !out) {
-          const transcriptPath = (payload as { transcript_path?: string }).transcript_path;
-          const { extractRun } = await import("../../skill/transcript");
-          const reviewable = transcriptPath ? extractRun(transcriptPath, "", { latestTurn: true }) : null;
-          if (!reviewable && stopHookActive) {
-            const { recordMissedReviews } = await import("../../skill/missed-review");
-            const { lifecycleScope } = await import("../../skill/lifecycle");
-            recordMissedReviews(lifecycleScope("claude", session), skillState.turnSeq, skillState.pendingReviewIds, transcriptPath ?? "");
-          } else if (!reviewable) out = out ? `${out}\n\n${AUTO_REVIEW_REMINDER}` : AUTO_REVIEW_REMINDER;
-          else {
-            for (const id of skillState.pendingReviewIds.filter((value) => value && !value.startsWith("__"))) {
-              if (skillLearn(transcriptPath, id, "claude-auto", session)) noteSkillReviewed(session, id);
-              else if (stopHookActive) {
-                const { recordMissedReviews } = await import("../../skill/missed-review");
-                const { lifecycleScope } = await import("../../skill/lifecycle");
-                recordMissedReviews(lifecycleScope("claude", session), skillState.turnSeq, [id], transcriptPath ?? "");
-              } else out = out ? `${out}\n\nCairn could not durably queue the automatic review; keep the turn open.` : "Cairn could not durably queue the automatic review; keep the turn open.";
-            }
-          }
-        }
         if (!out) resetSkillTurn(session);
       }
     } catch { /* skills are best-effort */ }

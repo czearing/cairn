@@ -148,7 +148,7 @@ test("Claude fails open when a resumed model manifest exposes no Cairn tools", a
   rmSync(transcriptPath, { force: true });
 });
 
-test("Claude Stop defers automatic skill review until all stop gates pass", async () => {
+test("Claude Stop clears selected skill state without queuing a reviewer", async () => {
   const { listReviewJobs } = await import("../src/skill/review-queue");
   const skillId = randomUUID();
   const sessionId = `claude-auto-review-${randomUUID()}`;
@@ -177,68 +177,19 @@ test("Claude Stop defers automatic skill review until all stop gates pass", asyn
   expect(blocked.reason).toContain("completed every requested task");
   expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
 
-  writeFileSync(
-    transcriptPath,
-    [
-      JSON.stringify({ type: "user", message: { content: "Fix the bug." } }),
-      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "brain_search", input: { query: "bug" } }] } }),
-      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "The bug is fixed." }] } }),
-    ].join("\n") + "\n"
-  );
-  expect(await fire({
-    hook_event_name: "Stop",
-    session_id: sessionId,
-    transcript_path: transcriptPath,
-    stop_hook_active: true,
-  })).toBe("");
-  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toEqual([
-    expect.objectContaining({
-      skillId,
-      transcriptPath: expect.stringContaining(join(process.env.CAIRN_INFLIGHT_DIR!, "reviews")),
-      backend: "claude-auto",
-      status: "pending",
-    }),
-  ]);
-  rmSync(transcriptPath, { force: true });
-});
-
-test("Claude legacy skill_review declarations are queued only at terminal Stop", async () => {
-  const { listReviewJobs } = await import("../src/skill/review-queue");
-  const skillId = randomUUID();
-  const sessionId = `claude-legacy-review-${randomUUID()}`;
-  const transcriptPath = join(tmpdir(), `${sessionId}.jsonl`);
-  writeFileSync(
-    transcriptPath,
-    [
-      JSON.stringify({ type: "user", message: { content: "Fix the bug." } }),
-      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "brain_search", input: { query: "bug" } }] } }),
-      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "The bug is fixed." }] } }),
-    ].join("\n") + "\n"
-  );
   await fire({
     hook_event_name: "PostToolUse",
     session_id: sessionId,
-    tool_name: "skill_review",
-    tool_input: { id: skillId },
-    tool_output: { ok: true },
+    tool_name: "brain_search",
+    tool_input: { query: "bug" },
+    tool_output: {},
   });
-  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
-
-  const completion = JSON.parse(await fire({
-    hook_event_name: "Stop",
-    session_id: sessionId,
-    transcript_path: transcriptPath,
-  }));
-  expect(completion.reason).toContain("completed every requested task");
-  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
   expect(await fire({
     hook_event_name: "Stop",
     session_id: sessionId,
     transcript_path: transcriptPath,
     stop_hook_active: true,
   })).toBe("");
-  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toEqual([
-    expect.objectContaining({ skillId, backend: "claude-auto", status: "pending" }),
-  ]);
+  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
   rmSync(transcriptPath, { force: true });
 });

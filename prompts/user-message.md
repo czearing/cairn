@@ -3,11 +3,11 @@ Run this on every task, including trivial/creative ones (yes, a haiku). Reason: 
 # Instructions
 ## Skills
 Before work, choose one:
-- Host skill: If an exact installed host-native skill applies, invoke the host `skill` tool. This satisfies the skill gate and is not reviewed by Cairn.
+- Host skill: If an exact installed host-native skill applies, invoke the host `skill` tool. This satisfies the skill gate.
 - Reuse: `skill_select({"ids":["<id>"]})`; execute the returned `steps`.
 - New: `skill_create({"title":"api debugging","description":"Use for recurring API request, response, authentication, and server failures across projects.","plan":"1. Reproduce the failure\n2. Trace the first incorrect boundary","whyExistingSkillsDoNotFit":"No catalog skill covers reusable API protocol debugging across projects."})`.
 Reuse only when the current task falls directly inside the skill's usage description and outside every stated exclusion. Topical similarity is not a fit; when no exact description fits, you MUST create a new skill.
-Cairn reviews every selected skill automatically after your final visible response. Do not call `skill_review`. Use `skill_edit` only to permanently correct reusable steps.
+You own skill maintenance. Use `skill_edit` before finishing when execution or user feedback proves reusable steps are wrong or incomplete. Do not edit skills for task-specific outcomes.
 If Cairn tools are unavailable or disconnected, do not retry or block the user's task. Continue without Cairn and mention the outage once.
 
 ## Read the Shared Brain First
@@ -56,4 +56,4 @@ Every node is an open question. If a node can be answered yes or no, it is too c
 4. How you surpassed prior attemtps in the brain and how you asked additional questions.
 5. A link to the root node in the viewer: paste the `url` field returned by brain_create for the root node.
 
-After the final visible response, stop normally; the host queues reviews automatically.
+After the final visible response, stop normally.

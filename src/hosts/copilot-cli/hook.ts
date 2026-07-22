@@ -9,11 +9,10 @@
 //   pre-tool       (preToolUse)          : gate a brain_create (deny closed-question / root-only-branch).
 //                                          preToolUse has no additionalContext channel, so entry-format.md /
 //                                          orchestrate.md cannot be injected here — only allow/deny/modify.
-//   post-tool      (postToolUse)         : after a brain_* or Task tool, inject the matching reminder, record
-//                                          brain/skill usage, and persist successful skill_review declarations.
-//   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn. Once
-//                                          workflow gates pass and the visible response exists, automatically
-//                                          enqueue every selected skill over the complete turn transcript.
+//   post-tool      (postToolUse)         : after a brain_* or Task tool, inject the matching reminder and
+//                                          record brain/skill usage.
+//   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn until
+//                                          workflow and completion gates pass.
 //   subagent-start (subagentStart)       : additionalContext is PREPENDED to the subagent's own prompt —
 //                                          the one channel that reaches a subagent's window (subagent-protocol.md).
 //
@@ -23,10 +22,10 @@ import { Database } from "bun:sqlite";
 import {
   appendFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isSystemEnvelope } from "../../skill/noise";
-import { hostEvents, recordHostEvent } from "../../core/host-events";
+import { recordHostEvent } from "../../core/host-events";
 import { recordUsage } from "../../core/usage";
 import { formatSkillCatalog, selectedSkillBlock, skillIdsFromTask } from "../../skill/catalog";
 import {
@@ -39,7 +38,6 @@ import {
   updateLifecycle,
 } from "../../skill/lifecycle";
 import { skillResultId } from "../../skill/tool-result";
-import { recordMissedReviews } from "../../skill/missed-review";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 let emittedUsage: Parameters<typeof recordUsage>[0] | undefined;
@@ -99,7 +97,7 @@ const isNativeSkillTool = (name: string): boolean => {
 };
 const isCairnMcpTool = (name: string): boolean => [
   "brain_search", "brain_create", "brain_mutate", "brain_delete",
-  "skill_select", "skill_create", "skill_search", "skill_load", "skill_edit", "skill_review",
+  "skill_select", "skill_create", "skill_search", "skill_load", "skill_edit",
 ].some((tool) => isTool(name, tool));
 const isTask = (name: string): boolean => /^(task|agent)$/i.test(name) || name === "Task" || name === "Agent";
 
@@ -121,9 +119,8 @@ export function postToolFiles(toolName: string, answer: string): string[] {
 
 // Whether agentStop should force another turn, and with which prompt. Bounded to STOP_CAP nudges per
 // turn so a stubborn agent can never be looped forever (Copilot sends no stop_hook_active flag).
-// Selected skills are reviewed automatically after these workflow gates pass.
 export const STOP_CAP = 2;
-export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; pendingReviewCount: number; stopNudges: number }): {
+export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; stopNudges: number }): {
   file: string;
 } {
   if (s.stopNudges >= STOP_CAP) return { file: "" };
@@ -208,30 +205,7 @@ export const shouldStartUserTurn = (prompt: string): boolean =>
   !isSystemEnvelope(prompt);
 const isToolCallSession = (sessionId: string): boolean => sessionId.startsWith("call_");
 
-function copilotReviewContext(sessionId: string): { requests: string[]; startTs: number } | undefined {
-  const events = hostEvents("copilot", sessionId);
-  const prompts = events.flatMap((event, index) => {
-    if (event.hookType !== "user-prompt") return [];
-    const payload = safeJson(event.rawJson) as { prompt?: unknown } | undefined;
-    const prompt = typeof payload?.prompt === "string" ? payload.prompt.trim() : "";
-    return prompt && shouldStartUserTurn(prompt) ? [{ index, prompt, recordedTs: event.recordedTs }] : [];
-  });
-  const latest = prompts.at(-1);
-  if (!latest) return undefined;
-  const current = [latest];
-  for (let i = prompts.length - 2; i >= 0; i--) {
-    const candidate = prompts[i]!;
-    const intervening = events.slice(candidate.index + 1, current[0]!.index);
-    if (intervening.some((event) => event.hookType !== "user-prompt")) break;
-    current.unshift(candidate);
-  }
-  return {
-    requests: current.map((entry) => entry.prompt),
-    startTs: current[0]!.recordedTs,
-  };
-}
-
-export function harnessReviewDeferred(
+export function harnessTurnDeferred(
   dbPath = process.env.CAIRN_HARNESS_DB || "",
   agent = process.env.CAIRN_HARNESS_AGENT || ""
 ): boolean {
@@ -252,51 +226,6 @@ export function harnessReviewDeferred(
   }
 }
 
-// Durably enqueue the latest matching skill_review event. Capacity only delays the queued job; acceptance
-// marks the turn reviewed immediately so agentStop never asks the agent to resubmit work it already submitted.
-async function queueLatestReview(
-  transcriptPath: string,
-  sessionId: string,
-  options: {
-    skillId?: string;
-    agentId?: string;
-    agentName?: string;
-    subagentOnly?: boolean;
-    eventId?: string;
-    backend?: string;
-    reviewContext?: { requests: string[]; startTs: number };
-  } = {}
-): Promise<boolean> {
-  if (!transcriptPath || !sessionId) return false;
-  try {
-    const { skillsEnabled } = await import("../../core/config");
-    if (!skillsEnabled()) return false;
-    const { learnCopilotReviews, learnFromTranscript } = await import("../../skill/learn");
-    if (options.skillId && !options.subagentOnly) {
-      const { transcriptReviewKey } = await import("../../skill/review-queue");
-      return learnFromTranscript(transcriptPath, options.skillId, {
-        id: options.eventId
-          ? `${sessionId}:${options.agentId || "main"}:${options.eventId}:${options.skillId}`
-          : transcriptReviewKey(transcriptPath, options.skillId, sessionId),
-        sessionId,
-        backend: options.backend ?? "copilot",
-        reviewContext: options.reviewContext ?? copilotReviewContext(sessionId),
-      });
-    }
-    return learnCopilotReviews(transcriptPath, sessionId, options);
-  } catch {
-    return false; // skills are best-effort
-  }
-}
-
-// Copilot writes each session's turn log to ~/.copilot/session-state/<sessionId>/events.jsonl. postToolUse
-// (where skill_review is detected) carries only the sessionId, not a transcript path, so we reconstruct the
-// events-log path from it to review the whole turn — including any subagent output already written there.
-export function eventsPathForSession(sessionId: string): string {
-  const home = process.env.COPILOT_HOME || join(homedir(), ".copilot");
-  return join(home, "session-state", sessionId, "events.jsonl");
-}
-
 function debugLog(mode: string, raw: string): void {
   if (!process.env.CAIRN_HOOK_DEBUG) return;
   try {
@@ -310,7 +239,7 @@ function debugLog(mode: string, raw: string): void {
 async function main(): Promise<void> {
   // The skill learner runs the brain's own CLI headlessly (`copilot -p` / `claude -p`). When THAT is a
   // copilot subprocess it re-fires these hooks — which would inject the workflow into the learner and, worse,
-  // let the learner's own agentStop kick off another learner (infinite recursion). The learner sets
+  // let a legacy learner's own agentStop re-enter Cairn. The learner sets
   // CAIRN_SKILL_WORKER=1, which copilot passes down to its hook processes, so we short-circuit every mode to a
   // no-op here. This mirrors the Claude path's `claude -p --setting-sources project` isolation.
   if (process.env.CAIRN_SKILL_WORKER === "1") return void emit({});
@@ -349,17 +278,10 @@ async function main(): Promise<void> {
   }
 
   if (mode === "subagent-stop") {
-    const path = transcriptPath || eventsPathForSession(sessionId);
     const { latestCopilotAgentId } = await import("../../skill/review-queue");
-    const stoppingAgentId = agentId || latestCopilotAgentId(path, agentName);
+    const stoppingAgentId = agentId || latestCopilotAgentId(transcriptPath, agentName);
     const stateId = turnScope(sessionId, stoppingAgentId);
-    const state = readLifecycle(stateId);
-    await queueLatestReview(path, sessionId, {
-      agentId: stoppingAgentId || undefined,
-      agentName: stoppingAgentId ? undefined : agentName || undefined,
-      subagentOnly: true,
-    });
-    updateLifecycle(stateId, () => ({ ...state, stopBlocked: false }));
+    resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
     emit({});
     return;
   }
@@ -384,7 +306,7 @@ async function main(): Promise<void> {
     }
     // Built-in/custom subagents use their host-owned tool-call id as sessionId. Some launch paths do not
     // expose the parent preToolUse event, so no delegation row exists to claim. They still must not receive
-    // the main-agent workflow or own terminal review; the parent owns both.
+    // the main-agent workflow; the parent owns skill maintenance.
     if (isToolCallSession(sessionId)) {
       resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
       const protocol = await promptText("subagent-protocol.md");
@@ -471,19 +393,6 @@ async function main(): Promise<void> {
         }
       }
 
-      if (isTool(toolName, "skill_review") && toolResultSucceeded(result)) {
-        const id = typeof args.id === "string" ? args.id : "";
-        next.skillUsed = true;
-        if (id) {
-          next.pendingReviewIds = next.pendingReviewIds.filter((pendingId) =>
-            pendingId !== id && pendingId !== "__created__" && pendingId !== "__legacy__"
-          );
-          const declaration = { skillId: id, eventId };
-          if (!next.pendingReviews.some((review) =>
-            review.skillId === declaration.skillId && review.eventId === declaration.eventId
-          )) next.pendingReviews.push(declaration);
-        }
-      }
       return next;
     });
 
@@ -496,8 +405,7 @@ async function main(): Promise<void> {
   }
 
   if (mode === "agent-stop") {
-    // agentStop enforces the required workflow first, then queues automatic and legacy-declared reviews over
-    // the complete transcript, including the final visible answer.
+    // agentStop enforces the required workflow and final completion gate.
     if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
     if (isToolCallSession(sessionId) && !transcriptPath) {
       const stateId = turnScope(sessionId);
@@ -509,10 +417,8 @@ async function main(): Promise<void> {
       }));
       return void emit({});
     }
-    const path = transcriptPath || eventsPathForSession(sessionId);
     const stateId = turnScope(sessionId);
     const st = readLifecycle(stateId);
-    const reviewContext = copilotReviewContext(sessionId);
     const enforceWorkflow = process.env.CAIRN_ENFORCE_STOP_GATES === "1" || st.cairnToolObserved;
     if (!enforceWorkflow && !st.cairnToolAttempted && !st.cairnVisibilityNudged) {
       updateLifecycle(stateId, () => ({
@@ -526,7 +432,6 @@ async function main(): Promise<void> {
     const file = enforceWorkflow ? stopDecision({
       brainUsed: st.brainUsed,
       skillUsed: st.skillUsed,
-      pendingReviewCount: st.pendingReviewIds.length,
       stopNudges: st.stopNudges,
     }).file : "";
     const text = file ? internalContext(await promptText(file)) : "";
@@ -535,9 +440,8 @@ async function main(): Promise<void> {
       emit({ decision: "block", reason: text });
       return;
     }
-    if (process.env.AGENT_HARNESS === "1" && harnessReviewDeferred()) {
-      // A waiting task will resume in a new turn after its dependency completes. Do not grade the
-      // interim handoff; terminal claimed runs are host-completed after this hook and must be reviewed now.
+    if (process.env.AGENT_HARNESS === "1" && harnessTurnDeferred()) {
+      // A waiting task will resume in a new turn after its dependency completes.
       updateLifecycle(stateId, () => ({
         ...st,
         pendingReviewIds: [],
@@ -551,78 +455,6 @@ async function main(): Promise<void> {
       updateLifecycle(stateId, () => ({ ...st, completionNudged: true, stopBlocked: true }));
       emit({ decision: "block", reason: internalContext(COMPLETION_REMINDER) });
       return;
-    }
-    for (const review of st.pendingReviews) {
-      const { extractRunCopilot } = await import("../../skill/transcript-copilot");
-      if (!extractRunCopilot(path, review.skillId)) {
-        if (st.reviewNudges < STOP_CAP) {
-          updateLifecycle(stateId, () => ({
-            ...st,
-            reviewNudges: st.reviewNudges + 1,
-            stopBlocked: true,
-          }));
-          emit({
-            decision: "block",
-            reason: internalContext("The skill review was declared before a visible deliverable existed. Deliver the finished result now; the existing review declaration will be queued after it is present."),
-          });
-          return;
-        }
-        recordMissedReviews(stateId, st.turnSeq, [review.skillId], path);
-        continue;
-      }
-      const accepted = await queueLatestReview(path, sessionId, {
-        skillId: review.skillId,
-        eventId: review.eventId,
-        reviewContext,
-      });
-      if (!accepted) {
-        if (st.reviewNudges >= STOP_CAP) {
-          updateLifecycle(stateId, () => ({ ...st, stopBlocked: false }));
-          emit({});
-          return;
-        }
-        updateLifecycle(stateId, () => ({ ...st, reviewNudges: st.reviewNudges + 1, stopBlocked: true }));
-        emit({
-          decision: "block",
-          reason: internalContext("Cairn could not durably queue the declared skill review. Keep the turn open and retry ending it; do not dismiss this continuation."),
-        });
-        return;
-      }
-    }
-    if (st.pendingReviewIds.length) {
-      const { extractRunCopilot } = await import("../../skill/transcript-copilot");
-      if (!extractRunCopilot(path, "", { latestTurn: true, reviewContext })) {
-        if (st.reviewNudges < STOP_CAP) {
-          updateLifecycle(stateId, () => ({ ...st, reviewNudges: st.reviewNudges + 1, stopBlocked: true }));
-          emit({
-            decision: "block",
-            reason: internalContext("No visible deliverable exists yet. Deliver the finished result now; Cairn will review the selected skills automatically after it is present."),
-          });
-          return;
-        }
-        recordMissedReviews(stateId, st.turnSeq, st.pendingReviewIds, path);
-      } else {
-        for (const skillId of st.pendingReviewIds.filter((id) => id && !id.startsWith("__"))) {
-          const accepted = await queueLatestReview(path, sessionId, {
-            skillId,
-            eventId: `auto-${st.turnSeq}-${skillId}`,
-            backend: "copilot-auto",
-            reviewContext,
-          });
-          if (!accepted) {
-            if (st.reviewNudges >= STOP_CAP) {
-              recordMissedReviews(stateId, st.turnSeq, [skillId], path);
-              continue;
-            }
-            updateLifecycle(stateId, () => ({ ...st, reviewNudges: st.reviewNudges + 1, stopBlocked: true }));
-            emit({
-              decision: "block",
-              reason: internalContext("Cairn could not durably queue the automatic skill review. Keep the turn open and retry ending it."),
-            });
-            return;
-          }
-        }
-      }
     }
     updateLifecycle(stateId, () => ({ ...st, pendingReviewIds: [], pendingReviews: [], stopBlocked: false }));
     releaseDelegation(sessionId);

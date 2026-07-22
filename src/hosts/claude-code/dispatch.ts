@@ -48,15 +48,33 @@ async function main(): Promise<void> {
   } catch {
     return;
   }
+  let hostEventKey = "";
   try {
     const { recordHostEvent } = await import("../../core/host-events");
-    recordHostEvent(
+    hostEventKey = recordHostEvent(
       "claude",
       String((payload as { hook_event_name?: unknown }).hook_event_name ?? ""),
       raw,
       payload
     );
   } catch { /* event indexing never blocks the host */ }
+  const payloadSession = String((payload as { session_id?: unknown }).session_id ?? "");
+  const observedContext = async (source: string, text: string): Promise<string> => {
+    try {
+      const { recordUsage } = await import("../../core/usage");
+      const { lifecycleScope, readLifecycle } = await import("../../skill/lifecycle");
+      recordUsage({
+        eventKind: "context",
+        source,
+        host: "claude",
+        sessionId: payloadSession,
+        turnSeq: readLifecycle(lifecycleScope("claude", payloadSession)).turnSeq,
+        contextChars: text.length,
+        eventKey: hostEventKey ? `${hostEventKey}:${source}` : undefined,
+      });
+    } catch { /* telemetry never blocks the host */ }
+    return text;
+  };
 
   // Subagent lifecycle: a spawned subagent runs this same dispatch via its definition's frontmatter
   // hooks, so it gets the identical injected prompts. Two events need mapping. SessionStart is the
@@ -66,7 +84,7 @@ async function main(): Promise<void> {
   const hookName = (payload as { hook_event_name?: unknown }).hook_event_name;
   if (hookName === "SessionStart") {
     const content = await inject({ kind: "user_message", text: "" });
-    if (content) await emit(respond("SessionStart", content));
+    if (content) await emit(respond("SessionStart", await observedContext("session-start", content)));
     return;
   }
 
@@ -111,6 +129,8 @@ async function main(): Promise<void> {
         const proto = fs.readFileSync(new URL(`../../../prompts/${protoFile}`, import.meta.url), "utf8").trim();
         if (delegated.length && event.callId) registerDelegation(parentScope, event.callId, delegated);
         const context = delegated.length ? selectedSkillBlock(delegated) : formatSkillCatalog();
+        await observedContext("subagent-prompt", `${proto}\n\n${context}\n`);
+        if (orchestrate) await observedContext("pre-tool:orchestrate", orchestrate);
         await emit(modifyPreTool({ ...event.input, prompt: `${proto}\n\n${context}\n${orig}` }, orchestrate ?? ""));
         return;
       }
@@ -118,7 +138,7 @@ async function main(): Promise<void> {
   }
 
   const stopHookActive = hookName === "Stop" && (payload as { stop_hook_active?: unknown }).stop_hook_active === true;
-  const session = (payload as { session_id?: string }).session_id ?? "";
+  const session = payloadSession;
   const { lifecycleScope, readLifecycle, updateLifecycle } = await import("../../skill/lifecycle");
   const lifecycleId = lifecycleScope("claude", session);
   const lifecycleState = readLifecycle(lifecycleId);
@@ -226,7 +246,7 @@ async function main(): Promise<void> {
   const eventName = getEventName(payload);
   if (!eventName) return;
 
-  await emit(respond(eventName, out));
+  await emit(respond(eventName, await observedContext(`${hookName}:${event.kind}`, out)));
 }
 
 try {

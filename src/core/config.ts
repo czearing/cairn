@@ -10,7 +10,11 @@ const uiPort = Number(process.env.CAIRN_UI_PORT || "3737");
 // the MCP server's env. Environment variables still win when set (tests, migration/CLI scripts). The
 // file path is overridable (CAIRN_CONFIG_PATH) so tests never read the real file.
 const configFilePath = process.env.CAIRN_CONFIG_PATH || join(homedir(), ".cairn", "config.json");
-function fileConfig(): { libsql?: { url?: string; token?: string; localPath?: string; syncPeriod?: number }; skills?: boolean } {
+function fileConfig(): {
+  libsql?: { url?: string; token?: string; localPath?: string; syncPeriod?: number };
+  skills?: boolean;
+  usageTelemetry?: boolean;
+} {
   try {
     if (!existsSync(configFilePath)) return {};
     const parsed = JSON.parse(readFileSync(configFilePath, "utf8"));
@@ -46,6 +50,7 @@ export const config: CairnConfig = {
   // with "skills": false in ~/.cairn/config.json (or CAIRN_SKILLS=0). Short-lived hooks read this from the
   // config file, since they don't inherit the MCP server's env.
   skills: parsedFile.skills !== false,
+  usageTelemetry: parsedFile.usageTelemetry === true,
 
   uiPort,
   uiUrl: process.env.CAIRN_UI_URL || `http://localhost:${uiPort}`,
@@ -56,3 +61,10 @@ export const config: CairnConfig = {
  *  so an env toggle takes effect at once. */
 export const skillsEnabled = (): boolean =>
   process.env.CAIRN_SKILLS === "1" ? true : process.env.CAIRN_SKILLS === "0" ? false : config.skills;
+
+/** Privacy-safe usage telemetry is local-only and OFF by default. Environment overrides are primarily
+ * for tests and temporary diagnostics; persistent opt-in lives in ~/.cairn/config.json. */
+export const usageTelemetryEnabled = (): boolean =>
+  process.env.CAIRN_USAGE === "1"
+    ? true
+    : process.env.CAIRN_USAGE === "0" ? false : config.usageTelemetry;

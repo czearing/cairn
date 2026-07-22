@@ -23,7 +23,7 @@ export interface HostEventRow {
 
 let connection: Database | null = null;
 
-function database(): Database | Db {
+export function localEventsDatabase(): Database | Db {
   if (process.env.CAIRN_READONLY !== "1") return db();
   if (connection) return connection;
   mkdirSync(dirname(config.dbPath), { recursive: true });
@@ -93,7 +93,7 @@ export function recordHostEvent(
   const exact = fields(host, payload as Record<string, unknown>);
   const eventKey = createHash("sha256").update(host).update("\0")
     .update(hookType).update("\0").update(rawJson).digest("hex");
-  database().query(`INSERT INTO host_events(
+  localEventsDatabase().query(`INSERT INTO host_events(
     event_key,host,hook_type,session_id,turn_id,agent_id,tool_call_id,tool_name,
     event_timestamp,raw_json,recorded_ts
   ) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO NOTHING`)
@@ -105,7 +105,7 @@ export function recordHostEvent(
 }
 
 export function hostEvents(host: HostName, sessionId: string): HostEventRow[] {
-  return database().query(`SELECT
+  return localEventsDatabase().query(`SELECT
     event_key AS eventKey,host,hook_type AS hookType,session_id AS sessionId,
     turn_id AS turnId,agent_id AS agentId,tool_call_id AS toolCallId,
     tool_name AS toolName,event_timestamp AS eventTimestamp,raw_json AS rawJson,

@@ -43,6 +43,28 @@ test("brain_create returns a neuron with an id and a viewer url", async () => {
   expect(n.url).toContain(`/node/${n.id}`);
 });
 
+test("MCP calls record local size and latency telemetry", async () => {
+  await call("brain_delete", { id: `missing-${randomUUID()}` });
+  const database = new Database(TEST_DB);
+  const event = database.query(`SELECT tool_name,input_chars,output_chars,duration_ms,success
+    FROM usage_events WHERE event_kind='tool' AND tool_name='brain_delete'
+    ORDER BY id DESC LIMIT 1`).get() as {
+      tool_name: string;
+      input_chars: number;
+      output_chars: number;
+      duration_ms: number;
+      success: number;
+    };
+  const columns = database.query("PRAGMA table_info(usage_events)").all() as { name: string }[];
+  database.close();
+  expect(event.tool_name).toBe("brain_delete");
+  expect(event.input_chars).toBeGreaterThan(0);
+  expect(event.output_chars).toBeGreaterThan(0);
+  expect(event.duration_ms).toBeGreaterThanOrEqual(0);
+  expect(event.success).toBe(1);
+  expect(columns.map((column) => column.name)).not.toContain("content");
+});
+
 test("brain_create works first in a fresh process when the database already contains a vec0 index", async () => {
   const path = join(tmpdir(), `cairn-mcp-existing-vec-${randomUUID()}.db`);
   const database = new Database(path);

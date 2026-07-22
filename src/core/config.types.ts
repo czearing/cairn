@@ -52,6 +52,8 @@ export interface CairnConfig {
   /** Whether the skill-learning layer is active. ON by default; turn it OFF per machine with
    * `"skills": false` in ~/.cairn/config.json or `CAIRN_SKILLS=0`. */
   skills: boolean;
+  /** Whether privacy-safe local usage telemetry is active. OFF by default and never uploaded. */
+  usageTelemetry: boolean;
   /** Port the optional viewer serves on. */
   uiPort: number;
   /** Base URL of the viewer, used to build deep links (`/node/<id>`) to neurons. */

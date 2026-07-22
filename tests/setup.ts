@@ -29,6 +29,7 @@ process.env.CAIRN_INFLIGHT_DIR = join(tmpdir(), `cairn-test-inflight-${randomUUI
 // tests exercise the real path. The gating tests below toggle CAIRN_SKILLS locally to check both states.
 process.env.CAIRN_SKILLS = "1";
 process.env.CAIRN_ENFORCE_STOP_GATES ??= "1";
+process.env.CAIRN_USAGE = "1";
 
 // Queue behavior is tested synchronously; never leave detached learner supervisors behind from hook fixtures.
 process.env.CAIRN_MAX_LEARNERS = "0";

@@ -111,6 +111,13 @@ switch (cmd) {
     await runMonitor({ once: process.argv.includes("--once") });
     break;
   }
+  case "usage": {
+    const daysArg = process.argv.find((arg) => arg.startsWith("--days="))?.slice(7);
+    const days = Math.max(1, Number(daysArg || "7"));
+    const { printUsageReport } = await import("./usage-report");
+    printUsageReport(days, process.argv.includes("--json"));
+    break;
+  }
   case "seed":
     await import("../examples/seed");
     break;
@@ -131,6 +138,7 @@ Usage:
   cairn pref        Standing style/output preferences injected into every prompt (e.g. "no em dashes")
   cairn ui          Serve the read-only viewer (deep-linkable at /node/<id>)
   cairn skills      Live monitor of the background skill learner (scores + master rewrites)
+  cairn usage       Local context/tool usage report (--days=7, --json)
   cairn seed        Write a few demo neurons to the brain
 
 Config (env): CAIRN_DB_PATH, CAIRN_EMBED_PROVIDER, CAIRN_RELEVANCE_THRESHOLD …

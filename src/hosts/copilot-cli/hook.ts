@@ -27,6 +27,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { isSystemEnvelope } from "../../skill/noise";
 import { hostEvents, recordHostEvent } from "../../core/host-events";
+import { recordUsage } from "../../core/usage";
 import { formatSkillCatalog, selectedSkillBlock, skillIdsFromTask } from "../../skill/catalog";
 import {
   claimDelegation,
@@ -41,7 +42,15 @@ import { skillResultId } from "../../skill/tool-result";
 import { recordMissedReviews } from "../../skill/missed-review";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
-const emit = (obj: object) => process.stdout.write(JSON.stringify(obj));
+let emittedUsage: Parameters<typeof recordUsage>[0] | undefined;
+const emit = (obj: object) => {
+  const output = obj as { additionalContext?: unknown; reason?: unknown };
+  const context = typeof output.additionalContext === "string"
+    ? output.additionalContext
+    : typeof output.reason === "string" ? output.reason : "";
+  if (context && emittedUsage) recordUsage({ ...emittedUsage, contextChars: context.length });
+  process.stdout.write(JSON.stringify(obj));
+};
 export const internalContext = (text: string): string => text ? `<cairn-internal>\n${text}\n</cairn-internal>` : "";
 const COMPLETION_REMINDER = "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
 const CAIRN_VISIBILITY_REMINDER =
@@ -313,7 +322,20 @@ async function main(): Promise<void> {
   const raw = await readStdin();
   debugLog(mode ?? "", raw);
   const rawPayload = safeJson(raw);
-  try { recordHostEvent("copilot", mode ?? "", raw, rawPayload); } catch { /* event indexing never blocks the host */ }
+  let hostEventKey = "";
+  try { hostEventKey = recordHostEvent("copilot", mode ?? "", raw, rawPayload); } catch { /* event indexing never blocks the host */ }
+  const { sessionId, agentId, agentName, toolName, args, result, transcriptPath, prompt, eventId, toolCallId } = parsePayload(raw);
+  let turnSeq = 0;
+  try { turnSeq = readLifecycle(turnScope(sessionId, agentId)).turnSeq; } catch { /* telemetry is optional */ }
+  const usageSource = `${mode || "hook"}${toolName ? `:${toolName}` : ""}`;
+  emittedUsage = {
+    eventKind: "context",
+    source: usageSource,
+    host: "copilot",
+    sessionId,
+    turnSeq,
+    eventKey: hostEventKey ? `${hostEventKey}:${usageSource}` : undefined,
+  };
 
   if (mode === "session-start") {
     const text = await workflowPrompt();
@@ -325,8 +347,6 @@ async function main(): Promise<void> {
     emit(text ? { additionalContext: internalContext(text) } : {});
     return;
   }
-
-  const { sessionId, agentId, agentName, toolName, args, result, transcriptPath, prompt, eventId, toolCallId } = parsePayload(raw);
 
   if (mode === "subagent-stop") {
     const path = transcriptPath || eventsPathForSession(sessionId);
@@ -372,6 +392,7 @@ async function main(): Promise<void> {
     }
     if (!shouldStartUserTurn(prompt)) return void emit({});
     resetLifecycle(stateId);
+    if (emittedUsage) emittedUsage.turnSeq = readLifecycle(stateId).turnSeq;
     const wf = await workflowPrompt();
     emit(wf ? { additionalContext: internalContext(wf) } : {});
     return;

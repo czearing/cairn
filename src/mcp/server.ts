@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { writeFileSync } from "node:fs";
 import { z } from "zod";
 import { config } from "../core/config";
+import { jsonChars, recordUsage } from "../core/usage";
 import { neighborContext } from "./context";
 import type { Neuron } from "../core/neurons.types";
 import type { ScoredResult } from "../core/search.types";
@@ -17,6 +18,36 @@ import type { ScoredResult } from "../core/search.types";
 const server = new McpServer({ name: "cairn", version: "1.0.0" });
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
+const measured = async <T>(
+  toolName: string,
+  input: unknown,
+  run: () => Promise<T> | T,
+): Promise<T> => {
+  const started = performance.now();
+  try {
+    const result = await run();
+    recordUsage({
+      eventKind: "tool",
+      source: "mcp",
+      toolName,
+      inputChars: jsonChars(input),
+      outputChars: jsonChars(result),
+      durationMs: performance.now() - started,
+      success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
+    });
+    return result;
+  } catch (error) {
+    recordUsage({
+      eventKind: "tool",
+      source: "mcp",
+      toolName,
+      inputChars: jsonChars(input),
+      durationMs: performance.now() - started,
+      success: false,
+    });
+    throw error;
+  }
+};
 
 // Attach a viewer deep-link so callers can show/cite the thought in the UI. Used on the single-node
 // create/mutate returns, where the agent needs the url to report or link the node.
@@ -39,7 +70,7 @@ server.tool(
   "brain_search",
   "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a `score` (0-1 cosine relevance): weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. A result may also carry `prior`/`next`: the adjacent question above/below it in the brain's reasoning graph, for context. Use this as much as possible to learn from previous thoughts",
   { query: z.string().describe("What you are looking for, in natural language.") },
-  async ({ query }) => {
+  async ({ query }) => measured("brain_search", { query }, async () => {
     const { search } = await import("../core/search");
     const { refsByIds } = await import("../core/neurons");
     // Relevance-ranked search (cosine, most-relevant-first).
@@ -54,7 +85,7 @@ server.tool(
     // top score) rather than a character cap — only genuinely-relevant thoughts qualify, so the payload stays
     // small without ever truncating a node's answer. Tighten the floor (or set CAIRN_SEARCH_LIMIT) to trim more.
     return json(thoughts);
-  }
+  })
 );
 
 server.tool(
@@ -64,11 +95,11 @@ server.tool(
     text: z.string().describe("An open question starting with what / how / why / which. Never a yes/no question."),
     edges: z.array(z.string()).optional().describe("ids of related thoughts to link to."),
   },
-  async ({ text, edges }) => {
+  async ({ text, edges }) => measured("brain_create", { text, edges }, async () => {
     if (!text.trim()) return fail("text is required");
     const { create } = await import("../core/neurons");
     return json(withUrl(await create(text, edges ?? [])));
-  }
+  })
 );
 
 server.tool(
@@ -84,7 +115,10 @@ server.tool(
       .describe("REQUIRED whenever you set a non-empty answer: the real source URL(s) you actually consulted. A thought with an answer but no citation is rejected"),
     edges: z.array(z.string()).optional().describe("the complete set of linked thought ids."),
   },
-  async ({ id, text, answer, citation, edges }) => {
+  async ({ id, text, answer, citation, edges }) => measured(
+    "brain_mutate",
+    { id, text, answer, citation, edges },
+    async () => {
     try {
       const { mutate } = await import("../core/neurons");
       const n = await mutate(id, { text, answer, citation, edges });
@@ -92,17 +126,17 @@ server.tool(
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
     }
-  }
+  })
 );
 
 server.tool(
   "brain_delete",
   "Delete a thought by id (removes it and detaches its edges from other thoughts). Use to clear duplicates or mistakes.",
   { id: z.string().describe("id of the thought to delete.") },
-  async ({ id }) => {
+  async ({ id }) => measured("brain_delete", { id }, async () => {
     const { remove } = await import("../core/neurons");
     return json({ deleted: remove(id) });
-  }
+  })
 );
 
 server.tool(
@@ -112,21 +146,21 @@ server.tool(
     ids: z.array(z.string()).min(1).max(4).describe("Exact skill ids from the auto-injected catalog."),
     catalogVersion: z.string().optional().describe("Exact Catalog version value from the injected catalog."),
   },
-  async ({ ids, catalogVersion }) => {
+  async ({ ids, catalogVersion }) => measured("skill_select", { ids, catalogVersion }, async () => {
     const { skillSelect } = await import("../skill/hook");
     const result = skillSelect(ids, catalogVersion);
     return result.error ? fail(JSON.stringify(result)) : json(result);
-  }
+  })
 );
 
 server.tool(
   "skill_search",
   "Legacy compatibility bridge. Current agents receive the catalog automatically and should call skill_select. Returns the catalog, or loads an exact id when task is `load:<id>`.",
   { task: z.string() },
-  async ({ task }) => {
+  async ({ task }) => measured("skill_search", { task }, async () => {
     const { skillSearch } = await import("../skill/hook");
     return json(skillSearch(task));
-  }
+  })
 );
 
 server.tool(
@@ -138,11 +172,14 @@ server.tool(
     plan: z.string().describe("Initial reusable master plan: numbered imperative steps only."),
     whyExistingSkillsDoNotFit: z.string().describe("Why none of the catalog entries covers this method."),
   },
-  async ({ title, description, plan, whyExistingSkillsDoNotFit }) => {
+  async ({ title, description, plan, whyExistingSkillsDoNotFit }) => measured(
+    "skill_create",
+    { title, description, plan, whyExistingSkillsDoNotFit },
+    async () => {
     const { skillCreate } = await import("../skill/hook");
     const result = await skillCreate(title, description, plan, whyExistingSkillsDoNotFit);
     return result.error ? fail(result.error) : json(result);
-  }
+  })
 );
 
 // Agent-facing DIRECT refinement. Lets the agent fix a skill's master the moment it learns a better way —
@@ -156,11 +193,11 @@ server.tool(
     master: z.string().describe("The rewritten master: numbered imperative steps only, no rationale/preamble."),
     explanation: z.string().optional().describe("Optional rationale for the next reviewer (why this is better); never shown to the doer."),
   },
-  async ({ id, master, explanation }) => {
+  async ({ id, master, explanation }) => measured("skill_edit", { id, master, explanation }, async () => {
     const { skillEdit } = await import("../skill/hook");
     const r = await skillEdit(id, master, explanation);
     return r.ok ? json(r) : fail(r.error || "skill_edit failed");
-  }
+  })
 );
 
 // The LEARNER's submission tool. It is registered ONLY in the learner context (when CAIRN_SKILL_OUTPUT_PATH
@@ -179,7 +216,10 @@ if (process.env.CAIRN_SKILL_OUTPUT_PATH) {
       master: z.string().describe("The rewritten master prompt: the numbered steps ONLY (no rationale paragraph). This is the only text injected into the doer."),
       explanation: z.string().describe("The 2-to-4-sentence rationale for the next reviewer (why the best runs win, what excellent looks like, the failure mode to avoid). Never shown to the doer."),
     },
-    async ({ score, right, wrong, improve, master, explanation }) => {
+    async ({ score, right, wrong, improve, master, explanation }) => measured(
+      "skill_output",
+      { score, right, wrong, improve, master, explanation },
+      async () => {
       // The label is the loop's, not the learner's: it was decided before this call and passed in via
       // CAIRN_SKILL_FORCED_LABEL. An empty forced label means a non-task (no skill, empty master ok).
       const lbl = (process.env.CAIRN_SKILL_FORCED_LABEL ?? "").trim();
@@ -197,7 +237,7 @@ if (process.env.CAIRN_SKILL_OUTPUT_PATH) {
       const p = process.env.CAIRN_SKILL_OUTPUT_PATH;
       if (p) { try { writeFileSync(p, JSON.stringify({ label: lbl, score, right, wrong, improve, master, explanation })); } catch { /* capture is best-effort */ } }
       return json({ ok: true });
-    }
+    })
   );
 }
 
@@ -215,13 +255,13 @@ server.tool(
   {
     id: z.string().describe("The selected or created skill id this deliverable belongs to."),
   },
-  async ({ id }) => {
+  async ({ id }) => measured("skill_review", { id }, async () => {
     if (!id.trim()) return fail("id is required (pass the selected or created skill id)");
     const { reviewableSkill } = await import("../skill/store");
     if (!reviewableSkill(id.trim())) return fail("unknown or retired skill id; pass an id from the current injected catalog or skill_create");
     // The transcript path lives with the host hook, not here, so this tool only acknowledges the declaration.
     return json({ ok: true });
-  }
+  })
 );
 
 // Bind the stdio transport exactly once. This guard also keeps optional hot-reload hosts from binding a

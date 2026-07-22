@@ -61,9 +61,17 @@ test("usage events store measurements without user content", async () => {
   expect(typeof stored.session_hash).toBe("string");
   expect(String(stored.session_hash)).toHaveLength(16);
   expect(stored.estimated_tokens).toBe(2343);
-  expect(usageSummary(1).groups.some((group) =>
+  const summary = usageSummary(1);
+  expect(summary.groups.some((group) =>
     group.source === "user-prompt" && group.estimatedTokens >= 2343
   )).toBe(true);
+  expect(summary.impact).toMatchObject({
+    currentPromptTokens: 2343,
+    contextTokens: expect.any(Number),
+    toolTokens: expect.any(Number),
+    prompts: expect.any(Number),
+  });
+  expect(summary.impact.measuredTokensPerPrompt).toBeGreaterThan(0);
 });
 
 test("usage event keys make hook telemetry idempotent", async () => {
@@ -118,7 +126,25 @@ test("usage CLI emits machine-readable aggregates", () => {
     env: { ...process.env },
   });
   expect(result.status).toBe(0);
-  const report = JSON.parse(result.stdout.toString()) as { totals: { events: number }; groups: unknown[] };
+  const report = JSON.parse(result.stdout.toString()) as {
+    totals: { events: number };
+    impact: { currentPromptTokens: number };
+    groups: unknown[];
+  };
   expect(report.totals.events).toBeGreaterThan(0);
+  expect(report.impact.currentPromptTokens).toBeGreaterThan(0);
   expect(Array.isArray(report.groups)).toBe(true);
+});
+
+test("usage CLI prints decision metrics directly", () => {
+  const result = spawnSync(process.execPath, ["src/cli.ts", "usage", "--days=1"], {
+    cwd: join(import.meta.dir, ".."),
+    env: { ...process.env },
+  });
+  const output = result.stdout.toString();
+  expect(result.status).toBe(0);
+  expect(output).toContain("fixed/message");
+  expect(output).toContain("measured/message");
+  expect(output).toContain("context");
+  expect(output).toContain("tools");
 });

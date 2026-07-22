@@ -26,11 +26,29 @@ export interface UsageGroup {
   toolName: string;
   events: number;
   estimatedTokens: number;
+  minimumTokens: number;
+  maximumTokens: number;
   inputChars: number;
   outputChars: number;
   contextChars: number;
   averageDurationMs: number;
   failures: number;
+}
+
+export interface UsageImpact {
+  prompts: number;
+  sessions: number;
+  currentPromptTokens: number;
+  measuredTokensPerPrompt: number;
+  contextTokens: number;
+  toolTokens: number;
+  contextPercent: number;
+  toolPercent: number;
+  firstEventTs: number;
+  lastEventTs: number;
+  latestContextTs: number;
+  latestToolTs: number;
+  toolTelemetryLagMs: number;
 }
 
 let schemaReady = false;
@@ -115,9 +133,16 @@ export function recordUsage(event: UsageEvent): boolean {
   }
 }
 
-export function usageSummary(days = 7): { sinceTs: number; totals: UsageGroup; groups: UsageGroup[] } {
+export function usageSummary(days = 7): {
+  sinceTs: number;
+  totals: UsageGroup;
+  impact: UsageImpact;
+  groups: UsageGroup[];
+} {
   const sinceTs = Date.now() - Math.max(1, days) * 86_400_000;
   const metrics = `COUNT(*) AS events,COALESCE(SUM(estimated_tokens),0) AS estimatedTokens,
+    COALESCE(MIN(estimated_tokens),0) AS minimumTokens,
+    COALESCE(MAX(estimated_tokens),0) AS maximumTokens,
     COALESCE(SUM(input_chars),0) AS inputChars,COALESCE(SUM(output_chars),0) AS outputChars,
     COALESCE(SUM(context_chars),0) AS contextChars,
     ROUND(COALESCE(AVG(duration_ms),0),1) AS averageDurationMs,
@@ -130,7 +155,45 @@ export function usageSummary(days = 7): { sinceTs: number; totals: UsageGroup; g
     FROM usage_events WHERE ts >= ?
     GROUP BY event_kind,source,host,tool_name
     ORDER BY estimatedTokens DESC,events DESC`).all(sinceTs) as UsageGroup[];
-  return { sinceTs, totals, groups };
+  const coverage = d.query(`SELECT
+      COUNT(DISTINCT CASE WHEN session_hash != '' THEN session_hash END) AS sessions,
+      COALESCE(MIN(ts),0) AS firstEventTs,COALESCE(MAX(ts),0) AS lastEventTs,
+      COALESCE(MAX(CASE WHEN event_kind='context' THEN ts ELSE 0 END),0) AS latestContextTs,
+      COALESCE(MAX(CASE WHEN event_kind='tool' THEN ts ELSE 0 END),0) AS latestToolTs
+    FROM usage_events WHERE ts >= ?`).get(sinceTs) as {
+      sessions: number;
+      firstEventTs: number;
+      lastEventTs: number;
+      latestContextTs: number;
+      latestToolTs: number;
+    };
+  const latestPrompt = d.query(`SELECT estimated_tokens AS tokens FROM usage_events
+    WHERE ts >= ? AND event_kind='context' AND source='user-prompt'
+    ORDER BY ts DESC LIMIT 1`).get(sinceTs) as { tokens: number } | null;
+  const contextTokens = groups
+    .filter((group) => group.eventKind === "context")
+    .reduce((total, group) => total + group.estimatedTokens, 0);
+  const toolTokens = groups
+    .filter((group) => group.eventKind === "tool")
+    .reduce((total, group) => total + group.estimatedTokens, 0);
+  const prompts = groups.find((group) =>
+    group.eventKind === "context" && group.source === "user-prompt"
+  )?.events ?? 0;
+  const totalTokens = totals.estimatedTokens;
+  const impact: UsageImpact = {
+    ...coverage,
+    prompts,
+    currentPromptTokens: latestPrompt?.tokens ?? 0,
+    measuredTokensPerPrompt: prompts > 0 ? Math.round(totalTokens / prompts) : 0,
+    contextTokens,
+    toolTokens,
+    contextPercent: totalTokens > 0 ? Math.round(contextTokens * 100 / totalTokens) : 0,
+    toolPercent: totalTokens > 0 ? Math.round(toolTokens * 100 / totalTokens) : 0,
+    toolTelemetryLagMs: coverage.latestContextTs > coverage.latestToolTs
+      ? coverage.latestContextTs - coverage.latestToolTs
+      : 0,
+  };
+  return { sinceTs, totals, impact, groups };
 }
 
 export function jsonChars(value: unknown): number {

@@ -87,7 +87,7 @@ export function buildArgs(opts: ClaudeOpts = {}, mcpConfigPath?: string): string
     // Restrict to ONLY the brain tools the learner needs (mapped to this run's server), so with --allow-all-tools
     // auto-approving them it still can never edit files or run shell. Mirrors the Claude path's tight allowlist.
     const tools = (opts.allowedTools?.length ? opts.allowedTools : ["mcp__cairn__brain_search", "mcp__cairn__skill_output"])
-      .map((t) => `${LEARN_SERVER}-${t.includes("__") ? t.slice(t.lastIndexOf("__") + 2) : t}`);
+      .map((t) => t.startsWith("mcp__cairn__") ? `${LEARN_SERVER}-${t.slice(t.lastIndexOf("__") + 2)}` : t);
     for (const t of tools) args.push("--available-tools", t);
     args.push("--allow-all-tools"); // required to auto-approve tool use in non-interactive mode
   }
@@ -122,7 +122,14 @@ export async function runCopilot(prompt: string, opts: ClaudeOpts = {}): Promise
     // CREATE_NO_WINDOW, spawning node.exe (the copilot loader) pops a visible console window on every review.
     // Hiding it also gives the copilot process an invisible console its own children (the learn MCP server)
     // inherit, so nothing flashes on screen. No-op off Windows. Mirrors claude.ts / embed.ts.
-    proc = Bun.spawn([bin, ...prefix, ...argv], { stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true });
+    proc = Bun.spawn([bin, ...prefix, ...argv], {
+      cwd: opts.cwd,
+      env: opts.env ? { ...process.env, ...opts.env } : undefined,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      windowsHide: true,
+    });
   } catch (e) {
     return { ok: false, text: "", error: `spawn failed: ${e instanceof Error ? e.message : String(e)}` };
   }

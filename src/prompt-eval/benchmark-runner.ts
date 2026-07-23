@@ -7,7 +7,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { config } from "../core/config";
 import { estimatedTokens } from "../core/telemetry";
@@ -22,6 +22,7 @@ import {
 } from "./benchmark-host";
 import {
   beginBenchmarkRun,
+  finalizeBenchmarkContext,
   finishBenchmarkRun,
   initializeBenchmarkDatabase,
 } from "./benchmark-record";
@@ -50,6 +51,48 @@ function promptProfile(dir?: string): string {
   }).join("\n");
 }
 
+function writeFixture(root: string, files: Record<string, string> = {}): void {
+  for (const [name, content] of Object.entries(files)) {
+    const path = resolve(root, name);
+    const fromRoot = relative(root, path);
+    if (fromRoot.startsWith("..") || isAbsolute(fromRoot)) {
+      throw new Error(`benchmark fixture escapes workspace: ${name}`);
+    }
+
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  }
+}
+
+async function removeBenchmarkRoot(root: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt >= 20) {
+        if (process.platform !== "win32") throw error;
+        const escaped = root.replace(/'/g, "''");
+        const cleanup = Bun.spawn([
+          "powershell.exe",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `Wait-Process -Id ${process.pid}; Remove-Item -LiteralPath '${escaped}' -Recurse -Force`,
+        ], {
+          cwd: tmpdir(),
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+        });
+        cleanup.unref();
+        return;
+      }
+      await Bun.sleep(100);
+    }
+  }
+}
+
 async function runPrompt(
   plan: BenchmarkPlan,
   label: string,
@@ -73,6 +116,7 @@ async function runPrompt(
         const resultPath = join(runRoot, "result.json");
         const pidPath = join(runRoot, "mcp.pid");
         const assertionPath = join(runRoot, "assertions.json");
+        writeFixture(runRoot, item.files);
         prepareBenchmarkRunDatabase(dbPath, snapshot, `${plan.name}-${label}`, promptHash);
         writeFileSync(assertionPath, JSON.stringify({ assertions: item.assertions }));
         beginBenchmarkRun(dbPath, {
@@ -92,12 +136,13 @@ async function runPrompt(
           CAIRN_PROMPT_BENCHMARK_RESULT: resultPath,
           CAIRN_PROMPT_BENCHMARK_PID_PATH: pidPath,
           ...(hookPromptDir ? { CAIRN_PROMPT_BENCHMARK_DIR: hookPromptDir } : {}),
-        }, plan);
+        }, plan, runRoot);
         await stopBenchmarkProcess(pidPath);
         if (!result.ok) {
           console.error(`${label}/${host}/${item.id}#${trial}: ${result.error || "run failed"}`);
         }
         const assertions = runAssertions(assertionPath, runRoot);
+        finalizeBenchmarkContext(dbPath, sessionId);
         finishBenchmarkRun(dbPath, {
           sessionId,
           completed: result.ok,
@@ -154,6 +199,6 @@ export async function runPromptComparison(input: {
     writeFileSync(join(output, "candidate.json"), JSON.stringify(candidate, null, 2));
     return { baseline, candidate, evaluation: evaluatePrompt(baseline, candidate) };
   } finally {
-    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    await removeBenchmarkRoot(root);
   }
 }

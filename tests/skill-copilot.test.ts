@@ -32,6 +32,14 @@ test("buildArgs wires the capture MCP and restricts to brain tools for a learn c
   expect(a).not.toContain("--deny-tool");                 // deny-tool breaks MCP permission in -p mode
 });
 
+test("buildArgs preserves explicitly allowed built-in tools", () => {
+  const a = buildArgs({ allowedTools: ["view", "rg", "mcp__cairn__brain_search"] }, "/tmp/learn.json");
+  const blob = a.join(" ");
+  expect(blob).toContain("--available-tools view");
+  expect(blob).toContain("--available-tools rg");
+  expect(blob).toContain("--available-tools cairnlearn-brain_search");
+});
+
 // ── capPrompt: protect the instructions + deliverable, drop the transcript middle ─────────────────
 
 test("capPrompt leaves a prompt under budget untouched", () => {

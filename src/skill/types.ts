@@ -15,6 +15,8 @@ export interface ClaudeOpts {
   timeoutMs?: number;
   /** Model id for the spawned CLI (e.g. "claude-sonnet-4-6"). Omitted = the CLI's own default. */
   model?: string;
+  /** Isolated working directory for benchmark or review fixtures. */
+  cwd?: string;
 }
 
 /** The reviewer's verdict on one output: a quality score plus what to keep, fix, and improve. */

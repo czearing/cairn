@@ -29,6 +29,7 @@ export function initializeBenchmarkDatabase(
       host TEXT NOT NULL,
       case_id TEXT NOT NULL,
       trial INTEGER NOT NULL,
+      started_ts INTEGER NOT NULL DEFAULT 0,
       prompt_tokens INTEGER NOT NULL,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       completed INTEGER NOT NULL DEFAULT 0,
@@ -44,6 +45,9 @@ export function initializeBenchmarkDatabase(
      .all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "context_tokens")) {
      db.run("ALTER TABLE prompt_benchmark_runs ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!columns.some((column) => column.name === "started_ts")) {
+     db.run("ALTER TABLE prompt_benchmark_runs ADD COLUMN started_ts INTEGER NOT NULL DEFAULT 0");
     }
     db.run(`CREATE TABLE IF NOT EXISTS prompt_benchmark_events(
       seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,12 +66,13 @@ export function beginBenchmarkRun(path: string, run: BenchmarkRunStart): void {
   const db = new Database(path);
   try {
     db.query(`INSERT INTO prompt_benchmark_runs(
-      session_id,host,case_id,trial,prompt_tokens,context_tokens
-    ) VALUES (?,?,?,?,?,?)`).run(
+      session_id,host,case_id,trial,started_ts,prompt_tokens,context_tokens
+    ) VALUES (?,?,?,?,?,?,?)`).run(
       run.sessionId,
       run.host,
       run.caseId,
       run.trial,
+      Date.now(),
       run.promptTokens,
       run.promptTokens,
     );
@@ -113,6 +118,24 @@ export function finishBenchmarkRun(path: string, input: {
       input.assertionsTotal,
       input.sessionId,
     );
+  } finally {
+    db.close();
+  }
+}
+
+export function finalizeBenchmarkContext(path: string, sessionId: string): void {
+  const db = new Database(path);
+  try {
+    const run = db.query(`SELECT started_ts FROM prompt_benchmark_runs WHERE session_id=?`)
+      .get(sessionId) as { started_ts: number } | null;
+    if (!run) return;
+    const measured = db.query(`SELECT COALESCE(SUM(output_tokens),0) AS tokens
+      FROM telemetry_events WHERE kind='tool' AND run_class='benchmark' AND ts>=?`)
+      .get(run.started_ts) as { tokens: number };
+    if (measured.tokens <= 0) return;
+    db.query(`UPDATE prompt_benchmark_runs
+      SET context_tokens=prompt_tokens+? WHERE session_id=?`)
+      .run(measured.tokens, sessionId);
   } finally {
     db.close();
   }

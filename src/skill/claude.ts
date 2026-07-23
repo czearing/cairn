@@ -36,7 +36,12 @@ export function runClaude(prompt: string, opts: ClaudeOpts = {}): Promise<Claude
     if (promptArgument) args.splice(1, 0, prompt);
     let child: ReturnType<typeof spawn>;
     const bin = process.env.CAIRN_CLAUDE_BIN || BIN; // read at call time so tests can point it at a failing command
-    try { child = spawn(bin, args, { stdio: [promptArgument ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true, env: opts.env ? { ...process.env, ...opts.env } : undefined }); }
+    try { child = spawn(bin, args, {
+      cwd: opts.cwd,
+      stdio: [promptArgument ? "ignore" : "pipe", "pipe", "pipe"],
+      windowsHide: true,
+      env: opts.env ? { ...process.env, ...opts.env } : undefined,
+    }); }
     catch (e) { return done({ ok: false, text: "", error: `spawn failed: ${e instanceof Error ? e.message : String(e)}` }); }
     const timer = timeoutMs == null ? undefined : setTimeout(() => {
       try { child.kill(); } catch { /* gone */ }

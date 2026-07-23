@@ -12,6 +12,7 @@ import {
 } from "../src/prompt-eval/reminder-profile";
 import {
   beginBenchmarkRun,
+  finalizeBenchmarkContext,
   finishBenchmarkRun,
   initializeBenchmarkDatabase,
   recordBenchmarkContext,
@@ -302,6 +303,36 @@ test("benchmark reminder profiles add the delivered hook context to measured tok
     else process.env.CAIRN_PROMPT_BENCHMARK_SESSION = previous.session;
     if (previous.dir == null) delete process.env.CAIRN_PROMPT_BENCHMARK_DIR;
     else process.env.CAIRN_PROMPT_BENCHMARK_DIR = previous.dir;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("benchmark context uses canonical host tool results when available", () => {
+  const root = join(tmpdir(), `cairn-host-tool-context-${randomUUID()}`);
+  const path = join(root, "benchmark.db");
+  mkdirSync(root);
+  initializeBenchmarkDatabase(path, "host-tools", "prompt-hash");
+  beginBenchmarkRun(path, {
+    sessionId: "host-tool-session",
+    host: "copilot",
+    caseId: "host-tools",
+    trial: 1,
+    promptTokens: 100,
+  });
+  const db = new Database(path);
+  db.run(`CREATE TABLE telemetry_events(
+    kind TEXT NOT NULL,run_class TEXT NOT NULL,output_tokens INTEGER NOT NULL,ts INTEGER NOT NULL
+  )`);
+  db.query("INSERT INTO telemetry_events VALUES ('tool','benchmark',75,?)").run(Date.now());
+  db.close();
+  try {
+    finalizeBenchmarkContext(path, "host-tool-session");
+    const check = new Database(path, { readonly: true });
+    const row = check.query("SELECT context_tokens FROM prompt_benchmark_runs")
+      .get() as { context_tokens: number };
+    check.close();
+    expect(row.context_tokens).toBe(175);
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

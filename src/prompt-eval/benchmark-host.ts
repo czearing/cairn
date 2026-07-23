@@ -10,6 +10,7 @@ export interface BenchmarkCase {
   id: string;
   task: string;
   assertions: Assertion[];
+  files?: Record<string, string>;
 }
 
 export interface BenchmarkPlan {
@@ -22,6 +23,7 @@ export interface BenchmarkPlan {
   candidateCatalogMode?: "full" | "titles";
   baselineHookPromptDir?: string;
   candidateHookPromptDir?: string;
+  allowedTools?: Partial<Record<PromptHost, string[]>>;
   cases: BenchmarkCase[];
 }
 
@@ -77,13 +79,15 @@ export async function runBenchmarkHost(
   prompt: string,
   env: Record<string, string>,
   plan: BenchmarkPlan,
+  cwd?: string,
 ) {
   const opts = {
     system: prompt,
-    allowedTools: tools,
+    allowedTools: plan.allowedTools?.[host] ?? tools,
     mcpConfigPath: cairnMcpConfigPath(),
     env,
     model: plan.models?.[host],
+    cwd,
   };
   if (host === "claude") return runClaude(task, opts);
   const previous = process.env.CAIRN_SKILL_WORKER;

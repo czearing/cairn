@@ -254,5 +254,8 @@ test("skill_edit rewrites a skill's master directly (agent-driven fix, no grader
   expect(bad.isError).toBe(true); // unknown id rejected
   const catalog = parse(await call("skill_search", { task: "flash edit" }));
   const selected = parse(await call("skill_select", { ids: [created.id], catalogVersion: catalog.catalogVersion }));
-  expect(selected.selected[0].steps).toContain("do the thing better");
+  expect(selected).toEqual({
+    selected: [{ id: created.id, steps: expect.stringContaining("do the thing better") }],
+    catalogVersion: catalog.catalogVersion,
+  });
 });

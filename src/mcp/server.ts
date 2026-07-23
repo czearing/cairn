@@ -99,6 +99,13 @@ const measured = async <T>(
 // Attach a viewer deep-link so callers can show/cite the thought in the UI.
 const nodeUrl = (id: string): string => `${config.uiUrl}/node/${id}`;
 const mutationAck = ({ id }: Neuron) => ({ id, url: nodeUrl(id) });
+const skillSelectionAck = (result: {
+  selected: { id: string; steps: string }[];
+  catalogVersion: string;
+}) => ({
+  selected: result.selected.map(({ id, steps }) => ({ id, steps })),
+  catalogVersion: result.catalogVersion,
+});
 
 // Lean agent-facing search hit. Keep the handle (`id`), the knowledge (`text`/`answer`/`citation`) and
 // the relevance (`score`); DROP `edges` and `url`. `edges` is server-only graph data the agent cannot
@@ -206,7 +213,7 @@ server.tool(
   async ({ ids, catalogVersion }) => measured("skill_select", { ids, catalogVersion }, async () => {
     const { skillSelect } = await import("../skill/hook");
     const result = skillSelect(ids, catalogVersion);
-    return result.error ? fail(JSON.stringify(result)) : json(result);
+    return result.error ? fail(JSON.stringify(result)) : json(skillSelectionAck(result));
   })
 );
 

@@ -9,6 +9,7 @@ import { rmSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { getLoadablePath } from "sqlite-vec";
+import { releaseVersion } from "../src/core/release";
 
 const TEST_DB = join(tmpdir(), `cairn-mcp-${randomUUID()}.db`);
 let client: Client;
@@ -67,7 +68,7 @@ test("MCP calls record local size and latency telemetry", async () => {
   expect(event.duration_ms).toBeGreaterThanOrEqual(0);
   expect(event.success).toBe(1);
   expect(event.release_fingerprint).toHaveLength(24);
-  expect(event.version).toBe("0.1.0");
+  expect(event.version).toBe(releaseVersion);
   expect(event.run_class).toBe("human");
   expect(columns.map((column) => column.name)).not.toContain("content");
 });

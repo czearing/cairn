@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { releaseVersion } from "../src/core/release";
 
 test("usage telemetry is off without an explicit local opt-in", () => {
   const dbPath = join(tmpdir(), `cairn-usage-opt-out-${randomUUID()}.db`);
@@ -148,7 +149,7 @@ test("quality run identity backfills usage release metadata", async () => {
       promptFingerprint("release prompt"),
       "release catalog",
     ),
-    version: "0.1.0",
+    version: releaseVersion,
     run_class: "human",
   });
 });

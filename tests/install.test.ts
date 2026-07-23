@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { install } from "../src/install";
 import { checks } from "../src/doctor";
 import { verify } from "../src/verify";
+import { releaseVersion } from "../src/core/release";
 
 // The installer is proven the same way the user sees it: drive `install` against a throwaway
 // settings file (MCP + verify stubbed for hermeticity) and assert idempotent, non-destructive
@@ -96,6 +97,7 @@ test("install registers cairn in Copilot and injects only through userPromptSubm
   expect(JSON.stringify(mcp.mcpServers.cairn.args)).toContain("server.ts");
   expect(mcp.mcpServers.cairn.args).not.toContain("--hot"); // stable stdio; Copilot has no Cairn cwd
   const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
+  expect(hook.cairnRelease).toBe(releaseVersion); // lets persistent Harness workers detect Cairn upgrades
   expect(hook.hooks.sessionStart).toBeUndefined(); // avoids a duplicate workflow on the first turn
   expect(hook.hooks.userPromptSubmitted[0].type).toBe("command"); // one workflow after the prompt batch
   expect(hook.hooks.preToolUse[0].type).toBe("command"); // brain_create deny gate

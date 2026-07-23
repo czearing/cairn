@@ -13,6 +13,7 @@ import { readFile, writeFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { libsqlEnv } from "../../libsql-env";
+import { releaseVersion } from "../../core/release";
 
 const ROOT = resolve(import.meta.dir, "..", "..", ".."); // src/hosts/copilot-cli → repo root
 const SERVER = join(ROOT, "src", "mcp", "server.ts");
@@ -133,6 +134,7 @@ function hookConfig(): object {
   if (!supportsPerPromptContext()) hooks.sessionStart = [cmd("session-start")];
   return {
     version: 1,
+    cairnRelease: releaseVersion,
     hooks,
   };
 }

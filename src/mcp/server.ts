@@ -98,7 +98,6 @@ const measured = async <T>(
 
 // Attach a viewer deep-link so callers can show/cite the thought in the UI.
 const nodeUrl = (id: string): string => `${config.uiUrl}/node/${id}`;
-const withUrl = <T extends Neuron>(n: T) => ({ ...n, url: nodeUrl(n.id) });
 const mutationAck = ({ id }: Neuron) => ({ id, url: nodeUrl(id) });
 
 // Lean agent-facing search hit. Keep the handle (`id`), the knowledge (`text`/`answer`/`citation`) and
@@ -148,7 +147,7 @@ if (process.env.CAIRN_PROMPT_BENCHMARK_SESSION) {
 
 server.tool(
   "brain_create",
-  "Create a thought and return its id. Phrase it as an open question (what / how / why / which) — a yes/no question presumes its answer and cannot be split. Keep it concise, bloated text pollutes search. Link related thoughts by id so future agents can build on them",
+  "Create a thought and return its id and viewer URL. Phrase it as an open question (what / how / why / which) — a yes/no question presumes its answer and cannot be split. Keep it concise, bloated text pollutes search. Link related thoughts by id so future agents can build on them",
   {
     text: z.string().describe("An open question starting with what / how / why / which. Never a yes/no question."),
     edges: z.array(z.string()).optional().describe("ids of related thoughts to link to."),
@@ -156,7 +155,7 @@ server.tool(
   async ({ text, edges }) => measured("brain_create", { text, edges }, async () => {
     if (!text.trim()) return fail("text is required");
     const { create } = await import("../core/neurons");
-    return json(withUrl(await create(text, edges ?? [])));
+    return json(mutationAck(await create(text, edges ?? [])));
   })
 );
 

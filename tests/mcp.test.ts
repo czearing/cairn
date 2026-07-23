@@ -37,11 +37,18 @@ test("exposes only the agent-owned brain and skill tools", async () => {
   expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_edit", "skill_search", "skill_select"]);
 });
 
-test("brain_create returns a neuron with an id and a viewer url", async () => {
+test("brain_create returns a compact acknowledgement while preserving the thought", async () => {
   const n = parse(await call("brain_create", { text: "How do I write a haiku poem?" }));
-  expect(n.id).toBeTruthy();
-  expect(n.answer).toBe("");
-  expect(n.url).toContain(`/node/${n.id}`);
+  expect(n).toEqual({
+    id: expect.any(String),
+    url: expect.stringContaining(`/node/${n.id}`),
+  });
+  const results = parse(await call("brain_search", { query: "writing a haiku poem" }));
+  expect(results.find((result: { id: string }) => result.id === n.id)).toMatchObject({
+    text: "How do I write a haiku poem?",
+    answer: "",
+    citation: "",
+  });
 });
 
 test("MCP calls record local size and latency telemetry", async () => {

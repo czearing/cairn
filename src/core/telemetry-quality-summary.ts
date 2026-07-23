@@ -1,4 +1,4 @@
-import { qualityDatabase } from "./quality-schema";
+import { telemetryDatabase } from "./telemetry-schema";
 
 export interface QualityMetrics {
   release: string;
@@ -62,7 +62,7 @@ const percent = (part: number, total: number): number =>
 function releaseMetrics(
   sinceTs: number, release: string, host: string, model: string
 ): QualityMetrics | null {
-  const db = qualityDatabase();
+  const db = telemetryDatabase();
   if (!db || !release) return null;
   const row = db.query(`SELECT COUNT(*) AS runs,
     ROUND(AVG(completed)*100,1) AS completedRate,
@@ -70,9 +70,10 @@ function releaseMetrics(
     ROUND(AVG(tool_failures)*100.0/CASE WHEN tool_calls=0 THEN 1 ELSE tool_calls END,1) AS toolFailureRate,
     ROUND(AVG(stop_nudges),1) AS averageStopNudges,
     ROUND(AVG(injected_tokens + COALESCE((
-      SELECT SUM(input_tokens+output_tokens) FROM quality_events e WHERE e.run_id=r.run_id
+      SELECT SUM(estimated_tokens) FROM telemetry_events e
+      WHERE e.run_id=r.run_id AND e.kind='tool'
     ),0)),1) AS tokensPerRun
-    FROM quality_runs r WHERE started_ts>=? AND release_fingerprint=? AND host=?
+    FROM telemetry_runs r WHERE started_ts>=? AND release_fingerprint=? AND host=?
       AND run_class='human'
       AND model=? AND ended_ts>0`)
     .get(sinceTs, release, host, model) as Omit<QualityMetrics, "release"> | null;
@@ -86,8 +87,8 @@ const delta = (current: QualityMetrics, baseline: QualityMetrics | null) => base
   toolFailureRate: Math.round((current.toolFailureRate - baseline.toolFailureRate) * 10) / 10,
 } : null;
 
-export function qualitySummary(days = 7): QualitySummary {
-  const db = qualityDatabase();
+export function telemetryQualitySummary(days = 7): QualitySummary {
+  const db = telemetryDatabase();
   if (!db) return empty();
   const sinceTs = Date.now() - Math.max(1, days) * 86_400_000;
   const runs = db.query(`SELECT COUNT(*) AS runs,
@@ -96,22 +97,22 @@ export function qualitySummary(days = 7): QualitySummary {
     COALESCE(SUM(completed),0) AS completed,
     COALESCE(SUM(workflow_passed),0) AS workflow,
     COALESCE(SUM(tool_failures),0) AS failures
-    FROM quality_runs WHERE started_ts>=? AND run_class='human'`).get(sinceTs) as {
+    FROM telemetry_runs WHERE started_ts>=? AND run_class='human'`).get(sinceTs) as {
       runs: number; active: number; closed: number; completed: number; workflow: number; failures: number;
     };
   const brain = db.query(`WITH returned AS (
-      SELECT DISTINCT e.run_id,e.entity_hash FROM quality_events e
-      JOIN quality_runs r USING(run_id)
+      SELECT DISTINCT e.run_id,e.entity_hash FROM telemetry_events e
+      JOIN telemetry_runs r USING(run_id)
       WHERE e.ts>=? AND r.ended_ts>0 AND e.kind='brain_returned' AND e.entity_hash!=''
         AND r.run_class='human'
     ), used AS (
-      SELECT DISTINCT e.run_id,e.entity_hash FROM quality_events e
-      JOIN quality_runs r USING(run_id)
+      SELECT DISTINCT e.run_id,e.entity_hash FROM telemetry_events e
+      JOIN telemetry_runs r USING(run_id)
       WHERE e.ts>=? AND r.ended_ts>0 AND r.run_class='human'
         AND e.kind IN ('brain_referenced','brain_mutated') AND e.entity_hash!=''
     ), observed AS (
-      SELECT e.entity_hash,COUNT(DISTINCT e.session_hash) AS sessions FROM quality_events e
-      JOIN quality_runs r USING(run_id)
+      SELECT e.entity_hash,COUNT(DISTINCT e.session_hash) AS sessions FROM telemetry_events e
+      JOIN telemetry_runs r USING(run_id)
       WHERE e.ts>=? AND r.ended_ts>0 AND r.run_class='human'
         AND e.entity_type='brain' AND e.entity_hash!=''
       GROUP BY e.entity_hash
@@ -127,18 +128,18 @@ export function qualitySummary(days = 7): QualitySummary {
     COUNT(DISTINCT CASE WHEN r.ended_ts>0 AND e.kind='skill_selected' THEN e.entity_hash END) AS selectedSkills,
     COUNT(DISTINCT CASE WHEN r.ended_ts>0 AND e.kind='skill_edited' THEN e.entity_hash END) AS editedSkills,
     COALESCE(SUM(CASE WHEN e.kind='visibility_failure' THEN 1 ELSE 0 END),0) AS visibilityFailures
-    FROM quality_events e JOIN quality_runs r USING(run_id)
+    FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
     WHERE e.ts>=? AND r.run_class='human'`).get(sinceTs) as {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
     };
   const promptEvaluationCounts = db.query(`SELECT COUNT(*) AS total,
-    COALESCE(SUM(accepted),0) AS accepted FROM prompt_evaluations WHERE created_ts>=?`)
+    COALESCE(SUM(accepted),0) AS accepted FROM telemetry_evaluations WHERE created_ts>=?`)
     .get(sinceTs) as { total: number; accepted: number };
   const latestPromptEvaluation = db.query(`SELECT candidate_prompt_hash AS candidatePromptHash,
     accepted,token_reduction AS tokenReduction,safe_token_reduction AS safeTokenReduction,
     quality_improvements AS qualityImprovements,quality_checks AS qualityChecks,
     compared_runs AS comparedRuns
-    FROM prompt_evaluations WHERE created_ts>=? ORDER BY created_ts DESC LIMIT 1`)
+    FROM telemetry_evaluations WHERE created_ts>=? ORDER BY created_ts DESC LIMIT 1`)
     .get(sinceTs) as {
       candidatePromptHash: string;
       accepted: number;
@@ -149,11 +150,11 @@ export function qualitySummary(days = 7): QualitySummary {
       comparedRuns: number;
     } | null;
   const dimensions = db.query(`SELECT host,model,MAX(started_ts) AS latest
-    FROM quality_runs WHERE started_ts>=? AND ended_ts>0 AND run_class='human'
+    FROM telemetry_runs WHERE started_ts>=? AND ended_ts>0 AND run_class='human'
     GROUP BY host,model ORDER BY latest DESC`).all(sinceTs) as { host: string; model: string }[];
   const comparisons = dimensions.flatMap(({ host, model }) => {
     const releases = db.query(`SELECT release_fingerprint AS release,MAX(started_ts) AS latest
-      FROM quality_runs WHERE started_ts>=? AND ended_ts>0 AND run_class='human'
+      FROM telemetry_runs WHERE started_ts>=? AND ended_ts>0 AND run_class='human'
         AND host=? AND model=?
       GROUP BY release_fingerprint ORDER BY latest DESC LIMIT 2`)
       .all(sinceTs, host, model) as { release: string }[];

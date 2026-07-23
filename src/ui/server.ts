@@ -37,11 +37,11 @@ async function handler(req: Request): Promise<Response> {
     }
     return Response.json({ skills: all });
   }
-  if (pathname === "/api/usage" && m === "GET") {
+  if ((pathname === "/api/telemetry" || pathname === "/api/usage") && m === "GET") {
     const days = Math.max(1, Number(searchParams.get("days") || "7"));
-    const { usageSummary } = await import("../core/usage");
-    const { qualitySummary } = await import("../core/quality-summary");
-    return Response.json({ usage: usageSummary(days), quality: qualitySummary(days) });
+    const { telemetrySummary } = await import("../core/telemetry");
+    const report = telemetrySummary(days);
+    return Response.json({ usage: report, quality: report.quality });
   }
   if (pathname === "/usage") return asset("usage.html", "text/html; charset=utf-8");
   // Delete a skill (and its runs + version history) by id, for the /skills page delete button.

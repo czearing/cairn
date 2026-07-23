@@ -27,13 +27,13 @@ import { join } from "node:path";
 import { isSystemEnvelope } from "../../skill/noise";
 import { recordHostEvent } from "../../core/host-events";
 import {
-  beginQualityRun,
-  finishQualityRun,
+  beginTelemetryRun,
+  finishTelemetryRun,
   promptFingerprint,
-  recordQualityState,
-  recordQualityTool,
-} from "../../core/quality-record";
-import { recordUsage } from "../../core/usage";
+  recordTelemetry,
+  recordTelemetryState,
+  recordTelemetryTool,
+} from "../../core/telemetry";
 import { formatSkillCatalog, selectedSkillBlock, skillCatalogSnapshot, skillIdsFromTask } from "../../skill/catalog";
 import {
   claimDelegation,
@@ -48,13 +48,13 @@ import { skillResultId } from "../../skill/tool-result";
 import { postToolPromptFiles } from "../../inject/post-tool";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
-let emittedUsage: Parameters<typeof recordUsage>[0] | undefined;
+let emittedUsage: Parameters<typeof recordTelemetry>[0] | undefined;
 const emit = (obj: object) => {
   const output = obj as { additionalContext?: unknown; reason?: unknown };
   const context = typeof output.additionalContext === "string"
     ? output.additionalContext
     : typeof output.reason === "string" ? output.reason : "";
-  if (context && emittedUsage) recordUsage({ ...emittedUsage, contextChars: context.length });
+  if (context && emittedUsage) recordTelemetry({ ...emittedUsage, contextChars: context.length });
   process.stdout.write(JSON.stringify(obj));
 };
 export const internalContext = (text: string): string => text ? `<cairn-internal>\n${text}\n</cairn-internal>` : "";
@@ -264,7 +264,7 @@ async function main(): Promise<void> {
   try { turnSeq = readLifecycle(turnScope(sessionId, agentId)).turnSeq; } catch { /* telemetry is optional */ }
   const usageSource = `${mode || "hook"}${toolName ? `:${toolName}` : ""}`;
   emittedUsage = {
-    eventKind: "context",
+    kind: "context",
     source: usageSource,
     host: "copilot",
     sessionId,
@@ -308,7 +308,7 @@ async function main(): Promise<void> {
     const delegatedIds = claimDelegation(sessionId, stateId);
     if (delegatedIds.length) {
       const state = resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
-      beginQualityRun({
+      beginTelemetryRun({
         host: "copilot", sessionId, turnSeq: state.turnSeq, promptHash: "",
         catalogVersion: catalogVersion(), injectedChars: 0,
       });
@@ -320,7 +320,7 @@ async function main(): Promise<void> {
     if (isToolCallSession(sessionId)) {
       const state = resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
       const protocol = await promptText("subagent-protocol.md");
-      beginQualityRun({
+      beginTelemetryRun({
         host: "copilot", sessionId, turnSeq: state.turnSeq,
         promptHash: promptFingerprint(protocol), catalogVersion: catalogVersion(),
         injectedChars: internalContext(protocol).length,
@@ -331,7 +331,7 @@ async function main(): Promise<void> {
     const state = resetLifecycle(stateId);
     if (emittedUsage) emittedUsage.turnSeq = state.turnSeq;
     const wf = await workflowPrompt();
-    beginQualityRun({
+    beginTelemetryRun({
       host: "copilot", sessionId, turnSeq: state.turnSeq,
       promptHash: promptFingerprint(wf), catalogVersion: catalogVersion(),
       injectedChars: internalContext(wf).length,
@@ -415,7 +415,7 @@ async function main(): Promise<void> {
 
       return next;
     });
-    recordQualityTool({
+    recordTelemetryTool({
       host: "copilot", sessionId, turnSeq: state.turnSeq,
       eventKey: hostEventKey || `${eventId}:${toolCallId}`, toolName, args, result,
       success: toolResultSucceeded(result), durationMs,
@@ -440,7 +440,7 @@ async function main(): Promise<void> {
         pendingReviews: [],
         stopBlocked: false,
       }));
-      finishQualityRun({
+      finishTelemetryRun({
         host: "copilot", sessionId, turnSeq: readLifecycle(stateId).turnSeq,
         completed: true, workflowPassed: true, skillUsed: true, brainUsed: true,
         stopNudges: 0, status: "subagent",
@@ -456,7 +456,7 @@ async function main(): Promise<void> {
         cairnVisibilityNudged: true,
         stopBlocked: true,
       }));
-      recordQualityState({
+      recordTelemetryState({
         host: "copilot", sessionId, turnSeq: st.turnSeq,
         eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:visibility`,
         kind: "visibility_failure",
@@ -472,7 +472,7 @@ async function main(): Promise<void> {
     const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
       updateLifecycle(stateId, () => ({ ...st, stopNudges: st.stopNudges + 1, stopBlocked: true }));
-      recordQualityState({
+      recordTelemetryState({
         host: "copilot", sessionId, turnSeq: st.turnSeq,
         eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:workflow`,
         kind: "stop_blocked",
@@ -488,7 +488,7 @@ async function main(): Promise<void> {
         pendingReviews: [],
         stopBlocked: false,
       }));
-      finishQualityRun({
+      finishTelemetryRun({
         host: "copilot", sessionId, turnSeq: st.turnSeq, completed: false,
         workflowPassed: st.brainUsed && st.skillUsed, skillUsed: st.skillUsed,
         brainUsed: st.brainUsed, stopNudges: st.stopNudges, status: "deferred",
@@ -498,7 +498,7 @@ async function main(): Promise<void> {
     }
     if (!st.completionNudged) {
       updateLifecycle(stateId, () => ({ ...st, completionNudged: true, stopBlocked: true }));
-      recordQualityState({
+      recordTelemetryState({
         host: "copilot", sessionId, turnSeq: st.turnSeq,
         eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:completion`,
         kind: "stop_blocked",
@@ -507,7 +507,7 @@ async function main(): Promise<void> {
       return;
     }
     updateLifecycle(stateId, () => ({ ...st, pendingReviewIds: [], pendingReviews: [], stopBlocked: false }));
-    finishQualityRun({
+    finishTelemetryRun({
       host: "copilot", sessionId, turnSeq: st.turnSeq, completed: true,
       workflowPassed: st.brainUsed && st.skillUsed, skillUsed: st.skillUsed,
       brainUsed: st.brainUsed, stopNudges: st.stopNudges,

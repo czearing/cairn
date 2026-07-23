@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { qualityRunId } from "../src/core/quality-record";
+import { telemetryRunId } from "../src/core/telemetry";
 
 const root = join(import.meta.dir, "..");
 
@@ -35,9 +35,9 @@ test("Copilot hooks correlate returned brain nodes with later use and completion
   expect(invoke(hook, ["agent-stop"], { sessionId }, env).status).toBe(0);
 
   const db = new Database(dbPath, { readonly: true });
-  const runId = qualityRunId({ host: "copilot", sessionId, turnSeq: 1 });
-  const run = db.query("SELECT completed,workflow_passed FROM quality_runs WHERE run_id=?").get(runId);
-  const kinds = db.query("SELECT kind FROM quality_events WHERE run_id=? ORDER BY kind").all(runId);
+  const runId = telemetryRunId({ host: "copilot", sessionId, turnSeq: 1 });
+  const run = db.query("SELECT completed,workflow_passed FROM telemetry_runs WHERE run_id=?").get(runId);
+  const kinds = db.query("SELECT kind FROM telemetry_events WHERE run_id=? ORDER BY kind").all(runId);
   db.close();
   expect(run).toEqual({ completed: 1, workflow_passed: 1 });
   expect(kinds).toContainEqual({ kind: "brain_returned" });
@@ -60,8 +60,8 @@ test("Claude records quality evidence even when skills are disabled", () => {
   expect(fire({ hook_event_name: "Stop", stop_hook_active: true, transcript_path: transcriptPath }).status).toBe(0);
 
   const db = new Database(dbPath, { readonly: true });
-  const run = db.query("SELECT completed FROM quality_runs WHERE host='claude'").get();
-  const returned = db.query("SELECT COUNT(*) AS count FROM quality_events WHERE kind='brain_returned'").get();
+  const run = db.query("SELECT completed FROM telemetry_runs WHERE host='claude'").get();
+  const returned = db.query("SELECT COUNT(*) AS count FROM telemetry_events WHERE kind='brain_returned'").get();
   db.close();
   expect(run).toEqual({ completed: 1 });
   expect(returned).toEqual({ count: 1 });

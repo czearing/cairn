@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { readPromptBenchmark } from "./files";
 import { evaluatePrompt } from "./score";
-import { recordPromptEvaluation } from "../core/quality-record";
+import { recordPromptEvaluation } from "../core/telemetry";
 
 const arg = (name: string): string => {
   const value = process.argv.find((item) => item.startsWith(`--${name}=`))?.slice(name.length + 3);

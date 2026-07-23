@@ -49,8 +49,8 @@ test("MCP calls record local size and latency telemetry", async () => {
   const database = new Database(TEST_DB);
   const event = database.query(`SELECT tool_name,input_chars,output_chars,duration_ms,success,
       release_fingerprint,version,run_class
-    FROM usage_events WHERE event_kind='tool' AND tool_name='brain_delete'
-    ORDER BY id DESC LIMIT 1`).get() as {
+    FROM telemetry_events WHERE kind='tool_transport' AND tool_name='brain_delete'
+    ORDER BY ts DESC LIMIT 1`).get() as {
       tool_name: string;
       input_chars: number;
       output_chars: number;
@@ -60,7 +60,7 @@ test("MCP calls record local size and latency telemetry", async () => {
       version: string;
       run_class: string;
     };
-  const columns = database.query("PRAGMA table_info(usage_events)").all() as { name: string }[];
+  const columns = database.query("PRAGMA table_info(telemetry_events)").all() as { name: string }[];
   database.close();
   expect(event.tool_name).toBe("brain_delete");
   expect(event.input_chars).toBeGreaterThan(0);

@@ -1,20 +1,21 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
-  beginQualityRun,
-  finishQualityRun,
+  beginTelemetryRun as beginQualityRun,
+  finishTelemetryRun as finishQualityRun,
   promptFingerprint,
   recordPromptEvaluation,
-  recordQualityTool,
-} from "../src/core/quality-record";
-import { qualityDatabase } from "../src/core/quality-schema";
-import { qualitySummary } from "../src/core/quality-summary";
+  recordTelemetryTool as recordQualityTool,
+  telemetrySummary,
+} from "../src/core/telemetry";
+import { telemetryDatabase as qualityDatabase } from "../src/core/telemetry-schema";
+const qualitySummary = (days: number) => telemetrySummary(days).quality;
 
 const identity = (sessionId: string) => ({ host: "copilot" as const, sessionId, turnSeq: 1 });
 
 test("quality telemetry derives reuse and release deltas without storing content", () => {
-  qualityDatabase()?.run("DELETE FROM quality_events");
-  qualityDatabase()?.run("DELETE FROM quality_runs");
+  qualityDatabase()?.run("DELETE FROM telemetry_events");
+  qualityDatabase()?.run("DELETE FROM telemetry_runs");
   const marker = `private-quality-${crypto.randomUUID()}`;
   const baseline = identity("quality-baseline");
   const current = identity("quality-current");
@@ -94,8 +95,8 @@ test("quality telemetry derives reuse and release deltas without storing content
   expect(summary.comparisons[0]?.host).toBe("copilot");
 
   const db = new Database(process.env.CAIRN_DB_PATH!, { readonly: true });
-  const columns = db.query("PRAGMA table_info(quality_events)").all() as { name: string }[];
-  const serialized = JSON.stringify(db.query("SELECT * FROM quality_events").all());
+  const columns = db.query("PRAGMA table_info(telemetry_events)").all() as { name: string }[];
+  const serialized = JSON.stringify(db.query("SELECT * FROM telemetry_events").all());
   db.close();
   expect(columns.map((column) => column.name)).not.toContain("content");
   expect(serialized).not.toContain(marker);
@@ -104,7 +105,7 @@ test("quality telemetry derives reuse and release deltas without storing content
 });
 
 test("quality telemetry records content-free prompt evaluation provenance", () => {
-  qualityDatabase()?.run("DELETE FROM prompt_evaluations");
+  qualityDatabase()?.run("DELETE FROM telemetry_evaluations");
   recordPromptEvaluation({
     accepted: true,
     baselinePromptHash: "baseline-hash",
@@ -135,8 +136,8 @@ test("quality telemetry records content-free prompt evaluation provenance", () =
 });
 
 test("quality summaries exclude benchmark runs", () => {
-  qualityDatabase()?.run("DELETE FROM quality_events");
-  qualityDatabase()?.run("DELETE FROM quality_runs");
+  qualityDatabase()?.run("DELETE FROM telemetry_events");
+  qualityDatabase()?.run("DELETE FROM telemetry_runs");
   const previous = process.env.CAIRN_PROMPT_BENCHMARK_SESSION;
   process.env.CAIRN_PROMPT_BENCHMARK_SESSION = "benchmark";
   try {

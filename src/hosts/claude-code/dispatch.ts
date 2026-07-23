@@ -60,10 +60,10 @@ async function main(): Promise<void> {
   const qualityEventKey = hostEventKey || `${payloadSession}:${String((payload as { hook_event_name?: unknown }).hook_event_name ?? "")}`;
   const observedContext = async (source: string, text: string): Promise<string> => {
     try {
-      const { recordUsage } = await import("../../core/usage");
+      const { recordTelemetry } = await import("../../core/telemetry");
       const { lifecycleScope, readLifecycle } = await import("../../skill/lifecycle");
-      recordUsage({
-        eventKind: "context",
+      recordTelemetry({
+        kind: "context",
         source,
         host: "claude",
         sessionId: payloadSession,
@@ -174,7 +174,7 @@ async function main(): Promise<void> {
   }
 
   try {
-    const quality = await import("../../core/quality-record");
+    const telemetry = await import("../../core/telemetry");
     const turngate = await import("../../skill/turngate");
     if (event.kind === "user_message") {
       turngate.resetSkillTurn(session);
@@ -183,18 +183,18 @@ async function main(): Promise<void> {
         catalogVersion = (await import("../../skill/catalog")).skillCatalogSnapshot().version;
       } catch { /* a fresh read-only hook database has no skill table yet */ }
       const state = turngate.skillTurnState(session);
-      quality.beginQualityRun({
+      telemetry.beginTelemetryRun({
         host: "claude", sessionId: session, turnSeq: state.turnSeq,
-        promptHash: quality.promptFingerprint(content || ""), catalogVersion,
+        promptHash: telemetry.promptFingerprint(content || ""), catalogVersion,
         injectedChars: content?.length || 0,
         model: String((payload as { model?: unknown }).model ?? ""),
       });
     } else if (event.kind === "tool_completed") {
       const state = turngate.skillTurnState(session);
-      quality.recordQualityTool({
+      telemetry.recordTelemetryTool({
         host: "claude", sessionId: session, turnSeq: state.turnSeq,
         eventKey: qualityEventKey, toolName: event.tool, args: event.input,
-        result: event.output, success: quality.qualityResultSucceeded(event.output),
+        result: event.output, success: telemetry.telemetryResultSucceeded(event.output),
         durationMs: Number((payload as { duration_ms?: unknown }).duration_ms ?? 0),
       });
     }
@@ -246,16 +246,16 @@ async function main(): Promise<void> {
 
   if (event.kind === "turn_finished") {
     try {
-      const quality = await import("../../core/quality-record");
+      const telemetry = await import("../../core/telemetry");
       const turngate = await import("../../skill/turngate");
       const state = turngate.skillTurnState(session);
       if (out) {
-        quality.recordQualityState({
+        telemetry.recordTelemetryState({
           host: "claude", sessionId: session, turnSeq: state.turnSeq,
           eventKey: qualityEventKey, kind: visibilityReminder ? "visibility_failure" : "stop_blocked",
         });
       } else {
-        quality.finishQualityRun({
+        telemetry.finishTelemetryRun({
           host: "claude", sessionId: session, turnSeq: state.turnSeq,
           completed: true, workflowPassed: Boolean(event.usedBrain && state.selected),
           skillUsed: state.selected, brainUsed: event.usedBrain, stopNudges: 0,

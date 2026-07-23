@@ -10,7 +10,7 @@ import {
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { config } from "../core/config";
-import { estimatedTokens } from "../core/usage";
+import { estimatedTokens } from "../core/telemetry";
 import { formatSkillCatalog } from "../skill/catalog";
 import { runAssertions } from "./assertions";
 import {

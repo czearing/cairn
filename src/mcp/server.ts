@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { config } from "../core/config";
-import { jsonChars, recordUsage } from "../core/usage";
+import { jsonChars, recordTelemetry } from "../core/telemetry";
 import {
   promptFingerprint,
   releaseFingerprint,
@@ -63,8 +63,8 @@ const measured = async <T>(
     const result = await run();
     const delivered = appendBenchmarkReminder(result, benchmarkReminder(toolName, input));
     const durationMs = performance.now() - started;
-    recordUsage({
-      eventKind: "tool",
+    recordTelemetry({
+      kind: "tool_transport",
       source: "mcp",
       toolName,
       inputChars: jsonChars(input),
@@ -82,8 +82,8 @@ const measured = async <T>(
     return delivered;
   } catch (error) {
     const durationMs = performance.now() - started;
-    recordUsage({
-      eventKind: "tool",
+    recordTelemetry({
+      kind: "tool_transport",
       source: "mcp",
       toolName,
       inputChars: jsonChars(input),

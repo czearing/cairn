@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { recordPromptEvaluation } from "../core/quality-record";
+import { recordPromptEvaluation } from "../core/telemetry";
 import { runPromptComparison } from "./benchmark-runner";
 
 const arg = (name: string, required = true): string => {

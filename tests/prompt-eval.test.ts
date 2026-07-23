@@ -133,11 +133,11 @@ test("extracts quality from structured isolated events without reading prose", (
     event_key TEXT PRIMARY KEY,host TEXT,hook_type TEXT,session_id TEXT,turn_id TEXT,
     agent_id TEXT,tool_call_id TEXT,tool_name TEXT,event_timestamp TEXT,raw_json TEXT,recorded_ts INTEGER
   )`);
-  db.run(`CREATE TABLE quality_runs(
+  db.run(`CREATE TABLE telemetry_runs(
     run_id TEXT PRIMARY KEY,host TEXT,session_hash TEXT,turn_seq INTEGER,injected_tokens INTEGER,
     completed INTEGER,workflow_passed INTEGER,tool_failures INTEGER,stop_nudges INTEGER
   )`);
-  db.run("CREATE TABLE quality_events(run_id TEXT,kind TEXT)");
+  db.run("CREATE TABLE telemetry_events(run_id TEXT,kind TEXT)");
   const add = (index: number, tool: string, args: object, result: object) => {
     const raw = JSON.stringify({ sessionId, toolName: tool, toolArgs: args, toolResult: result });
     db.query("INSERT INTO host_events VALUES (?,?,?,?,?,?,?,?,?,?,?)").run(
@@ -152,7 +152,7 @@ test("extracts quality from structured isolated events without reading prose", (
   add(5, "cairn-brain_mutate", { id: "child", answer: "a", citation: "https://example.com" }, { id: "child" });
   add(6, "cairn-brain_mutate", { id: "root", answer: "a", citation: "https://example.com" }, { id: "root" });
   const sessionHash = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
-  db.query("INSERT INTO quality_runs VALUES (?,?,?,?,?,?,?,?,?)")
+  db.query("INSERT INTO telemetry_runs VALUES (?,?,?,?,?,?,?,?,?)")
     .run("run", "copilot", sessionHash, 1, 500, 1, 1, 0, 0);
   db.close();
 

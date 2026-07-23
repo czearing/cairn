@@ -1,17 +1,15 @@
-import { usageSummary } from "./core/usage";
-import { qualitySummary } from "./core/quality-summary";
+import { telemetrySummary } from "./core/telemetry";
 import { c, line } from "./term";
 
-export function printUsageReport(days: number, json = false): void {
-  const report = usageSummary(days);
-  const quality = qualitySummary(days);
+export function printTelemetryReport(days: number, json = false): void {
+  const report = telemetrySummary(days);
+  const quality = report.quality;
   if (json) {
     console.log(JSON.stringify({ ...report, quality }, null, 2));
     return;
   }
 
   const tokens = (value: number) => Math.round(value).toLocaleString("en-US");
-  const lagMinutes = Math.round(report.impact.toolTelemetryLagMs / 60_000);
   line(c.bold(`Cairn context impact · ${days} day${days === 1 ? "" : "s"}`));
   line(`release ${report.impact.version} ${report.impact.releaseFingerprint} · ${report.impact.runClass}`);
   line(`fixed/message     ${tokens(report.impact.currentPromptTokens)} tokens`);
@@ -23,11 +21,6 @@ export function printUsageReport(days: number, json = false): void {
   );
   line(`${report.impact.prompts} prompts  ${report.totals.events} events  ` +
     `${report.impact.sessions} sessions  ${report.totals.failures} failures`);
-  if (report.impact.toolTelemetryMissing) {
-    line(c.yellow("coverage: tool telemetry missing for this release"));
-  } else if (lagMinutes > 0) {
-    line(c.yellow(`coverage: lower bound · tool telemetry trails context by ${lagMinutes}m`));
-  }
   line();
   line(c.dim("   TOTAL     AVG       RANGE  CALLS  SURFACE"));
   for (const group of report.groups) {

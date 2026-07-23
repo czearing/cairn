@@ -111,11 +111,12 @@ switch (cmd) {
     await runMonitor({ once: process.argv.includes("--once") });
     break;
   }
+  case "telemetry":
   case "usage": {
     const daysArg = process.argv.find((arg) => arg.startsWith("--days="))?.slice(7);
     const days = Math.max(1, Number(daysArg || "7"));
-    const { printUsageReport } = await import("./usage-report");
-    printUsageReport(days, process.argv.includes("--json"));
+    const { printTelemetryReport } = await import("./telemetry-report");
+    printTelemetryReport(days, process.argv.includes("--json"));
     break;
   }
   case "prompt-eval": {
@@ -150,7 +151,7 @@ Usage:
   cairn pref        Standing style/output preferences injected into every prompt (e.g. "no em dashes")
   cairn ui          Serve the read-only viewer (deep-linkable at /node/<id>)
   cairn skills      Live monitor of the background skill learner (scores + master rewrites)
-  cairn usage       Local context/tool usage report (--days=7, --json)
+  cairn telemetry   Unified local cost/quality report (--days=7, --json; usage alias)
   cairn prompt-eval Compare isolated baseline/candidate evidence without touching live agents
   cairn prompt-evidence Extract structured evidence from an explicit non-live benchmark DB
   cairn prompt-test Run isolated baseline/candidate agents, then evaluate exact evidence

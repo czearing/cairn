@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { writeFileSync } from "node:fs";
-import { estimatedTokens } from "../core/usage";
+import { estimatedTokens } from "../core/telemetry";
 
 export interface BenchmarkRunStart {
   sessionId: string;

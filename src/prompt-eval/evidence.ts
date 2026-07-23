@@ -85,11 +85,11 @@ export function capturePromptEvidence(input: {
        ORDER BY recorded_ts,event_key`).all(input.host, input.sessionId) as HostRow[];
       events = rows.map((row) => payload(input.host, row.raw_json));
       run = db.query(`SELECT run_id,injected_tokens,completed,workflow_passed,
-       tool_failures,stop_nudges FROM quality_runs
+       tool_failures,stop_nudges FROM telemetry_runs
        WHERE host=? AND session_hash=? ORDER BY turn_seq DESC LIMIT 1`)
        .get(input.host, hashSession(input.sessionId)) as Record<string, number | string> | null;
       if (run) {
-       const unexpected = db.query(`SELECT COUNT(*) AS count FROM quality_events
+       const unexpected = db.query(`SELECT COUNT(*) AS count FROM telemetry_events
          WHERE run_id=? AND kind IN ('visibility_failure','deferred')`)
          .get(String(run.run_id)) as { count: number };
        unexpectedCount = unexpected.count;

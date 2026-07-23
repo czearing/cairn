@@ -12,7 +12,7 @@ test("usage telemetry is off without an explicit local opt-in", () => {
   const configPath = join(tmpdir(), `cairn-usage-opt-out-${randomUUID()}.json`);
   const result = spawnSync(process.execPath, [
     "-e",
-    `import { recordUsage } from "./src/core/usage"; console.log(recordUsage({eventKind:"tool",source:"test"}));`,
+    `import { recordTelemetry } from "./src/core/telemetry"; console.log(recordTelemetry({kind:"tool_transport",source:"test"}));`,
   ], {
     cwd: join(import.meta.dir, ".."),
     env: {
@@ -28,10 +28,11 @@ test("usage telemetry is off without an explicit local opt-in", () => {
 });
 
 test("usage events store measurements without user content", async () => {
-  const { recordUsage, usageSummary } = await import("../src/core/usage");
+  const { recordTelemetry: recordUsage, telemetrySummary: usageSummary } =
+    await import("../src/core/telemetry");
   const marker = `private-${randomUUID()}`;
   expect(recordUsage({
-    eventKind: "context",
+    kind: "context",
     source: "user-prompt",
     host: "copilot",
     sessionId: marker,
@@ -43,7 +44,7 @@ test("usage events store measurements without user content", async () => {
     runClass: "human",
   })).toBe(true);
   expect(recordUsage({
-    eventKind: "tool",
+    kind: "tool_transport",
     source: "mcp",
     toolName: "brain_search",
     inputChars: 80,
@@ -58,8 +59,8 @@ test("usage events store measurements without user content", async () => {
   })).toBe(true);
 
   const db = new Database(process.env.CAIRN_DB_PATH!);
-  const schema = db.query("PRAGMA table_info(usage_events)").all() as { name: string }[];
-  const stored = db.query("SELECT * FROM usage_events WHERE source = 'user-prompt' ORDER BY id DESC LIMIT 1")
+  const schema = db.query("PRAGMA table_info(telemetry_events)").all() as { name: string }[];
+  const stored = db.query("SELECT * FROM telemetry_events WHERE source='user-prompt' ORDER BY ts DESC LIMIT 1")
     .get() as Record<string, unknown>;
   db.close();
 
@@ -90,20 +91,21 @@ test("usage events store measurements without user content", async () => {
 });
 
 test("usage summaries exclude benchmark traffic and older releases", async () => {
-  const { recordUsage, usageSummary } = await import("../src/core/usage");
+  const { recordTelemetry: recordUsage, telemetrySummary: usageSummary } =
+    await import("../src/core/telemetry");
   const key = randomUUID();
   recordUsage({
-    eventKind: "context", source: "user-prompt", contextChars: 400,
+    kind: "context", source: "user-prompt", contextChars: 400,
     eventKey: `${key}-old`, releaseFingerprint: "old", version: "1", runClass: "human",
   });
 
   recordUsage({
-    eventKind: "context", source: "user-prompt", contextChars: 800,
+    kind: "context", source: "user-prompt", contextChars: 800,
     eventKey: `${key}-current`, releaseFingerprint: "current", version: "2", runClass: "human",
     ts: Date.now() + 1,
   });
   recordUsage({
-    eventKind: "context", source: "user-prompt", contextChars: 4000,
+    kind: "context", source: "user-prompt", contextChars: 4000,
     eventKey: `${key}-benchmark`, releaseFingerprint: "current", version: "2",
     runClass: "benchmark", ts: Date.now() + 2,
   });
@@ -113,18 +115,16 @@ test("usage summaries exclude benchmark traffic and older releases", async () =>
     version: "2",
     runClass: "human",
     currentPromptTokens: 200,
-    toolTelemetryMissing: true,
   });
   expect(summary.totals.estimatedTokens).toBe(200);
 });
 
 test("quality run identity backfills usage release metadata", async () => {
-  const { recordUsage } = await import("../src/core/usage");
-  const { beginQualityRun, promptFingerprint, releaseFingerprint } =
-    await import("../src/core/quality-record");
+  const { recordTelemetry: recordUsage, beginTelemetryRun: beginQualityRun,
+    promptFingerprint, releaseFingerprint, telemetryRunId } = await import("../src/core/telemetry");
   const sessionId = `release-backfill-${randomUUID()}`;
   recordUsage({
-    eventKind: "context",
+    kind: "context",
     source: "user-prompt",
     host: "copilot",
     sessionId,
@@ -142,7 +142,8 @@ test("quality run identity backfills usage release metadata", async () => {
   });
   const db = new Database(process.env.CAIRN_DB_PATH!, { readonly: true });
   const row = db.query(`SELECT release_fingerprint,version,run_class
-    FROM usage_events WHERE source='user-prompt' ORDER BY id DESC LIMIT 1`).get();
+    FROM telemetry_events WHERE run_id=? AND source='user-prompt' LIMIT 1`)
+    .get(telemetryRunId({ host: "copilot", sessionId, turnSeq: 1 }));
   db.close();
   expect(row).toEqual({
     release_fingerprint: releaseFingerprint(
@@ -155,12 +156,12 @@ test("quality run identity backfills usage release metadata", async () => {
 });
 
 test("usage event keys make hook telemetry idempotent", async () => {
-  const { recordUsage } = await import("../src/core/usage");
+  const { recordTelemetry: recordUsage } = await import("../src/core/telemetry");
   const key = `duplicate-${randomUUID()}`;
-  expect(recordUsage({ eventKind: "context", source: "test", contextChars: 100, eventKey: key })).toBe(true);
-  expect(recordUsage({ eventKind: "context", source: "test", contextChars: 999, eventKey: key })).toBe(true);
+  expect(recordUsage({ kind: "context", source: "test", contextChars: 100, eventKey: key })).toBe(true);
+  expect(recordUsage({ kind: "context", source: "test", contextChars: 999, eventKey: key })).toBe(true);
   const db = new Database(process.env.CAIRN_DB_PATH!);
-  const rows = db.query("SELECT context_chars FROM usage_events WHERE source = 'test' ORDER BY id DESC LIMIT 2")
+  const rows = db.query("SELECT context_chars FROM telemetry_events WHERE source='test' ORDER BY ts DESC LIMIT 2")
     .all() as { context_chars: number }[];
   db.close();
   expect(rows).toEqual([{ context_chars: 100 }]);
@@ -184,13 +185,13 @@ test("Copilot user-prompt records only injected context metrics", () => {
   }).status).toBe(0);
 
   const db = new Database(dbPath);
-  const event = db.query("SELECT source,context_chars,session_hash FROM usage_events WHERE source='user-prompt'").get() as {
+  const event = db.query("SELECT source,context_chars,session_hash FROM telemetry_events WHERE source='user-prompt'").get() as {
     source: string;
     context_chars: number;
     session_hash: string;
   };
-  const serialized = JSON.stringify(db.query("SELECT * FROM usage_events").all());
-  const sessionStarts = db.query("SELECT COUNT(*) AS count FROM usage_events WHERE source='session-start'").get();
+  const serialized = JSON.stringify(db.query("SELECT * FROM telemetry_events").all());
+  const sessionStarts = db.query("SELECT COUNT(*) AS count FROM telemetry_events WHERE source='session-start'").get();
   db.close();
   expect(event.source).toBe("user-prompt");
   expect(event.context_chars).toBeGreaterThan(1000);
@@ -201,7 +202,7 @@ test("Copilot user-prompt records only injected context metrics", () => {
 });
 
 test("usage CLI emits machine-readable aggregates", () => {
-  const result = spawnSync(process.execPath, ["src/cli.ts", "usage", "--days=1", "--json"], {
+  const result = spawnSync(process.execPath, ["src/cli.ts", "telemetry", "--days=1", "--json"], {
     cwd: join(import.meta.dir, ".."),
     env: { ...process.env },
   });
@@ -219,7 +220,7 @@ test("usage CLI emits machine-readable aggregates", () => {
 });
 
 test("usage CLI prints decision metrics directly", () => {
-  const result = spawnSync(process.execPath, ["src/cli.ts", "usage", "--days=1"], {
+  const result = spawnSync(process.execPath, ["src/cli.ts", "telemetry", "--days=1"], {
     cwd: join(import.meta.dir, ".."),
     env: { ...process.env },
   });

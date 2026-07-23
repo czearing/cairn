@@ -46,9 +46,9 @@ test("brain_create returns a compact acknowledgement while preserving the though
   const results = parse(await call("brain_search", { query: "writing a haiku poem" }));
   expect(results.find((result: { id: string }) => result.id === n.id)).toMatchObject({
     text: "How do I write a haiku poem?",
-    answer: "",
-    citation: "",
   });
+  expect(results.find((result: { id: string }) => result.id === n.id)).not.toHaveProperty("answer");
+  expect(results.find((result: { id: string }) => result.id === n.id)).not.toHaveProperty("citation");
 });
 
 test("MCP calls record local size and latency telemetry", async () => {
@@ -183,22 +183,19 @@ test("brain_search returns a lean shape: keeps id/text/answer/score, drops edges
   expect(hit).not.toHaveProperty("url"); // derivable from id; only on create/mutate returns
 });
 
-test("brain_search attaches compact prior/next context from the reasoning graph, not raw edges", async () => {
+test("brain_search attaches only neighbor context not already present in the result set", async () => {
   const root = parse(await call("brain_create", { text: "How do I brew espresso?" }));
   const mid = parse(await call("brain_create", { text: "What grind size suits espresso?", edges: [root.id] }));
-  await call("brain_create", { text: "What pressure suits espresso?", edges: [mid.id] }); // a child of mid
+  const child = parse(await call("brain_create", { text: "What pressure suits espresso?", edges: [mid.id] }));
   await call("brain_mutate", { id: mid.id, answer: "Fine, near table-salt grind.", citation: "https://example.com/grind" });
 
   const results = parse(await call("brain_search", { query: "espresso grind size" })) as Record<string, unknown>[];
   const hit = results.find((r) => r.id === mid.id)!;
   expect(hit).toBeTruthy();
-  // The agent recalls the fact AND where it sits in the reasoning: the question above and below it.
-  expect(hit.prior).toBe("How do I brew espresso?"); // parent, the question this came from
-  expect(hit.next).toBe("What pressure suits espresso?"); // child, where the reasoning went
+  const returnedIds = new Set(results.map((result) => result.id));
+  expect(hit.prior).toBe(returnedIds.has(root.id) ? undefined : "How do I brew espresso?");
+  expect(hit.next).toBe(returnedIds.has(child.id) ? undefined : "What pressure suits espresso?");
   expect(hit).not.toHaveProperty("edges"); // still no raw neighbor UUIDs
-  // No bloat: context is two short question strings, not the neighbors' full bodies.
-  expect((hit.prior as string).length).toBeLessThan(160);
-  expect((hit.next as string).length).toBeLessThan(160);
 });
 
 test("brain_delete removes a thought", async () => {

@@ -11,9 +11,8 @@ import {
   telemetryRunClass,
 } from "../core/release";
 import { formatSkillCatalog, skillCatalogSnapshot } from "../skill/catalog";
-import { neighborContext } from "./context";
 import type { Neuron } from "../core/neurons.types";
-import type { ScoredResult } from "../core/search.types";
+import { searchPayload } from "./search-payload";
 import {
   recordBenchmarkTool,
   registerBenchmarkProcess,
@@ -107,14 +106,6 @@ const skillSelectionAck = (result: {
   catalogVersion: result.catalogVersion,
 });
 
-// Lean agent-facing search hit. Keep the handle (`id`), the knowledge (`text`/`answer`/`citation`) and
-// the relevance (`score`); DROP `edges` and `url`. `edges` is server-only graph data the agent cannot
-// act on (no get-by-id tool), and the things that DO use it (the UI graph, optional subtree expansion)
-// read it from core search()/the DB, not from this payload; `url` is derivable from `id`. Search returns
-// many nodes, so trimming these two cuts a real slice off dense, hub-heavy result sets. The graph stays
-// fully intact in the brain; it just no longer rides along in every result.
-const leanHit = ({ id, text, answer, citation, score }: ScoredResult) => ({ id, text, answer, citation, score });
-
 // Optional hard cap on the agent-facing result set, OFF by default (0): the breadth is controlled by
 // the adaptive relevance floor in core search() (CAIRN_RELATIVE_FLOOR), a relevance bar rather than a
 // count cap. Set CAIRN_SEARCH_LIMIT > 0 to also impose a top-N count cap as a backstop.
@@ -134,7 +125,7 @@ server.tool(
     // a compact, useful use of edges (where a recalled thought sits in the reasoning flow) instead of
     // raw neighbor UUIDs the agent can't act on. One batched lookup for every referenced neighbor.
     const refs = refsByIds(capped.flatMap((h) => [h.id, ...h.edges]));
-    const thoughts = capped.map((h) => ({ ...leanHit(h), ...neighborContext(h, refs) }));
+    const thoughts = searchPayload(capped, refs);
     // The result set is kept tight by the adaptive relevance floor (CAIRN_RELATIVE_FLOOR, default 0.85 of the
     // top score) rather than a character cap — only genuinely-relevant thoughts qualify, so the payload stays
     // small without ever truncating a node's answer. Tighten the floor (or set CAIRN_SEARCH_LIMIT) to trim more.

@@ -17,10 +17,10 @@ export function firstLine(text: string, max = 140): string {
  * went). Direction comes from rowid, since a parent is always created before its child. Bounded to ONE
  * each: a hub node with many edges still adds only two short strings, never its whole neighbor list.
  * Returns {} when the hit or its neighbors are unresolvable. */
-export function neighborContext(
+export function neighborRefs(
   hit: { id: string; edges: string[] },
   refs: Map<string, NodeRef>,
-): { prior?: string; next?: string } {
+): { prior?: NodeRef; next?: NodeRef } {
   const self = refs.get(hit.id);
   if (!self) return {};
   let prior: NodeRef | undefined; // nearest neighbor created before the hit
@@ -34,6 +34,14 @@ export function neighborContext(
       if (!next || r.rowid < next.rowid) next = r;
     }
   }
+  return { prior, next };
+}
+
+export function neighborContext(
+  hit: { id: string; edges: string[] },
+  refs: Map<string, NodeRef>,
+): { prior?: string; next?: string } {
+  const { prior, next } = neighborRefs(hit, refs);
   const out: { prior?: string; next?: string } = {};
   if (prior) out.prior = firstLine(prior.text);
   if (next) out.next = firstLine(next.text);

@@ -1,8 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { readFileSync } from "node:fs";
 import { config } from "../core/config";
 import { jsonChars, recordUsage } from "../core/usage";
+import {
+  promptFingerprint,
+  releaseFingerprint,
+  releaseVersion,
+  telemetryRunClass,
+} from "../core/release";
+import { formatSkillCatalog, skillCatalogSnapshot } from "../skill/catalog";
 import { neighborContext } from "./context";
 import type { Neuron } from "../core/neurons.types";
 import type { ScoredResult } from "../core/search.types";
@@ -25,6 +33,24 @@ import {
 
 const server = new McpServer({ name: "cairn", version: "1.0.0" });
 registerBenchmarkProcess();
+const releaseIdentity = (() => {
+  try {
+    const prompt = readFileSync(new URL("../../prompts/user-message.md", import.meta.url), "utf8").trim();
+    const catalog = skillCatalogSnapshot();
+    const fullPrompt = `${prompt}\n\n${formatSkillCatalog()}`;
+    return {
+      releaseFingerprint: releaseFingerprint(promptFingerprint(fullPrompt), catalog.version),
+      version: releaseVersion,
+      runClass: telemetryRunClass(),
+    };
+  } catch {
+    return {
+      releaseFingerprint: process.env.CAIRN_RELEASE || releaseVersion,
+      version: releaseVersion,
+      runClass: telemetryRunClass(),
+    };
+  }
+})();
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
 const measured = async <T>(
@@ -45,6 +71,7 @@ const measured = async <T>(
       outputChars: jsonChars(delivered),
       durationMs,
       success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
+      ...releaseIdentity,
     });
     recordBenchmarkTool({
       toolName,
@@ -62,6 +89,7 @@ const measured = async <T>(
       inputChars: jsonChars(input),
       durationMs,
       success: false,
+      ...releaseIdentity,
     });
     recordBenchmarkTool({ toolName, args: input, result: null, success: false });
     throw error;

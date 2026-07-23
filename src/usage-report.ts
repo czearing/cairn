@@ -13,6 +13,7 @@ export function printUsageReport(days: number, json = false): void {
   const tokens = (value: number) => Math.round(value).toLocaleString("en-US");
   const lagMinutes = Math.round(report.impact.toolTelemetryLagMs / 60_000);
   line(c.bold(`Cairn context impact · ${days} day${days === 1 ? "" : "s"}`));
+  line(`release ${report.impact.version} ${report.impact.releaseFingerprint} · ${report.impact.runClass}`);
   line(`fixed/message     ${tokens(report.impact.currentPromptTokens)} tokens`);
   line(`measured/message  ${tokens(report.impact.measuredTokensPerPrompt)} tokens`);
   line(
@@ -22,7 +23,9 @@ export function printUsageReport(days: number, json = false): void {
   );
   line(`${report.impact.prompts} prompts  ${report.totals.events} events  ` +
     `${report.impact.sessions} sessions  ${report.totals.failures} failures`);
-  if (lagMinutes > 0) {
+  if (report.impact.toolTelemetryMissing) {
+    line(c.yellow("coverage: tool telemetry missing for this release"));
+  } else if (lagMinutes > 0) {
     line(c.yellow(`coverage: lower bound · tool telemetry trails context by ${lagMinutes}m`));
   }
   line();

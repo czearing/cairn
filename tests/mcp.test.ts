@@ -46,7 +46,8 @@ test("brain_create returns a neuron with an id and a viewer url", async () => {
 test("MCP calls record local size and latency telemetry", async () => {
   await call("brain_delete", { id: `missing-${randomUUID()}` });
   const database = new Database(TEST_DB);
-  const event = database.query(`SELECT tool_name,input_chars,output_chars,duration_ms,success
+  const event = database.query(`SELECT tool_name,input_chars,output_chars,duration_ms,success,
+      release_fingerprint,version,run_class
     FROM usage_events WHERE event_kind='tool' AND tool_name='brain_delete'
     ORDER BY id DESC LIMIT 1`).get() as {
       tool_name: string;
@@ -54,6 +55,9 @@ test("MCP calls record local size and latency telemetry", async () => {
       output_chars: number;
       duration_ms: number;
       success: number;
+      release_fingerprint: string;
+      version: string;
+      run_class: string;
     };
   const columns = database.query("PRAGMA table_info(usage_events)").all() as { name: string }[];
   database.close();
@@ -62,6 +66,9 @@ test("MCP calls record local size and latency telemetry", async () => {
   expect(event.output_chars).toBeGreaterThan(0);
   expect(event.duration_ms).toBeGreaterThanOrEqual(0);
   expect(event.success).toBe(1);
+  expect(event.release_fingerprint).toHaveLength(24);
+  expect(event.version).toBe("0.1.0");
+  expect(event.run_class).toBe("human");
   expect(columns.map((column) => column.name)).not.toContain("content");
 });
 

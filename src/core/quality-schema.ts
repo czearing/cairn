@@ -17,6 +17,7 @@ export function qualityDatabase() {
     model TEXT NOT NULL DEFAULT '',
     prompt_hash TEXT NOT NULL DEFAULT '',
     catalog_version TEXT NOT NULL DEFAULT '',
+    run_class TEXT NOT NULL DEFAULT 'human',
     started_ts INTEGER NOT NULL,
     ended_ts INTEGER NOT NULL DEFAULT 0,
     injected_tokens INTEGER NOT NULL DEFAULT 0,
@@ -29,6 +30,13 @@ export function qualityDatabase() {
     tool_failures INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active'
   )`);
+  const runColumns = new Set(
+    (db.query("PRAGMA table_info(quality_runs)").all() as { name: string }[])
+      .map((column) => column.name),
+  );
+  if (!runColumns.has("run_class")) {
+    db.run("ALTER TABLE quality_runs ADD COLUMN run_class TEXT NOT NULL DEFAULT 'human'");
+  }
   db.run(`CREATE TABLE IF NOT EXISTS quality_events (
     event_key TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
@@ -91,11 +99,15 @@ export function qualityDatabase() {
     db.run("ALTER TABLE prompt_evaluations_next RENAME TO prompt_evaluations");
   }
   db.run("CREATE INDEX IF NOT EXISTS quality_runs_time ON quality_runs(started_ts,host,release_fingerprint)");
+  db.run("CREATE INDEX IF NOT EXISTS quality_runs_class ON quality_runs(run_class,started_ts)");
   db.run("CREATE INDEX IF NOT EXISTS quality_runs_session ON quality_runs(session_hash,turn_seq)");
   db.run("CREATE INDEX IF NOT EXISTS quality_events_run ON quality_events(run_id,ts,event_key)");
   db.run("CREATE INDEX IF NOT EXISTS quality_events_entity ON quality_events(entity_type,entity_hash,session_hash)");
   db.run("CREATE INDEX IF NOT EXISTS quality_events_kind ON quality_events(kind,ts)");
   db.run("CREATE INDEX IF NOT EXISTS prompt_evaluations_candidate ON prompt_evaluations(candidate_prompt_hash,created_ts)");
+  db.run(`UPDATE quality_runs SET run_class='benchmark' WHERE run_id IN (
+    SELECT DISTINCT run_id FROM quality_events WHERE tool_name LIKE '%benchmark_submit'
+  )`);
   const cutoff = Date.now() - Math.max(1, Number(process.env.CAIRN_USAGE_RETENTION_DAYS || "30")) * 86_400_000;
   db.query("DELETE FROM quality_events WHERE ts < ?").run(cutoff);
   db.query("DELETE FROM quality_runs WHERE started_ts < ?").run(cutoff);

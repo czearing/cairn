@@ -73,6 +73,7 @@ function releaseMetrics(
       SELECT SUM(input_tokens+output_tokens) FROM quality_events e WHERE e.run_id=r.run_id
     ),0)),1) AS tokensPerRun
     FROM quality_runs r WHERE started_ts>=? AND release_fingerprint=? AND host=?
+      AND run_class='human'
       AND model=? AND ended_ts>0`)
     .get(sinceTs, release, host, model) as Omit<QualityMetrics, "release"> | null;
   return row?.runs ? { release, ...row } : null;
@@ -95,22 +96,24 @@ export function qualitySummary(days = 7): QualitySummary {
     COALESCE(SUM(completed),0) AS completed,
     COALESCE(SUM(workflow_passed),0) AS workflow,
     COALESCE(SUM(tool_failures),0) AS failures
-    FROM quality_runs WHERE started_ts>=?`).get(sinceTs) as {
+    FROM quality_runs WHERE started_ts>=? AND run_class='human'`).get(sinceTs) as {
       runs: number; active: number; closed: number; completed: number; workflow: number; failures: number;
     };
   const brain = db.query(`WITH returned AS (
       SELECT DISTINCT e.run_id,e.entity_hash FROM quality_events e
       JOIN quality_runs r USING(run_id)
       WHERE e.ts>=? AND r.ended_ts>0 AND e.kind='brain_returned' AND e.entity_hash!=''
+        AND r.run_class='human'
     ), used AS (
       SELECT DISTINCT e.run_id,e.entity_hash FROM quality_events e
       JOIN quality_runs r USING(run_id)
-      WHERE e.ts>=? AND r.ended_ts>0
+      WHERE e.ts>=? AND r.ended_ts>0 AND r.run_class='human'
         AND e.kind IN ('brain_referenced','brain_mutated') AND e.entity_hash!=''
     ), observed AS (
       SELECT e.entity_hash,COUNT(DISTINCT e.session_hash) AS sessions FROM quality_events e
       JOIN quality_runs r USING(run_id)
-      WHERE e.ts>=? AND r.ended_ts>0 AND e.entity_type='brain' AND e.entity_hash!=''
+      WHERE e.ts>=? AND r.ended_ts>0 AND r.run_class='human'
+        AND e.entity_type='brain' AND e.entity_hash!=''
       GROUP BY e.entity_hash
     )
     SELECT (SELECT COUNT(*) FROM returned) AS returnedNodes,
@@ -124,7 +127,8 @@ export function qualitySummary(days = 7): QualitySummary {
     COUNT(DISTINCT CASE WHEN r.ended_ts>0 AND e.kind='skill_selected' THEN e.entity_hash END) AS selectedSkills,
     COUNT(DISTINCT CASE WHEN r.ended_ts>0 AND e.kind='skill_edited' THEN e.entity_hash END) AS editedSkills,
     COALESCE(SUM(CASE WHEN e.kind='visibility_failure' THEN 1 ELSE 0 END),0) AS visibilityFailures
-    FROM quality_events e JOIN quality_runs r USING(run_id) WHERE e.ts>=?`).get(sinceTs) as {
+    FROM quality_events e JOIN quality_runs r USING(run_id)
+    WHERE e.ts>=? AND r.run_class='human'`).get(sinceTs) as {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
     };
   const promptEvaluationCounts = db.query(`SELECT COUNT(*) AS total,
@@ -145,11 +149,12 @@ export function qualitySummary(days = 7): QualitySummary {
       comparedRuns: number;
     } | null;
   const dimensions = db.query(`SELECT host,model,MAX(started_ts) AS latest
-    FROM quality_runs WHERE started_ts>=? AND ended_ts>0
+    FROM quality_runs WHERE started_ts>=? AND ended_ts>0 AND run_class='human'
     GROUP BY host,model ORDER BY latest DESC`).all(sinceTs) as { host: string; model: string }[];
   const comparisons = dimensions.flatMap(({ host, model }) => {
     const releases = db.query(`SELECT release_fingerprint AS release,MAX(started_ts) AS latest
-      FROM quality_runs WHERE started_ts>=? AND ended_ts>0 AND host=? AND model=?
+      FROM quality_runs WHERE started_ts>=? AND ended_ts>0 AND run_class='human'
+        AND host=? AND model=?
       GROUP BY release_fingerprint ORDER BY latest DESC LIMIT 2`)
       .all(sinceTs, host, model) as { release: string }[];
     const current = releaseMetrics(sinceTs, releases[0]?.release || "", host, model);

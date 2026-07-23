@@ -32,6 +32,16 @@ import type { PromptBenchmark } from "./types";
 const hash = (value: string): string =>
   createHash("sha256").update(value).digest("hex").slice(0, 24);
 
+export function prepareBenchmarkRunDatabase(
+  path: string,
+  snapshot: Uint8Array,
+  name: string,
+  promptHash: string,
+): void {
+  writeFileSync(path, snapshot);
+  initializeBenchmarkDatabase(path, name, promptHash);
+}
+
 function promptProfile(dir?: string): string {
   if (!dir) return "";
   return readdirSync(dir).sort().map((name) => {
@@ -52,9 +62,6 @@ async function runPrompt(
   const base = readFileSync(promptPath, "utf8").trim();
   const fullPrompt = `${base}\n\n${formatSkillCatalog(catalogMode)}`;
   const promptHash = hash(`${fullPrompt}\n${promptProfile(hookPromptDir)}`);
-  const dbPath = join(root, `${label}.db`);
-  writeFileSync(dbPath, snapshot);
-  initializeBenchmarkDatabase(dbPath, `${plan.name}-${label}`, promptHash);
   const runs: PromptBenchmark["runs"] = [];
   for (const host of plan.hosts) {
     for (const item of plan.cases) {
@@ -62,9 +69,11 @@ async function runPrompt(
         const sessionId = `${label}-${host}-${item.id}-${trial}-${randomUUID()}`;
         const runRoot = join(root, sessionId);
         mkdirSync(runRoot);
+        const dbPath = join(runRoot, "benchmark.db");
         const resultPath = join(runRoot, "result.json");
         const pidPath = join(runRoot, "mcp.pid");
         const assertionPath = join(runRoot, "assertions.json");
+        prepareBenchmarkRunDatabase(dbPath, snapshot, `${plan.name}-${label}`, promptHash);
         writeFileSync(assertionPath, JSON.stringify({ assertions: item.assertions }));
         beginBenchmarkRun(dbPath, {
           sessionId,

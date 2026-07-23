@@ -19,6 +19,7 @@ import {
   submitBenchmarkResult,
 } from "../src/prompt-eval/benchmark-record";
 import { evaluatePrompt } from "../src/prompt-eval/score";
+import { prepareBenchmarkRunDatabase } from "../src/prompt-eval/benchmark-runner";
 import type { PromptBenchmark, PromptRunEvidence } from "../src/prompt-eval/types";
 
 const evidence = (overrides: Partial<PromptRunEvidence> = {}): PromptRunEvidence => ({
@@ -230,7 +231,7 @@ test("captures isolated agent runs directly from benchmark MCP events", () => {
         taskAssertionsPassed: 1,
         taskAssertionsTotal: 1,
       })).toMatchObject({
-        promptTokens: 420,
+        promptTokens: expect.any(Number),
         selectedSkillIds: ["skill-a"],
         rootSynthesizedLast: true,
         answeredNodes: 2,
@@ -238,6 +239,16 @@ test("captures isolated agent runs directly from benchmark MCP events", () => {
         deepestLevel: 1,
         usedReturnedNodes: 1,
       });
+      expect(capturePromptEvidence({
+        dbPath: path,
+        host: "copilot",
+        sessionId: "direct-session",
+        caseId: "direct",
+        trial: 1,
+        taskAssertionSet: "assertions",
+        taskAssertionsPassed: 1,
+        taskAssertionsTotal: 1,
+      }).promptTokens).toBeGreaterThan(420);
     } finally {
       if (previous.db == null) delete process.env.CAIRN_DB_PATH;
       else process.env.CAIRN_DB_PATH = previous.db;
@@ -263,6 +274,7 @@ test("benchmark reminder profiles add the delivered hook context to measured tok
     trial: 1,
     promptTokens: 100,
   });
+
   const previous = {
     db: process.env.CAIRN_DB_PATH,
     session: process.env.CAIRN_PROMPT_BENCHMARK_SESSION,
@@ -290,6 +302,33 @@ test("benchmark reminder profiles add the delivered hook context to measured tok
     else process.env.CAIRN_PROMPT_BENCHMARK_SESSION = previous.session;
     if (previous.dir == null) delete process.env.CAIRN_PROMPT_BENCHMARK_DIR;
     else process.env.CAIRN_PROMPT_BENCHMARK_DIR = previous.dir;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prepares every benchmark trial from an independent source snapshot", () => {
+  const root = join(tmpdir(), `cairn-prompt-isolation-${randomUUID()}`);
+  mkdirSync(root);
+  const sourcePath = join(root, "source.db");
+  const firstPath = join(root, "first.db");
+  const secondPath = join(root, "second.db");
+  const source = new Database(sourcePath);
+  source.run("CREATE TABLE fixture(value TEXT)");
+  source.run("INSERT INTO fixture VALUES ('source')");
+  const snapshot = source.serialize();
+  source.close();
+  try {
+    prepareBenchmarkRunDatabase(firstPath, snapshot, "first", "hash");
+    const first = new Database(firstPath);
+    first.run("INSERT INTO fixture VALUES ('trial-write')");
+    first.close();
+
+    prepareBenchmarkRunDatabase(secondPath, snapshot, "second", "hash");
+    const second = new Database(secondPath, { readonly: true });
+    const values = second.query("SELECT value FROM fixture ORDER BY rowid").all();
+    second.close();
+    expect(values).toEqual([{ value: "source" }]);
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

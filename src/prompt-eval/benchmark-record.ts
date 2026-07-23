@@ -139,6 +139,12 @@ export function recordBenchmarkTool(input: {
         JSON.stringify(input.result ?? null),
         Number(input.success),
       );
+      db.query(`UPDATE prompt_benchmark_runs
+        SET context_tokens=context_tokens+?
+        WHERE session_id=?`).run(
+        estimatedTokens(JSON.stringify(input.result ?? null).length),
+        sessionId,
+      );
       if (!input.success) {
         db.query(`UPDATE prompt_benchmark_runs SET tool_failures=tool_failures+1
           WHERE session_id=?`).run(sessionId);

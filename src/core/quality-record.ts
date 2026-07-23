@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { estimatedTokens, jsonChars } from "./usage";
 import { qualityDatabase } from "./quality-schema";
 import type { PromptEvaluation } from "../prompt-eval/types";
+import {
+  promptFingerprint,
+  releaseFingerprint,
+  releaseVersion,
+  telemetryRunClass,
+} from "./release";
 
 export type QualityHost = "copilot" | "claude";
 
@@ -16,13 +21,6 @@ const hash = (value: string, length = 16): string =>
   value ? createHash("sha256").update(value).digest("hex").slice(0, length) : "";
 const sessionHash = (value: string): string => hash(value);
 const entityHash = (value: string): string => hash(value, 24);
-const packageVersion = (() => {
-  try {
-    return String(JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version || "");
-  } catch {
-    return "";
-  }
-})();
 
 export const qualityRunId = ({ host, sessionId, turnSeq }: RunIdentity): string =>
   hash(`${host}\0${sessionId}\0${turnSeq}`, 32);
@@ -32,10 +30,6 @@ export function qualityResultSucceeded(result: unknown): boolean {
   const value = result as { success?: unknown; isError?: unknown; resultType?: unknown };
   return value.success !== false && value.isError !== true
     && (value.resultType == null || value.resultType === "success");
-}
-
-export function releaseFingerprint(promptHash: string, catalogVersion: string): string {
-  return hash(`${process.env.CAIRN_RELEASE || packageVersion}\0${promptHash}\0${catalogVersion}`, 24);
 }
 
 export function beginQualityRun(input: RunIdentity & {
@@ -49,19 +43,31 @@ export function beginQualityRun(input: RunIdentity & {
     const db = qualityDatabase();
     if (!db || !input.sessionId) return false;
     const runId = qualityRunId(input);
+    const release = releaseFingerprint(input.promptHash, input.catalogVersion);
+    const version = process.env.CAIRN_RELEASE || releaseVersion;
+    const runClass = telemetryRunClass();
     db.query(`INSERT INTO quality_runs(
       run_id,host,session_hash,turn_seq,release_fingerprint,version,model,prompt_hash,
-      catalog_version,started_ts,injected_tokens
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      catalog_version,run_class,started_ts,injected_tokens
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(run_id) DO UPDATE SET
       release_fingerprint=excluded.release_fingerprint,model=excluded.model,
       prompt_hash=excluded.prompt_hash,catalog_version=excluded.catalog_version,
+      run_class=excluded.run_class,
       injected_tokens=excluded.injected_tokens`).run(
       runId, input.host, sessionHash(input.sessionId), input.turnSeq,
-      releaseFingerprint(input.promptHash, input.catalogVersion),
-      process.env.CAIRN_RELEASE || packageVersion, input.model || "", input.promptHash,
-      input.catalogVersion, input.ts ?? Date.now(), estimatedTokens(input.injectedChars),
+      release, version, input.model || "", input.promptHash,
+      input.catalogVersion, runClass, input.ts ?? Date.now(),
+      estimatedTokens(input.injectedChars),
     );
+    const hasUsage = db.query(`SELECT 1 AS ok FROM sqlite_master
+      WHERE type='table' AND name='usage_events'`).get();
+    if (hasUsage) {
+      db.query(`UPDATE usage_events SET release_fingerprint=?,version=?,run_class=?
+        WHERE host=? AND session_hash=? AND turn_seq=?`).run(
+        release, version, runClass, input.host, sessionHash(input.sessionId), input.turnSeq,
+      );
+    }
     return true;
   } catch {
     return false;
@@ -188,7 +194,7 @@ export function finishQualityRun(input: RunIdentity & {
   } catch { /* telemetry never blocks the host */ }
 }
 
-export const promptFingerprint = (value: string): string => hash(value, 24);
+export { promptFingerprint, releaseFingerprint };
 
 export function recordPromptEvaluation(result: PromptEvaluation): void {
   try {

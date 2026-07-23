@@ -119,6 +119,7 @@ test("quality telemetry records content-free prompt evaluation provenance", () =
     comparedRuns: 6,
     failures: [],
   });
+
   expect(qualitySummary(1)).toMatchObject({
     promptEvaluations: 1,
     acceptedPromptEvaluations: 1,
@@ -131,4 +132,32 @@ test("quality telemetry records content-free prompt evaluation provenance", () =
       comparedRuns: 6,
     },
   });
+});
+
+test("quality summaries exclude benchmark runs", () => {
+  qualityDatabase()?.run("DELETE FROM quality_events");
+  qualityDatabase()?.run("DELETE FROM quality_runs");
+  const previous = process.env.CAIRN_PROMPT_BENCHMARK_SESSION;
+  process.env.CAIRN_PROMPT_BENCHMARK_SESSION = "benchmark";
+  try {
+    const run = identity("quality-benchmark");
+    beginQualityRun({
+      ...run,
+      promptHash: promptFingerprint("benchmark"),
+      catalogVersion: "catalog",
+      injectedChars: 400,
+    });
+    finishQualityRun({
+      ...run,
+      completed: true,
+      workflowPassed: true,
+      skillUsed: true,
+      brainUsed: true,
+      stopNudges: 0,
+    });
+  } finally {
+    if (previous == null) delete process.env.CAIRN_PROMPT_BENCHMARK_SESSION;
+    else process.env.CAIRN_PROMPT_BENCHMARK_SESSION = previous;
+  }
+  expect(qualitySummary(1).runs).toBe(0);
 });

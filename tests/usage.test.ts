@@ -37,6 +37,9 @@ test("usage events store measurements without user content", async () => {
     turnSeq: 3,
     contextChars: 9372,
     eventKey: `context-${marker}`,
+    releaseFingerprint: "release-human",
+    version: "1.2.3",
+    runClass: "human",
   })).toBe(true);
   expect(recordUsage({
     eventKind: "tool",
@@ -48,6 +51,9 @@ test("usage events store measurements without user content", async () => {
     itemCount: 5,
     success: true,
     eventKey: `tool-${marker}`,
+    releaseFingerprint: "release-human",
+    version: "1.2.3",
+    runClass: "human",
   })).toBe(true);
 
   const db = new Database(process.env.CAIRN_DB_PATH!);
@@ -61,6 +67,9 @@ test("usage events store measurements without user content", async () => {
   expect(typeof stored.session_hash).toBe("string");
   expect(String(stored.session_hash)).toHaveLength(16);
   expect(stored.estimated_tokens).toBe(2343);
+  expect(stored.release_fingerprint).toBe("release-human");
+  expect(stored.version).toBe("1.2.3");
+  expect(stored.run_class).toBe("human");
   const summary = usageSummary(1);
   expect(summary.groups.some((group) =>
     group.source === "user-prompt" && group.estimatedTokens >= 2343
@@ -72,6 +81,76 @@ test("usage events store measurements without user content", async () => {
     prompts: expect.any(Number),
   });
   expect(summary.impact.measuredTokensPerPrompt).toBeGreaterThan(0);
+  expect(summary.impact).toMatchObject({
+    releaseFingerprint: "release-human",
+    version: "1.2.3",
+    runClass: "human",
+  });
+});
+
+test("usage summaries exclude benchmark traffic and older releases", async () => {
+  const { recordUsage, usageSummary } = await import("../src/core/usage");
+  const key = randomUUID();
+  recordUsage({
+    eventKind: "context", source: "user-prompt", contextChars: 400,
+    eventKey: `${key}-old`, releaseFingerprint: "old", version: "1", runClass: "human",
+  });
+
+  recordUsage({
+    eventKind: "context", source: "user-prompt", contextChars: 800,
+    eventKey: `${key}-current`, releaseFingerprint: "current", version: "2", runClass: "human",
+    ts: Date.now() + 1,
+  });
+  recordUsage({
+    eventKind: "context", source: "user-prompt", contextChars: 4000,
+    eventKey: `${key}-benchmark`, releaseFingerprint: "current", version: "2",
+    runClass: "benchmark", ts: Date.now() + 2,
+  });
+  const summary = usageSummary(1);
+  expect(summary.impact).toMatchObject({
+    releaseFingerprint: "current",
+    version: "2",
+    runClass: "human",
+    currentPromptTokens: 200,
+    toolTelemetryMissing: true,
+  });
+  expect(summary.totals.estimatedTokens).toBe(200);
+});
+
+test("quality run identity backfills usage release metadata", async () => {
+  const { recordUsage } = await import("../src/core/usage");
+  const { beginQualityRun, promptFingerprint, releaseFingerprint } =
+    await import("../src/core/quality-record");
+  const sessionId = `release-backfill-${randomUUID()}`;
+  recordUsage({
+    eventKind: "context",
+    source: "user-prompt",
+    host: "copilot",
+    sessionId,
+    turnSeq: 1,
+    contextChars: 100,
+    eventKey: sessionId,
+  });
+  beginQualityRun({
+    host: "copilot",
+    sessionId,
+    turnSeq: 1,
+    promptHash: promptFingerprint("release prompt"),
+    catalogVersion: "release catalog",
+    injectedChars: 100,
+  });
+  const db = new Database(process.env.CAIRN_DB_PATH!, { readonly: true });
+  const row = db.query(`SELECT release_fingerprint,version,run_class
+    FROM usage_events WHERE source='user-prompt' ORDER BY id DESC LIMIT 1`).get();
+  db.close();
+  expect(row).toEqual({
+    release_fingerprint: releaseFingerprint(
+      promptFingerprint("release prompt"),
+      "release catalog",
+    ),
+    version: "0.1.0",
+    run_class: "human",
+  });
 });
 
 test("usage event keys make hook telemetry idempotent", async () => {
@@ -146,6 +225,7 @@ test("usage CLI prints decision metrics directly", () => {
   const output = result.stdout.toString();
   expect(result.status).toBe(0);
   expect(output).toContain("fixed/message");
+  expect(output).toContain("release ");
   expect(output).toContain("measured/message");
   expect(output).toContain("context");
   expect(output).toContain("tools");

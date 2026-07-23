@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { usageTelemetryEnabled } from "./config";
-import { localEventsDatabase } from "./host-events";
+import { releaseVersion, telemetryRunClass } from "./release";
+import { usageDatabase } from "./usage-schema";
 
 export interface UsageEvent {
   eventKind: "context" | "tool";
@@ -16,6 +17,9 @@ export interface UsageEvent {
   itemCount?: number;
   success?: boolean;
   eventKey?: string;
+  releaseFingerprint?: string;
+  version?: string;
+  runClass?: "human" | "benchmark" | "worker";
   ts?: number;
 }
 
@@ -33,6 +37,9 @@ export interface UsageGroup {
   contextChars: number;
   averageDurationMs: number;
   failures: number;
+  releaseFingerprint: string;
+  version: string;
+  runClass: string;
 }
 
 export interface UsageImpact {
@@ -49,9 +56,11 @@ export interface UsageImpact {
   latestContextTs: number;
   latestToolTs: number;
   toolTelemetryLagMs: number;
+  toolTelemetryMissing: boolean;
+  releaseFingerprint: string;
+  version: string;
+  runClass: string;
 }
-
-let schemaReady = false;
 
 const chars = (value: number | undefined): number =>
   Number.isFinite(value) ? Math.max(0, Math.round(value!)) : 0;
@@ -66,36 +75,6 @@ const eventKeyHash = (eventKey = ""): string | null =>
     ? createHash("sha256").update(eventKey).digest("hex")
     : null;
 
-function database() {
-  const d = localEventsDatabase();
-  if (schemaReady) return d;
-  d.run(`CREATE TABLE IF NOT EXISTS usage_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_key TEXT UNIQUE,
-    ts INTEGER NOT NULL,
-    event_kind TEXT NOT NULL,
-    source TEXT NOT NULL,
-    host TEXT NOT NULL DEFAULT '',
-    session_hash TEXT NOT NULL DEFAULT '',
-    turn_seq INTEGER NOT NULL DEFAULT 0,
-    tool_name TEXT NOT NULL DEFAULT '',
-    input_chars INTEGER NOT NULL DEFAULT 0,
-    output_chars INTEGER NOT NULL DEFAULT 0,
-    context_chars INTEGER NOT NULL DEFAULT 0,
-    estimated_tokens INTEGER NOT NULL DEFAULT 0,
-    duration_ms INTEGER NOT NULL DEFAULT 0,
-    item_count INTEGER NOT NULL DEFAULT 0,
-    success INTEGER NOT NULL DEFAULT 1
-  )`);
-  d.run("CREATE INDEX IF NOT EXISTS usage_events_ts ON usage_events(ts)");
-  d.run("CREATE INDEX IF NOT EXISTS usage_events_source ON usage_events(event_kind,source,ts)");
-  d.run("CREATE INDEX IF NOT EXISTS usage_events_session ON usage_events(session_hash,turn_seq,ts)");
-  const retentionDays = Math.max(1, Number(process.env.CAIRN_USAGE_RETENTION_DAYS || "30"));
-  d.query("DELETE FROM usage_events WHERE ts < ?").run(Date.now() - retentionDays * 86_400_000);
-  schemaReady = true;
-  return d;
-}
-
 export function estimatedTokens(totalChars: number): number {
   return Math.ceil(chars(totalChars) / 4);
 }
@@ -106,10 +85,11 @@ export function recordUsage(event: UsageEvent): boolean {
     const input = chars(event.inputChars);
     const output = chars(event.outputChars);
     const context = chars(event.contextChars);
-    database().query(`INSERT INTO usage_events(
+    usageDatabase().query(`INSERT INTO usage_events(
       event_key,ts,event_kind,source,host,session_hash,turn_seq,tool_name,
-      input_chars,output_chars,context_chars,estimated_tokens,duration_ms,item_count,success
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      input_chars,output_chars,context_chars,estimated_tokens,duration_ms,item_count,success,
+      release_fingerprint,version,run_class
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(event_key) DO NOTHING`).run(
       eventKeyHash(event.eventKey),
       event.ts ?? Date.now(),
@@ -126,6 +106,9 @@ export function recordUsage(event: UsageEvent): boolean {
       chars(event.durationMs),
       chars(event.itemCount),
       Number(event.success !== false),
+      event.releaseFingerprint || process.env.CAIRN_RELEASE || releaseVersion,
+      event.version || process.env.CAIRN_RELEASE || releaseVersion,
+      event.runClass || telemetryRunClass(),
     );
     return true;
   } catch {
@@ -147,20 +130,36 @@ export function usageSummary(days = 7): {
     COALESCE(SUM(context_chars),0) AS contextChars,
     ROUND(COALESCE(AVG(duration_ms),0),1) AS averageDurationMs,
     COALESCE(SUM(CASE WHEN success=0 THEN 1 ELSE 0 END),0) AS failures`;
-  const d = database();
-  const totalMetrics = d.query(`SELECT ${metrics} FROM usage_events WHERE ts >= ?`)
-    .get(sinceTs) as Omit<UsageGroup, "eventKind" | "source" | "host" | "toolName">;
-  const totals: UsageGroup = { eventKind: "", source: "", host: "", toolName: "", ...totalMetrics };
+  const d = usageDatabase();
+  const latest = d.query(`SELECT release_fingerprint AS releaseFingerprint,version
+    FROM usage_events WHERE ts>=? AND run_class='human' AND source='user-prompt'
+    ORDER BY ts DESC LIMIT 1`).get(sinceTs) as {
+      releaseFingerprint: string;
+      version: string;
+    } | null;
+  const releaseFingerprint = latest?.releaseFingerprint || process.env.CAIRN_RELEASE || releaseVersion;
+  const version = latest?.version || releaseVersion;
+  const where = "ts>=? AND run_class='human' AND release_fingerprint=?";
+  const totalMetrics = d.query(`SELECT ${metrics} FROM usage_events WHERE ${where}`)
+    .get(sinceTs, releaseFingerprint) as Omit<
+      UsageGroup, "eventKind" | "source" | "host" | "toolName"
+      | "releaseFingerprint" | "version" | "runClass"
+    >;
+  const identity = { releaseFingerprint, version, runClass: "human" };
+  const totals: UsageGroup = {
+    eventKind: "", source: "", host: "", toolName: "", ...identity, ...totalMetrics,
+  };
   const groups = d.query(`SELECT event_kind AS eventKind,source,host,tool_name AS toolName,${metrics}
-    FROM usage_events WHERE ts >= ?
+    FROM usage_events WHERE ${where}
     GROUP BY event_kind,source,host,tool_name
-    ORDER BY estimatedTokens DESC,events DESC`).all(sinceTs) as UsageGroup[];
+    ORDER BY estimatedTokens DESC,events DESC`).all(sinceTs, releaseFingerprint)
+    .map((group) => ({ ...(group as UsageGroup), ...identity }));
   const coverage = d.query(`SELECT
       COUNT(DISTINCT CASE WHEN session_hash != '' THEN session_hash END) AS sessions,
       COALESCE(MIN(ts),0) AS firstEventTs,COALESCE(MAX(ts),0) AS lastEventTs,
       COALESCE(MAX(CASE WHEN event_kind='context' THEN ts ELSE 0 END),0) AS latestContextTs,
       COALESCE(MAX(CASE WHEN event_kind='tool' THEN ts ELSE 0 END),0) AS latestToolTs
-    FROM usage_events WHERE ts >= ?`).get(sinceTs) as {
+    FROM usage_events WHERE ${where}`).get(sinceTs, releaseFingerprint) as {
       sessions: number;
       firstEventTs: number;
       lastEventTs: number;
@@ -168,8 +167,8 @@ export function usageSummary(days = 7): {
       latestToolTs: number;
     };
   const latestPrompt = d.query(`SELECT estimated_tokens AS tokens FROM usage_events
-    WHERE ts >= ? AND event_kind='context' AND source='user-prompt'
-    ORDER BY ts DESC LIMIT 1`).get(sinceTs) as { tokens: number } | null;
+    WHERE ${where} AND event_kind='context' AND source='user-prompt'
+    ORDER BY ts DESC LIMIT 1`).get(sinceTs, releaseFingerprint) as { tokens: number } | null;
   const contextTokens = groups
     .filter((group) => group.eventKind === "context")
     .reduce((total, group) => total + group.estimatedTokens, 0);
@@ -189,9 +188,12 @@ export function usageSummary(days = 7): {
     toolTokens,
     contextPercent: totalTokens > 0 ? Math.round(contextTokens * 100 / totalTokens) : 0,
     toolPercent: totalTokens > 0 ? Math.round(toolTokens * 100 / totalTokens) : 0,
-    toolTelemetryLagMs: coverage.latestContextTs > coverage.latestToolTs
+    toolTelemetryLagMs: coverage.latestToolTs > 0
+      && coverage.latestContextTs > coverage.latestToolTs
       ? coverage.latestContextTs - coverage.latestToolTs
       : 0,
+    toolTelemetryMissing: coverage.latestContextTs > 0 && coverage.latestToolTs === 0,
+    ...identity,
   };
   return { sinceTs, totals, impact, groups };
 }

@@ -122,15 +122,24 @@ test("brain_search caps the result set at CAIRN_SEARCH_LIMIT and stays score-ord
 
 test("brain_mutate sets an answer + citation and it is findable by it", async () => {
   const n = parse(await call("brain_create", { text: "A geography question" }));
-  const updated = parse(await call("brain_mutate", {
+  const answer = "The capital of France is Paris.";
+  const response = await call("brain_mutate", {
     id: n.id,
+    answer,
+    citation: "https://en.wikipedia.org/wiki/Paris",
+  });
+  const updated = parse(response);
+  expect(updated).toEqual({
+    id: n.id,
+    url: expect.stringContaining(`/node/${n.id}`),
+  });
+  expect(response.content[0]!.text).not.toContain(answer);
+  const results = parse(await call("brain_search", { query: "capital city of France" }));
+  const stored = results.find((r: { id: string }) => r.id === n.id);
+  expect(stored).toMatchObject({
     answer: "The capital of France is Paris.",
     citation: "https://en.wikipedia.org/wiki/Paris",
-  }));
-  expect(updated.answer).toBe("The capital of France is Paris.");
-  expect(updated.citation).toBe("https://en.wikipedia.org/wiki/Paris");
-  const results = parse(await call("brain_search", { query: "capital city of France" }));
-  expect(results.some((r: { id: string }) => r.id === n.id)).toBe(true);
+  });
 });
 
 test("brain_mutate REJECTS an insanely long answer with a concision prompt", async () => {

@@ -96,9 +96,10 @@ const measured = async <T>(
   }
 };
 
-// Attach a viewer deep-link so callers can show/cite the thought in the UI. Used on the single-node
-// create/mutate returns, where the agent needs the url to report or link the node.
-const withUrl = <T extends Neuron>(n: T) => ({ ...n, url: `${config.uiUrl}/node/${n.id}` });
+// Attach a viewer deep-link so callers can show/cite the thought in the UI.
+const nodeUrl = (id: string): string => `${config.uiUrl}/node/${id}`;
+const withUrl = <T extends Neuron>(n: T) => ({ ...n, url: nodeUrl(n.id) });
+const mutationAck = ({ id }: Neuron) => ({ id, url: nodeUrl(id) });
 
 // Lean agent-facing search hit. Keep the handle (`id`), the knowledge (`text`/`answer`/`citation`) and
 // the relevance (`score`); DROP `edges` and `url`. `edges` is server-only graph data the agent cannot
@@ -161,7 +162,7 @@ server.tool(
 
 server.tool(
   "brain_mutate",
-  "Update an existing thought by id. Provide only the fields to change. Setting `answer` marks it solved. Returns the updated thought",
+  "Update an existing thought by id. Provide only the fields to change. Setting `answer` marks it solved. Returns its id and viewer URL",
   {
     id: z.string().describe("id of the thought to update."),
     text: z.string().optional().describe("new question text."),
@@ -179,7 +180,7 @@ server.tool(
     try {
       const { mutate } = await import("../core/neurons");
       const n = await mutate(id, { text, answer, citation, edges });
-      return n ? json(withUrl(n)) : fail(`no thought with id ${id}`);
+      return n ? json(mutationAck(n)) : fail(`no thought with id ${id}`);
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
     }

@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { afterAll, beforeAll, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -15,6 +15,13 @@ import {
   shouldStartUserTurn,
   stopDecision,
 } from "../src/hosts/copilot-cli/hook";
+
+const priorCompletionContinuation = process.env.CAIRN_FORCE_COMPLETION_CONTINUATION;
+beforeAll(() => { process.env.CAIRN_FORCE_COMPLETION_CONTINUATION = "1"; });
+afterAll(() => {
+  if (priorCompletionContinuation == null) delete process.env.CAIRN_FORCE_COMPLETION_CONTINUATION;
+  else process.env.CAIRN_FORCE_COMPLETION_CONTINUATION = priorCompletionContinuation;
+});
 
 function reviewJobs(dbPath: string): { skill_id: string; status?: string }[] {
   const database = new Database(dbPath);

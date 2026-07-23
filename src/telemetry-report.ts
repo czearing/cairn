@@ -42,6 +42,7 @@ export function printTelemetryReport(days: number, json = false): void {
     `(${quality.crossSessionNodes}/${quality.observedNodes})`);
   line(`skills selected ${quality.selectedSkills}  edited ${quality.editedSkills} ` +
     `(${quality.skillEditRate}%)  visibility failures ${quality.visibilityFailures}`);
+  line(`workflow blocks ${quality.workflowBlocks}  completion blocks ${quality.completionBlocks}`);
   line(`prompt evals ${quality.promptEvaluations}  accepted ${quality.acceptedPromptEvaluations}` +
     (quality.latestPromptEvaluation
       ? `  latest quality +${quality.latestPromptEvaluation.qualityImprovements}` +

@@ -25,6 +25,8 @@ export interface QualitySummary {
   workflowRate: number;
   toolFailures: number;
   visibilityFailures: number;
+  workflowBlocks: number;
+  completionBlocks: number;
   searchToUseRate: number;
   returnedNodes: number;
   usedReturnedNodes: number;
@@ -127,10 +129,13 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   const skills = db.query(`SELECT
     COUNT(DISTINCT CASE WHEN r.ended_ts>0 AND e.kind='skill_selected' THEN e.entity_hash END) AS selectedSkills,
     COUNT(DISTINCT CASE WHEN r.ended_ts>0 AND e.kind='skill_edited' THEN e.entity_hash END) AS editedSkills,
-    COALESCE(SUM(CASE WHEN e.kind='visibility_failure' THEN 1 ELSE 0 END),0) AS visibilityFailures
+    COALESCE(SUM(CASE WHEN e.kind='visibility_failure' THEN 1 ELSE 0 END),0) AS visibilityFailures,
+    COALESCE(SUM(CASE WHEN e.kind='stop_blocked' THEN 1 ELSE 0 END),0) AS workflowBlocks,
+    COALESCE(SUM(CASE WHEN e.kind='completion_blocked' THEN 1 ELSE 0 END),0) AS completionBlocks
     FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
     WHERE e.ts>=? AND r.run_class='human'`).get(sinceTs) as {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
+      workflowBlocks: number; completionBlocks: number;
     };
   const promptEvaluationCounts = db.query(`SELECT COUNT(*) AS total,
     COALESCE(SUM(accepted),0) AS accepted FROM telemetry_evaluations WHERE created_ts>=?`)
@@ -190,7 +195,8 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
 
 function empty(): QualitySummary {
   return {
-    runs: 0, activeRuns: 0, completedRate: 0, workflowRate: 0, toolFailures: 0, visibilityFailures: 0,
+    runs: 0, activeRuns: 0, completedRate: 0, workflowRate: 0, toolFailures: 0,
+    visibilityFailures: 0, workflowBlocks: 0, completionBlocks: 0,
     searchToUseRate: 0, returnedNodes: 0, usedReturnedNodes: 0,
     crossSessionReuseRate: 0, crossSessionNodes: 0, observedNodes: 0,
     selectedSkills: 0, editedSkills: 0, skillEditRate: 0, comparisons: [],

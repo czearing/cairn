@@ -32,7 +32,6 @@ test("Copilot hooks correlate returned brain nodes with later use and completion
   expect(post("cairn-brain_search", { query: "fix" }, [{ id: "node-a", text: "answer" }]).status).toBe(0);
   expect(post("cairn-brain_mutate", { id: "node-a", answer: "done" }, { id: "node-a" }).status).toBe(0);
   expect(invoke(hook, ["agent-stop"], { sessionId }, env).status).toBe(0);
-  expect(invoke(hook, ["agent-stop"], { sessionId }, env).status).toBe(0);
 
   const db = new Database(dbPath, { readonly: true });
   const runId = telemetryRunId({ host: "copilot", sessionId, turnSeq: 1 });
@@ -42,6 +41,34 @@ test("Copilot hooks correlate returned brain nodes with later use and completion
   expect(run).toEqual({ completed: 1, workflow_passed: 1 });
   expect(kinds).toContainEqual({ kind: "brain_returned" });
   expect(kinds).toContainEqual({ kind: "brain_mutated" });
+});
+
+test("Copilot can retain the completion continuation as an explicit baseline", () => {
+  const dbPath = join(tmpdir(), `cairn-completion-baseline-${randomUUID()}.db`);
+  const sessionId = `copilot-completion-${randomUUID()}`;
+  const hook = join(root, "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_USAGE: "1",
+    CAIRN_SKILLS: "1",
+    CAIRN_FORCE_COMPLETION_CONTINUATION: "1",
+  };
+  invoke(hook, ["user-prompt"], { sessionId, prompt: "Fix it." }, env);
+  invoke(hook, ["post-tool"], {
+    sessionId, toolCallId: "skill", toolName: "cairn-skill_select",
+    toolArgs: { ids: ["software"] }, toolResult: { ok: true },
+  }, env);
+  invoke(hook, ["post-tool"], {
+    sessionId, toolCallId: "brain", toolName: "cairn-brain_search",
+    toolArgs: { query: "fix" }, toolResult: [],
+  }, env);
+  const blocked = invoke(hook, ["agent-stop"], { sessionId }, env);
+  expect(JSON.parse(blocked.stdout.toString())).toMatchObject({ decision: "block" });
+  invoke(hook, ["agent-stop"], { sessionId }, env);
+  const db = new Database(dbPath, { readonly: true });
+  expect(db.query(`SELECT COUNT(*) AS count FROM telemetry_events
+    WHERE kind='completion_blocked'`).get()).toEqual({ count: 1 });
+  db.close();
 });
 
 test("Claude records quality evidence even when skills are disabled", () => {

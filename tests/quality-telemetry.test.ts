@@ -5,6 +5,7 @@ import {
   finishTelemetryRun as finishQualityRun,
   promptFingerprint,
   recordPromptEvaluation,
+  recordTelemetryState,
   recordTelemetryTool as recordQualityTool,
   telemetrySummary,
 } from "../src/core/telemetry";
@@ -44,6 +45,12 @@ test("quality telemetry derives reuse and release deltas without storing content
     ...current, promptHash: promptFingerprint("current"), catalogVersion: "catalog-b",
     injectedChars: 320,
   });
+  recordTelemetryState({
+    ...current, eventKey: "current-workflow-block", kind: "stop_blocked",
+  });
+  recordTelemetryState({
+    ...current, eventKey: "current-completion-block", kind: "completion_blocked",
+  });
   recordQualityTool({
     ...current, eventKey: "current-search", toolName: "brain_search",
     args: { query: marker }, result: [{ id: "node-a", text: marker }], success: true,
@@ -80,6 +87,8 @@ test("quality telemetry derives reuse and release deltas without storing content
     completedRate: 100,
     workflowRate: 100,
     toolFailures: 1,
+    workflowBlocks: 1,
+    completionBlocks: 1,
     searchToUseRate: 100,
     crossSessionReuseRate: 50,
     crossSessionNodes: 1,

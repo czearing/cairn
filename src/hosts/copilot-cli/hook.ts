@@ -46,6 +46,7 @@ import {
 } from "../../skill/lifecycle";
 import { skillResultId } from "../../skill/tool-result";
 import { postToolPromptFiles } from "../../inject/post-tool";
+import { completionContinuationEnabled } from "./completion-gate";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 let emittedUsage: Parameters<typeof recordTelemetry>[0] | undefined;
@@ -496,12 +497,12 @@ async function main(): Promise<void> {
       emit({});
       return;
     }
-    if (!st.completionNudged) {
+    if (completionContinuationEnabled() && !st.completionNudged) {
       updateLifecycle(stateId, () => ({ ...st, completionNudged: true, stopBlocked: true }));
       recordTelemetryState({
         host: "copilot", sessionId, turnSeq: st.turnSeq,
         eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:completion`,
-        kind: "stop_blocked",
+        kind: "completion_blocked",
       });
       emit({ decision: "block", reason: internalContext(COMPLETION_REMINDER) });
       return;

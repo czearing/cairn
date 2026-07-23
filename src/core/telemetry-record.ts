@@ -180,7 +180,8 @@ export function recordTelemetryTool(input: TelemetryRunIdentity & {
 }
 
 export function recordTelemetryState(input: TelemetryRunIdentity & {
-  eventKey: string; kind: "stop_blocked" | "visibility_failure" | "deferred";
+  eventKey: string;
+  kind: "stop_blocked" | "completion_blocked" | "visibility_failure" | "deferred";
 }): void {
   recordEvent({ ...input, kind: input.kind });
 }

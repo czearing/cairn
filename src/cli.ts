@@ -126,6 +126,10 @@ switch (cmd) {
   case "prompt-evidence":
     (await import("./prompt-eval/capture-cli")).runPromptEvidenceCapture();
     break;
+  case "prompt-test":
+    process.exitCode = await (await import("./prompt-eval/benchmark-cli"))
+      .runPromptBenchmarkCli();
+    break;
   case "seed":
     await import("../examples/seed");
     break;
@@ -149,6 +153,7 @@ Usage:
   cairn usage       Local context/tool usage report (--days=7, --json)
   cairn prompt-eval Compare isolated baseline/candidate evidence without touching live agents
   cairn prompt-evidence Extract structured evidence from an explicit non-live benchmark DB
+  cairn prompt-test Run isolated baseline/candidate agents, then evaluate exact evidence
   cairn seed        Write a few demo neurons to the brain
 
 Config (env): CAIRN_DB_PATH, CAIRN_EMBED_PROVIDER, CAIRN_RELEVANCE_THRESHOLD …

@@ -4,6 +4,7 @@ import {
   beginQualityRun,
   finishQualityRun,
   promptFingerprint,
+  recordPromptEvaluation,
   recordQualityTool,
 } from "../src/core/quality-record";
 import { qualityDatabase } from "../src/core/quality-schema";
@@ -100,4 +101,34 @@ test("quality telemetry derives reuse and release deltas without storing content
   expect(serialized).not.toContain(marker);
   expect(serialized).not.toContain("node-a");
   expect(serialized).not.toContain("skill-a");
+});
+
+test("quality telemetry records content-free prompt evaluation provenance", () => {
+  qualityDatabase()?.run("DELETE FROM prompt_evaluations");
+  recordPromptEvaluation({
+    accepted: true,
+    baselinePromptHash: "baseline-hash",
+    candidatePromptHash: "candidate-hash",
+    qualityDefinitionHash: "quality-hash",
+    baselineTokens: 1000,
+    candidateTokens: 500,
+    tokenReduction: 0.5,
+    safeTokenReduction: 0.5,
+    qualityImprovements: 2,
+    qualityChecks: 12,
+    comparedRuns: 6,
+    failures: [],
+  });
+  expect(qualitySummary(1)).toMatchObject({
+    promptEvaluations: 1,
+    acceptedPromptEvaluations: 1,
+    latestPromptEvaluation: {
+      candidatePromptHash: "candidate-hash",
+      accepted: true,
+      tokenReduction: 0.5,
+      qualityImprovements: 2,
+      qualityChecks: 12,
+      comparedRuns: 6,
+    },
+  });
 });

@@ -4,104 +4,37 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { PromptHost, PromptRunEvidence } from "./types";
+import {
+  graphEvidence,
+  normalizeToolName,
+  resultIds,
+  type ToolEvent,
+} from "./graph-evidence";
 
 interface HostRow {
   tool_name: string;
   raw_json: string;
 }
 
+interface BenchmarkEventRow {
+  tool_name: string;
+  args_json: string;
+  result_json: string;
+}
+
 const liveDb = resolve(join(homedir(), ".cairn", "cairn.db"));
 const hashSession = (value: string) =>
   createHash("sha256").update(value).digest("hex").slice(0, 16);
-const toolName = (value: string) =>
-  value.toLowerCase().replace(/^.*(?:__|-)(?=(?:brain|skill)_)/, "");
 
-function structured(value: unknown): unknown {
-  if (typeof value === "string") {
-    try { return structured(JSON.parse(value)); } catch { return value; }
-  }
-  if (!value || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map(structured);
-  const row = value as Record<string, unknown>;
-  if (typeof row.id === "string") return row;
-  for (const key of ["textResultForLlm", "toolResult", "result"]) {
-    if (row[key] != null) return structured(row[key]);
-  }
-  if (Array.isArray(row.content)) {
-    return structured(row.content.length === 1 ? row.content[0] : row.content);
-  }
-  if (typeof row.text === "string") return structured(row.text);
-  return row;
-}
-
-function ids(value: unknown): string[] {
-  const parsed = structured(value);
-  if (Array.isArray(parsed)) return parsed.flatMap(ids);
-  if (!parsed || typeof parsed !== "object") return [];
-  const id = (parsed as Record<string, unknown>).id;
-  return typeof id === "string" && id ? [id] : [];
-}
-
-function payload(host: PromptHost, raw: string) {
+function payload(host: PromptHost, raw: string): ToolEvent {
   const row = JSON.parse(raw) as Record<string, unknown>;
   const args = (row.toolArgs ?? row.tool_input ?? {}) as Record<string, unknown>;
   const result = row.toolResult ?? row.tool_result ?? row.toolOutput ?? row.tool_output;
   return {
     args: typeof args === "object" && args ? args : {},
     result,
-    name: toolName(String(row.toolName ?? row.tool_name ?? "")),
+    name: normalizeToolName(String(row.toolName ?? row.tool_name ?? "")),
     host,
-  };
-}
-
-function graph(events: ReturnType<typeof payload>[]) {
-  const created: string[] = [];
-  const depths = new Map<string, number>();
-  const answered = new Set<string>();
-  const cited = new Set<string>();
-  const returned = new Set<string>();
-  const used = new Set<string>();
-  let searchedAt = -1;
-  let firstWriteAt = -1;
-  let lastAnswerId = "";
-  for (const [index, event] of events.entries()) {
-    if (event.name === "brain_search") {
-      if (searchedAt < 0) searchedAt = index;
-      for (const id of ids(event.result)) returned.add(id);
-    }
-    if (event.name === "brain_create") {
-      if (firstWriteAt < 0) firstWriteAt = index;
-      const id = ids(event.result)[0];
-      if (!id) continue;
-      created.push(id);
-      const edges = Array.isArray(event.args.edges) ? event.args.edges as string[] : [];
-      for (const edge of edges) used.add(edge);
-      const parentDepths = edges.map((edge) => depths.get(edge)).filter((v): v is number => v != null);
-      depths.set(id, parentDepths.length ? Math.max(...parentDepths) + 1 : 0);
-    }
-    if (event.name === "brain_mutate") {
-      if (firstWriteAt < 0) firstWriteAt = index;
-      const id = String(event.args.id || "");
-      if (id) used.add(id);
-      if (id && typeof event.args.answer === "string" && event.args.answer.trim()) {
-        answered.add(id);
-        lastAnswerId = id;
-      }
-      if (id && typeof event.args.citation === "string" && event.args.citation.trim()) cited.add(id);
-    }
-  }
-  const root = created[0] || "";
-  return {
-    root,
-    createdNodes: created.length,
-    answeredNodes: created.filter((id) => answered.has(id)).length,
-    citedAnswers: created.filter((id) => cited.has(id)).length,
-    maxDepth: Math.max(0, ...depths.values()),
-    returnedNodes: returned.size,
-    usedReturnedNodes: [...returned].filter((id) => used.has(id)).length,
-    rootSynthesized: Boolean(root && answered.has(root)),
-    rootSynthesizedLast: Boolean(root && lastAnswerId === root),
-    searchBeforeWrite: searchedAt >= 0 && (firstWriteAt < 0 || searchedAt < firstWriteAt),
   };
 }
 
@@ -125,24 +58,50 @@ export function capturePromptEvidence(input: {
     const marker = table ? db.query(`SELECT 1 AS ok FROM prompt_benchmark_meta
       WHERE isolated=1 LIMIT 1`).get() as { ok: number } | null : null;
     if (!marker) throw new Error("database is not marked as an isolated prompt benchmark");
-    const rows = db.query(`SELECT tool_name,raw_json FROM host_events
-      WHERE host=? AND session_id=? AND tool_name!=''
-      ORDER BY recorded_ts,event_key`).all(input.host, input.sessionId) as HostRow[];
-    const events = rows.map((row) => payload(input.host, row.raw_json));
-    const run = db.query(`SELECT run_id,injected_tokens,completed,workflow_passed,
-      tool_failures,stop_nudges FROM quality_runs
-      WHERE host=? AND session_hash=? ORDER BY turn_seq DESC LIMIT 1`)
-      .get(input.host, hashSession(input.sessionId)) as Record<string, number | string> | null;
+    const benchmarkTables = db.query(`SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type='table' AND name IN ('prompt_benchmark_runs','prompt_benchmark_events')`)
+      .get() as { count: number };
+    let events: ToolEvent[];
+    let run: Record<string, number | string> | null;
+    let unexpectedCount = 0;
+    if (benchmarkTables.count === 2) {
+      const rows = db.query(`SELECT tool_name,args_json,result_json
+       FROM prompt_benchmark_events WHERE session_id=? ORDER BY seq`)
+       .all(input.sessionId) as BenchmarkEventRow[];
+      events = rows.map((row) => ({
+       args: JSON.parse(row.args_json) as Record<string, unknown>,
+       result: JSON.parse(row.result_json),
+       name: normalizeToolName(row.tool_name),
+       host: input.host,
+      }));
+      run = db.query(`SELECT prompt_tokens AS injected_tokens,completed,workflow_passed,
+       tool_failures,stop_nudges,unexpected_events
+       FROM prompt_benchmark_runs WHERE host=? AND session_id=?`)
+       .get(input.host, input.sessionId) as Record<string, number | string> | null;
+      unexpectedCount = Number(run?.unexpected_events || 0);
+    } else {
+      const rows = db.query(`SELECT tool_name,raw_json FROM host_events
+       WHERE host=? AND session_id=? AND tool_name!=''
+       ORDER BY recorded_ts,event_key`).all(input.host, input.sessionId) as HostRow[];
+      events = rows.map((row) => payload(input.host, row.raw_json));
+      run = db.query(`SELECT run_id,injected_tokens,completed,workflow_passed,
+       tool_failures,stop_nudges FROM quality_runs
+       WHERE host=? AND session_hash=? ORDER BY turn_seq DESC LIMIT 1`)
+       .get(input.host, hashSession(input.sessionId)) as Record<string, number | string> | null;
+      if (run) {
+       const unexpected = db.query(`SELECT COUNT(*) AS count FROM quality_events
+         WHERE run_id=? AND kind IN ('visibility_failure','deferred')`)
+         .get(String(run.run_id)) as { count: number };
+       unexpectedCount = unexpected.count;
+      }
+    }
     if (!run) throw new Error("no quality run found for isolated session");
-    const unexpected = db.query(`SELECT COUNT(*) AS count FROM quality_events
-      WHERE run_id=? AND kind IN ('visibility_failure','deferred')`)
-      .get(String(run.run_id)) as { count: number };
-    const shape = graph(events);
+    const shape = graphEvidence(events);
     const selectedSkillIds = events.flatMap((event) => {
       if (event.name === "skill_select" && Array.isArray(event.args.ids)) {
         return event.args.ids.filter((id): id is string => typeof id === "string");
       }
-      if (event.name === "skill_create") return ids(event.result);
+      if (event.name === "skill_create")       return resultIds(event.result);
       if (event.name === "skill") return [String(event.args.skill || "")].filter(Boolean);
       return [];
     });
@@ -164,7 +123,7 @@ export function capturePromptEvidence(input: {
       createdNodes: shape.createdNodes,
       answeredNodes: shape.answeredNodes,
       citedAnswers: shape.citedAnswers,
-      maxDepth: shape.maxDepth,
+      deepestLevel: shape.deepestLevel,
       returnedNodes: shape.returnedNodes,
       usedReturnedNodes: shape.usedReturnedNodes,
       taskAssertionSet: input.taskAssertionSet,
@@ -172,7 +131,7 @@ export function capturePromptEvidence(input: {
       taskAssertionsTotal: input.taskAssertionsTotal,
       toolFailures: Number(run.tool_failures),
       stopNudges: Number(run.stop_nudges),
-      unexpectedEvents: unexpected.count,
+      unexpectedEvents: unexpectedCount,
     };
   } finally {
     db.close();

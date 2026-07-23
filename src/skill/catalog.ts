@@ -15,9 +15,11 @@ export function skillCatalogSnapshot(): SkillCatalogSnapshot {
   };
 }
 
-export function formatSkillCatalog(): string {
+export function formatSkillCatalog(mode: "full" | "titles" = "titles"): string {
   const snapshot = skillCatalogSnapshot();
-  const rows = snapshot.catalog.map((skill) => `- \`${skill.id}\` **${skill.title}**: ${skill.description}`);
+  const rows = snapshot.catalog.map((skill) => mode === "titles"
+    ? `${skill.id} ${skill.title}`
+    : `- \`${skill.id}\` **${skill.title}**: ${skill.description}`);
   return `## Available skill catalog\nCatalog version: \`${snapshot.version}\`\nPass this exact version as \`catalogVersion\` to \`skill_select\`.\n${rows.join("\n") || "(empty)"}`;
 }
 

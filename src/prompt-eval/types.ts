@@ -17,7 +17,7 @@ export interface PromptRunEvidence {
   createdNodes: number;
   answeredNodes: number;
   citedAnswers: number;
-  maxDepth: number;
+  deepestLevel: number;
   returnedNodes: number;
   usedReturnedNodes: number;
   taskAssertionSet: string;
@@ -30,7 +30,9 @@ export interface PromptRunEvidence {
 
 export interface PromptBenchmark {
   name: string;
+  promptHash: string;
   minimumTrials: number;
+  requireQualityImprovement: boolean;
   runs: PromptRunEvidence[];
 }
 
@@ -45,10 +47,15 @@ export interface PromptGateFailure {
 
 export interface PromptEvaluation {
   accepted: boolean;
+  baselinePromptHash: string;
+  candidatePromptHash: string;
+  qualityDefinitionHash: string;
   baselineTokens: number;
   candidateTokens: number;
   tokenReduction: number;
   safeTokenReduction: number | null;
+  qualityImprovements: number;
+  qualityChecks: number;
   comparedRuns: number;
   failures: PromptGateFailure[];
 }

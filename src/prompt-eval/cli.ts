@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { readPromptBenchmark } from "./files";
 import { evaluatePrompt } from "./score";
+import { recordPromptEvaluation } from "../core/quality-record";
 
 const arg = (name: string): string => {
   const value = process.argv.find((item) => item.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -12,11 +13,13 @@ export function runPromptEvaluation(json = process.argv.includes("--json")): num
   const baseline = readPromptBenchmark(arg("baseline"));
   const candidate = readPromptBenchmark(arg("candidate"));
   const result = evaluatePrompt(baseline, candidate);
+  recordPromptEvaluation(result);
   if (json) {
     console.log(JSON.stringify(result, null, 2));
   } else if (result.accepted) {
     console.log(`PASS  safe token reduction ${(result.safeTokenReduction! * 100).toFixed(1)}%`);
     console.log(`${result.baselineTokens} -> ${result.candidateTokens} tokens across ${result.comparedRuns} runs`);
+    console.log(`quality improvements ${result.qualityImprovements}/${result.qualityChecks} checks`);
   } else {
     console.log(`REJECTED  ${result.failures.length} quality gate failure(s)`);
     for (const failure of result.failures) {

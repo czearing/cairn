@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { estimatedTokens, jsonChars } from "./usage";
 import { qualityDatabase } from "./quality-schema";
+import type { PromptEvaluation } from "../prompt-eval/types";
 
 export type QualityHost = "copilot" | "claude";
 
@@ -188,3 +189,34 @@ export function finishQualityRun(input: RunIdentity & {
 }
 
 export const promptFingerprint = (value: string): string => hash(value, 24);
+
+export function recordPromptEvaluation(result: PromptEvaluation): void {
+  try {
+    const db = qualityDatabase();
+    if (!db) return;
+    const createdTs = Date.now();
+    const evaluationId = hash([
+      result.baselinePromptHash,
+      result.candidatePromptHash,
+      result.qualityDefinitionHash,
+      createdTs,
+    ].join("\0"), 32);
+    db.query(`INSERT INTO prompt_evaluations(
+      evaluation_id,baseline_prompt_hash,candidate_prompt_hash,quality_definition_hash,
+      accepted,token_reduction,safe_token_reduction,quality_improvements,
+      quality_checks,compared_runs,created_ts
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+      evaluationId,
+      result.baselinePromptHash,
+      result.candidatePromptHash,
+      result.qualityDefinitionHash,
+      Number(result.accepted),
+      result.tokenReduction,
+      result.safeTokenReduction,
+      result.qualityImprovements,
+      result.qualityChecks,
+      result.comparedRuns,
+      createdTs,
+    );
+  } catch { /* telemetry never blocks evaluation */ }
+}

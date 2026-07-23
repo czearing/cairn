@@ -211,9 +211,9 @@ test("Harness user prompts receive the complete user Cairn workflow", () => {
   const directOutput = JSON.parse(direct.stdout.toString()) as { additionalContext: string };
   const harnessOutput = JSON.parse(harness.stdout.toString()) as { additionalContext: string };
   expect(harnessOutput.additionalContext).toBe(directOutput.additionalContext);
-  expect(harnessOutput.additionalContext).toContain("## Read the Shared Brain First");
-  expect(harnessOutput.additionalContext).toContain("## Decompose Into Nodes");
-  expect(harnessOutput.additionalContext).toContain("Topical similarity is not a fit");
+  expect(harnessOutput.additionalContext).toContain("## Brain workflow");
+  expect(harnessOutput.additionalContext).toContain("no breadth or depth limit");
+  expect(harnessOutput.additionalContext).toContain("catalog titles do not establish an exact fit");
   rmSync(cairnDb, { force: true });
 });
 

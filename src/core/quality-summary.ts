@@ -34,6 +34,17 @@ export interface QualitySummary {
   selectedSkills: number;
   editedSkills: number;
   skillEditRate: number;
+  promptEvaluations: number;
+  acceptedPromptEvaluations: number;
+  latestPromptEvaluation: {
+    candidatePromptHash: string;
+    accepted: boolean;
+    tokenReduction: number;
+    safeTokenReduction: number | null;
+    qualityImprovements: number;
+    qualityChecks: number;
+    comparedRuns: number;
+  } | null;
   comparisons: ReleaseComparison[];
   current: QualityMetrics | null;
   baseline: QualityMetrics | null;
@@ -116,6 +127,23 @@ export function qualitySummary(days = 7): QualitySummary {
     FROM quality_events e JOIN quality_runs r USING(run_id) WHERE e.ts>=?`).get(sinceTs) as {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
     };
+  const promptEvaluationCounts = db.query(`SELECT COUNT(*) AS total,
+    COALESCE(SUM(accepted),0) AS accepted FROM prompt_evaluations WHERE created_ts>=?`)
+    .get(sinceTs) as { total: number; accepted: number };
+  const latestPromptEvaluation = db.query(`SELECT candidate_prompt_hash AS candidatePromptHash,
+    accepted,token_reduction AS tokenReduction,safe_token_reduction AS safeTokenReduction,
+    quality_improvements AS qualityImprovements,quality_checks AS qualityChecks,
+    compared_runs AS comparedRuns
+    FROM prompt_evaluations WHERE created_ts>=? ORDER BY created_ts DESC LIMIT 1`)
+    .get(sinceTs) as {
+      candidatePromptHash: string;
+      accepted: number;
+      tokenReduction: number;
+      safeTokenReduction: number | null;
+      qualityImprovements: number;
+      qualityChecks: number;
+      comparedRuns: number;
+    } | null;
   const dimensions = db.query(`SELECT host,model,MAX(started_ts) AS latest
     FROM quality_runs WHERE started_ts>=? AND ended_ts>0
     GROUP BY host,model ORDER BY latest DESC`).all(sinceTs) as { host: string; model: string }[];
@@ -141,6 +169,12 @@ export function qualitySummary(days = 7): QualitySummary {
     crossSessionReuseRate: percent(brain.crossSessionNodes, brain.observedNodes),
     ...skills,
     skillEditRate: percent(skills.editedSkills, skills.selectedSkills),
+    promptEvaluations: promptEvaluationCounts.total,
+    acceptedPromptEvaluations: promptEvaluationCounts.accepted,
+    latestPromptEvaluation: latestPromptEvaluation ? {
+      ...latestPromptEvaluation,
+      accepted: Boolean(latestPromptEvaluation.accepted),
+    } : null,
     comparisons,
     current: latest?.current || null,
     baseline: latest?.baseline || null,
@@ -154,6 +188,7 @@ function empty(): QualitySummary {
     searchToUseRate: 0, returnedNodes: 0, usedReturnedNodes: 0,
     crossSessionReuseRate: 0, crossSessionNodes: 0, observedNodes: 0,
     selectedSkills: 0, editedSkills: 0, skillEditRate: 0, comparisons: [],
+    promptEvaluations: 0, acceptedPromptEvaluations: 0, latestPromptEvaluation: null,
     current: null, baseline: null, delta: null,
   };
 }

@@ -100,7 +100,8 @@ export function buildArgs(opts: ClaudeOpts = {}, mcpConfigPath?: string): string
 // correctly with a safe arg array — node's spawn cannot. The cairn server's capture env (opts.env) is written
 // into a temp --additional-mcp-config when the call needs the brain. Mirrors runClaude's contract exactly.
 export async function runCopilot(prompt: string, opts: ClaudeOpts = {}): Promise<ClaudeResult> {
-  const timeoutMs = opts.timeoutMs ?? 90_000;
+  const benchmark = Boolean(opts.env?.CAIRN_PROMPT_BENCHMARK_SESSION);
+  const timeoutMs = benchmark ? null : opts.timeoutMs ?? 90_000;
   // The learn call is signalled by opts.mcpConfigPath (claude uses it for --mcp-config); on Copilot we ignore
   // that path and write our own capture-wired config instead.
   const needsBrain = Boolean(opts.mcpConfigPath);
@@ -127,8 +128,11 @@ export async function runCopilot(prompt: string, opts: ClaudeOpts = {}): Promise
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<ClaudeResult>((resolve) => {
-    timer = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } resolve({ ok: false, text: "", error: `timed out after ${timeoutMs}ms` }); }, timeoutMs);
+  const timeout = timeoutMs == null ? null : new Promise<ClaudeResult>((resolve) => {
+    timer = setTimeout(() => {
+      try { proc.kill(); } catch { /* gone */ }
+      resolve({ ok: false, text: "", error: `timed out after ${timeoutMs}ms` });
+    }, timeoutMs);
   });
   const run = (async (): Promise<ClaudeResult> => {
     try {
@@ -143,7 +147,7 @@ export async function runCopilot(prompt: string, opts: ClaudeOpts = {}): Promise
     }
   })();
 
-  const result = await Promise.race([run, timeout]);
+  const result = timeout ? await Promise.race([run, timeout]) : await run;
   if (timer) clearTimeout(timer);
   return result;
 }

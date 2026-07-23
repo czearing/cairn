@@ -1,11 +1,18 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { capturePromptEvidence } from "../src/prompt-eval/evidence";
 import { runAssertions } from "../src/prompt-eval/assertions";
+import {
+  beginBenchmarkRun,
+  finishBenchmarkRun,
+  initializeBenchmarkDatabase,
+  recordBenchmarkTool,
+  submitBenchmarkResult,
+} from "../src/prompt-eval/benchmark-record";
 import { evaluatePrompt } from "../src/prompt-eval/score";
 import type { PromptBenchmark, PromptRunEvidence } from "../src/prompt-eval/types";
 
@@ -26,7 +33,7 @@ const evidence = (overrides: Partial<PromptRunEvidence> = {}): PromptRunEvidence
   createdNodes: 20,
   answeredNodes: 20,
   citedAnswers: 20,
-  maxDepth: 4,
+  deepestLevel: 4,
   returnedNodes: 4,
   usedReturnedNodes: 3,
   taskAssertionSet: "assertions-v1",
@@ -40,7 +47,9 @@ const evidence = (overrides: Partial<PromptRunEvidence> = {}): PromptRunEvidence
 
 const benchmark = (name: string, runs: PromptRunEvidence[]): PromptBenchmark => ({
   name,
+  promptHash: `${name}-hash`,
   minimumTrials: 1,
+  requireQualityImprovement: false,
   runs,
 });
 
@@ -53,14 +62,19 @@ test("accepts token savings only after every quality gate passes", () => {
   expect(result.safeTokenReduction).toBeCloseTo(0.783, 3);
 });
 
-test("rejects a cheaper prompt that weakens recursive decomposition", () => {
+test("does not hardcode task-size node or depth targets", () => {
   const result = evaluatePrompt(
     benchmark("baseline", [evidence()]),
-    benchmark("candidate", [evidence({ promptTokens: 300, maxDepth: 2 })]),
+    benchmark("candidate", [evidence({
+      promptTokens: 300,
+      createdNodes: 3,
+      answeredNodes: 3,
+      citedAnswers: 3,
+      deepestLevel: 1,
+    })]),
   );
-  expect(result.accepted).toBe(false);
-  expect(result.safeTokenReduction).toBeNull();
-  expect(result.failures.map((failure) => failure.gate)).toContain("maxDepth");
+  expect(result.accepted).toBe(true);
+  expect(result.safeTokenReduction).toBeCloseTo(0.87, 2);
 });
 
 test("rejects missing task assertions and uncited answers", () => {
@@ -142,10 +156,78 @@ test("extracts quality from structured isolated events without reading prose", (
     createdNodes: 2,
     answeredNodes: 2,
     citedAnswers: 2,
-    maxDepth: 1,
+    deepestLevel: 1,
     returnedNodes: 1,
     usedReturnedNodes: 1,
   });
+});
+
+test("captures isolated agent runs directly from benchmark MCP events", () => {
+    const root = join(tmpdir(), `cairn-prompt-direct-${randomUUID()}`);
+    const path = join(root, "benchmark.db");
+    const resultPath = join(root, "result.json");
+    mkdirSync(root);
+    initializeBenchmarkDatabase(path, "direct", "prompt-hash");
+    beginBenchmarkRun(path, {
+      sessionId: "direct-session",
+      host: "copilot",
+      caseId: "direct",
+      trial: 1,
+      promptTokens: 400,
+    });
+    const previous = {
+      db: process.env.CAIRN_DB_PATH,
+      session: process.env.CAIRN_PROMPT_BENCHMARK_SESSION,
+      result: process.env.CAIRN_PROMPT_BENCHMARK_RESULT,
+    };
+    process.env.CAIRN_DB_PATH = path;
+    process.env.CAIRN_PROMPT_BENCHMARK_SESSION = "direct-session";
+    process.env.CAIRN_PROMPT_BENCHMARK_RESULT = resultPath;
+    const record = (toolName: string, args: unknown, result: unknown) =>
+      recordBenchmarkTool({ toolName, args, result, success: true });
+    try {
+      record("skill_select", { ids: ["skill-a"] }, { selected: [{ id: "skill-a" }] });
+      record("brain_search", { query: "task" }, [{ id: "prior" }]);
+      record("brain_create", { text: "What is the root?" }, { id: "root" });
+      record("brain_create", { text: "What is unresolved?", edges: ["root", "prior"] }, { id: "child" });
+      record("brain_mutate", { id: "child", answer: "done", citation: "https://example.com" }, { id: "child" });
+      record("brain_mutate", { id: "root", answer: "done", citation: "https://example.com" }, { id: "root" });
+      submitBenchmarkResult({ status: "complete" });
+      finishBenchmarkRun(path, {
+        sessionId: "direct-session",
+        completed: true,
+        workflowPassed: true,
+        assertionSet: "assertions",
+        assertionsPassed: 1,
+        assertionsTotal: 1,
+      });
+      expect(capturePromptEvidence({
+        dbPath: path,
+        host: "copilot",
+        sessionId: "direct-session",
+        caseId: "direct",
+        trial: 1,
+        taskAssertionSet: "assertions",
+        taskAssertionsPassed: 1,
+        taskAssertionsTotal: 1,
+      })).toMatchObject({
+        promptTokens: 400,
+        selectedSkillIds: ["skill-a"],
+        rootSynthesizedLast: true,
+        answeredNodes: 2,
+        citedAnswers: 2,
+        deepestLevel: 1,
+        usedReturnedNodes: 1,
+      });
+    } finally {
+      if (previous.db == null) delete process.env.CAIRN_DB_PATH;
+      else process.env.CAIRN_DB_PATH = previous.db;
+      if (previous.session == null) delete process.env.CAIRN_PROMPT_BENCHMARK_SESSION;
+      else process.env.CAIRN_PROMPT_BENCHMARK_SESSION = previous.session;
+      if (previous.result == null) delete process.env.CAIRN_PROMPT_BENCHMARK_RESULT;
+      else process.env.CAIRN_PROMPT_BENCHMARK_RESULT = previous.result;
+      rmSync(root, { recursive: true, force: true });
+    }
 });
 
 test("refuses to inspect the live Cairn database", () => {
@@ -190,15 +272,31 @@ test("rejects changed skill selection and weaker brain reuse", () => {
   );
   expect(result.accepted).toBe(false);
   expect(result.failures.map((failure) => failure.gate)).toEqual(
-    expect.arrayContaining(["selectedSkillIds", "usedReturnedNodes", "searchToUse"])
+    expect.arrayContaining(["selectedSkillIds", "searchToUse"])
   );
+});
+
+test("compares brain reuse across matched trials instead of noisy individual runs", () => {
+  const baselineRuns = [
+    evidence({ trial: 1, returnedNodes: 1, usedReturnedNodes: 1 }),
+    evidence({ trial: 2, returnedNodes: 9, usedReturnedNodes: 0 }),
+  ];
+  const candidateRuns = [
+    evidence({ trial: 1, returnedNodes: 3, usedReturnedNodes: 2, promptTokens: 500 }),
+    evidence({ trial: 2, returnedNodes: 7, usedReturnedNodes: 2, promptTokens: 500 }),
+  ];
+  const result = evaluatePrompt(
+    { ...benchmark("baseline", baselineRuns), minimumTrials: 2 },
+    { ...benchmark("candidate", candidateRuns), minimumTrials: 2 },
+  );
+  expect(result.accepted).toBe(true);
 });
 
 test("rejects benchmark groups without the configured repeat count", () => {
   const runs = [evidence({ trial: 1 }), evidence({ trial: 2 })];
   const result = evaluatePrompt(
-    { name: "baseline", minimumTrials: 3, runs },
-    { name: "candidate", minimumTrials: 3, runs },
+    { ...benchmark("baseline", runs), minimumTrials: 3 },
+    { ...benchmark("candidate", runs), minimumTrials: 3 },
   );
   expect(result.accepted).toBe(false);
   expect(result.failures).toContainEqual(expect.objectContaining({
@@ -206,4 +304,35 @@ test("rejects benchmark groups without the configured repeat count", () => {
     baseline: 3,
     candidate: 2,
   }));
+});
+
+test("requires a declared quality improvement when requested", () => {
+  const baseline = {
+    ...benchmark("baseline", [evidence({ stopNudges: 2 })]),
+    requireQualityImprovement: true,
+  };
+  const improved = {
+    ...benchmark("candidate", [evidence({
+      promptTokens: 500,
+      stopNudges: 0,
+    })]),
+    requireQualityImprovement: true,
+  };
+  const result = evaluatePrompt(baseline, improved);
+  expect(result.accepted).toBe(true);
+  expect(result.qualityImprovements).toBe(2);
+});
+
+test("rejects token savings without a measured quality improvement", () => {
+  const baseline = {
+    ...benchmark("baseline", [evidence()]),
+    requireQualityImprovement: true,
+  };
+  const candidate = {
+    ...benchmark("candidate", [evidence({ promptTokens: 500 })]),
+    requireQualityImprovement: true,
+  };
+  const result = evaluatePrompt(baseline, candidate);
+  expect(result.accepted).toBe(false);
+  expect(result.failures.map((failure) => failure.gate)).toContain("qualityImprovements");
 });

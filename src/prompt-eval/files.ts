@@ -6,7 +6,7 @@ const booleans = [
   "searchBeforeWrite", "rootCreated", "rootSynthesized", "rootSynthesizedLast",
 ] as const;
 const numbers = [
-  "promptTokens", "createdNodes", "answeredNodes", "citedAnswers", "maxDepth",
+  "promptTokens", "createdNodes", "answeredNodes", "citedAnswers", "deepestLevel",
   "returnedNodes", "usedReturnedNodes", "trial",
   "taskAssertionsPassed", "taskAssertionsTotal", "toolFailures", "stopNudges",
   "unexpectedEvents",
@@ -41,12 +41,24 @@ function run(value: unknown, index: number): PromptRunEvidence {
 export function readPromptBenchmark(path: string): PromptBenchmark {
   const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
   if (typeof parsed.name !== "string" || !parsed.name) throw new Error("benchmark needs a name");
+  if (typeof parsed.promptHash !== "string" || !parsed.promptHash) {
+    throw new Error("benchmark needs promptHash");
+  }
   if (!Number.isInteger(parsed.minimumTrials) || Number(parsed.minimumTrials) < 1) {
     throw new Error("benchmark needs minimumTrials >= 1");
+  }
+  if (typeof parsed.requireQualityImprovement !== "boolean") {
+    throw new Error("benchmark needs requireQualityImprovement");
   }
   if (!Array.isArray(parsed.runs) || !parsed.runs.length) throw new Error("benchmark needs runs");
   const runs = parsed.runs.map(run);
   const keys = runs.map((item) => `${item.host}\0${item.caseId}\0${item.trial}`);
   if (new Set(keys).size !== keys.length) throw new Error("benchmark host/case/trial keys must be unique");
-  return { name: parsed.name, minimumTrials: Number(parsed.minimumTrials), runs };
+  return {
+    name: parsed.name,
+    promptHash: parsed.promptHash,
+    minimumTrials: Number(parsed.minimumTrials),
+    requireQualityImprovement: parsed.requireQualityImprovement,
+    runs,
+  };
 }

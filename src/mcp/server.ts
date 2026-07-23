@@ -6,6 +6,11 @@ import { jsonChars, recordUsage } from "../core/usage";
 import { neighborContext } from "./context";
 import type { Neuron } from "../core/neurons.types";
 import type { ScoredResult } from "../core/search.types";
+import {
+  recordBenchmarkTool,
+  registerBenchmarkProcess,
+  submitBenchmarkResult,
+} from "../prompt-eval/benchmark-record";
 
 // The bridge that lets an agent read and write the brain. THREE tools, each a thin wrapper
 // over src/core (the same code the tests cover). Run: bun src/mcp/server.ts
@@ -15,6 +20,7 @@ import type { ScoredResult } from "../core/search.types";
 // the command without a Cairn project cwd. Tool names and schemas are session-scoped in either mode.
 
 const server = new McpServer({ name: "cairn", version: "1.0.0" });
+registerBenchmarkProcess();
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
 const measured = async <T>(
@@ -25,25 +31,34 @@ const measured = async <T>(
   const started = performance.now();
   try {
     const result = await run();
+    const durationMs = performance.now() - started;
     recordUsage({
       eventKind: "tool",
       source: "mcp",
       toolName,
       inputChars: jsonChars(input),
       outputChars: jsonChars(result),
-      durationMs: performance.now() - started,
+      durationMs,
+      success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
+    });
+    recordBenchmarkTool({
+      toolName,
+      args: input,
+      result,
       success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
     });
     return result;
   } catch (error) {
+    const durationMs = performance.now() - started;
     recordUsage({
       eventKind: "tool",
       source: "mcp",
       toolName,
       inputChars: jsonChars(input),
-      durationMs: performance.now() - started,
+      durationMs,
       success: false,
     });
+    recordBenchmarkTool({ toolName, args: input, result: null, success: false });
     throw error;
   }
 };
@@ -86,6 +101,16 @@ server.tool(
     return json(thoughts);
   })
 );
+
+if (process.env.CAIRN_PROMPT_BENCHMARK_SESSION) {
+  server.tool(
+    "benchmark_submit",
+    "Submit the exact final structured result for an isolated prompt benchmark.",
+    { result: z.unknown().describe("The final structured result required by the benchmark task.") },
+    async ({ result }) => measured("benchmark_submit", { result }, () =>
+      json(submitBenchmarkResult(result)))
+  );
+}
 
 server.tool(
   "brain_create",

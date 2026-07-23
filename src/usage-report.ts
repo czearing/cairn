@@ -46,6 +46,11 @@ export function printUsageReport(days: number, json = false): void {
     `(${quality.crossSessionNodes}/${quality.observedNodes})`);
   line(`skills selected ${quality.selectedSkills}  edited ${quality.editedSkills} ` +
     `(${quality.skillEditRate}%)  visibility failures ${quality.visibilityFailures}`);
+  line(`prompt evals ${quality.promptEvaluations}  accepted ${quality.acceptedPromptEvaluations}` +
+    (quality.latestPromptEvaluation
+      ? `  latest quality +${quality.latestPromptEvaluation.qualityImprovements}` +
+        `/${quality.latestPromptEvaluation.qualityChecks}`
+      : ""));
   const deltas = quality.comparisons.filter((item) => item.delta);
   for (const item of deltas) {
     line(`${item.host}${item.model ? `/${item.model}` : ""} release delta  ` +

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
-type Assertion =
+export type Assertion =
   | { type: "fileExists"; path: string }
   | { type: "fileEquals"; path: string; expected: string }
   | { type: "jsonEquals"; path: string; expected: unknown }

@@ -184,15 +184,14 @@ rebuild, no restart. To add a case, drop in a new `.md` and add a matcher in `sr
 | `user-message.md` | every user message |
 | `search-results.md` | after `brain_search` |
 | `node-created.md` | after `brain_create` |
-| `node-modified.md` | after `brain_mutate` |
 | `subtask-spawned.md` | after a sub-agent task |
 
 ## Subagents and agent teams
 
 `cairn install` also writes a `cairn` subagent definition to `~/.claude/agents/cairn.md`. Spawn a
 subagent — or an agent-team teammate — with that type and it runs under the **same** injected prompts:
-its frontmatter hooks call the same dispatcher (a `SessionStart` injects the workflow, `brain_*` calls
-get the same reminders, and its `Stop` becomes `SubagentStop` for the record/split gate), while its
+its frontmatter hooks call the same dispatcher (a `SessionStart` injects the workflow, search/create calls
+get the same state-specific reminders, and its `Stop` becomes `SubagentStop` for the completion gate), while its
 body carries the policy for the agent-teams path. Subagents already inherit the `brain_*` MCP tools,
 so they read and grow the same shared brain you do.
 

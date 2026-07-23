@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { writeFileSync } from "node:fs";
+import { estimatedTokens } from "../core/usage";
 
 export interface BenchmarkRunStart {
   sessionId: string;
@@ -29,6 +30,7 @@ export function initializeBenchmarkDatabase(
       case_id TEXT NOT NULL,
       trial INTEGER NOT NULL,
       prompt_tokens INTEGER NOT NULL,
+      context_tokens INTEGER NOT NULL DEFAULT 0,
       completed INTEGER NOT NULL DEFAULT 0,
       workflow_passed INTEGER NOT NULL DEFAULT 0,
       task_assertion_set TEXT NOT NULL DEFAULT '',
@@ -38,6 +40,11 @@ export function initializeBenchmarkDatabase(
       stop_nudges INTEGER NOT NULL DEFAULT 0,
       unexpected_events INTEGER NOT NULL DEFAULT 0
     )`);
+    const columns = db.query("PRAGMA table_info(prompt_benchmark_runs)")
+     .all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "context_tokens")) {
+     db.run("ALTER TABLE prompt_benchmark_runs ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0");
+    }
     db.run(`CREATE TABLE IF NOT EXISTS prompt_benchmark_events(
       seq INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id TEXT NOT NULL,
@@ -55,17 +62,34 @@ export function beginBenchmarkRun(path: string, run: BenchmarkRunStart): void {
   const db = new Database(path);
   try {
     db.query(`INSERT INTO prompt_benchmark_runs(
-      session_id,host,case_id,trial,prompt_tokens
-    ) VALUES (?,?,?,?,?)`).run(
+      session_id,host,case_id,trial,prompt_tokens,context_tokens
+    ) VALUES (?,?,?,?,?,?)`).run(
       run.sessionId,
       run.host,
       run.caseId,
       run.trial,
       run.promptTokens,
+      run.promptTokens,
     );
   } finally {
     db.close();
   }
+}
+
+export function recordBenchmarkContext(text: string): void {
+  const path = process.env.CAIRN_DB_PATH;
+  const sessionId = process.env.CAIRN_PROMPT_BENCHMARK_SESSION;
+  if (!path || !sessionId || !text) return;
+  try {
+    const db = new Database(path);
+    try {
+      db.query(`UPDATE prompt_benchmark_runs
+        SET context_tokens=context_tokens+?
+        WHERE session_id=?`).run(estimatedTokens(text.length), sessionId);
+    } finally {
+      db.close();
+    }
+  } catch { /* benchmark recording never breaks a hook */ }
 }
 
 export function finishBenchmarkRun(path: string, input: {

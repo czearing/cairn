@@ -45,6 +45,7 @@ import {
   updateLifecycle,
 } from "../../skill/lifecycle";
 import { skillResultId } from "../../skill/tool-result";
+import { postToolPromptFiles } from "../../inject/post-tool";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 let emittedUsage: Parameters<typeof recordUsage>[0] | undefined;
@@ -114,18 +115,10 @@ const isTask = (name: string): boolean => /^(task|agent)$/i.test(name) || name =
 
 // ── Pure decision helpers (exported for unit tests) ────────────────────────────────────────────
 
-// Which prompt files a COMPLETED tool earns, in delivery order. Mirrors Claude EXACTLY: Claude hooks
-// entry-format on PreToolUse (before a brain write) and orchestrate on PreToolUse (before a Task spawn),
-// but Claude delivers that PreToolUse additionalContext to the model AFTER the tool returns — the same
-// moment as its PostToolUse reminder. Copilot's preToolUse has no additionalContext channel, so we
-// deliver BOTH files here at postToolUse to land the identical text at the identical point. The empty
-// node-modified.md is dropped by the caller (it injects nothing on Claude either).
+// Which state-specific prompt files a completed tool earns, in delivery order. The per-turn workflow and
+// tool schemas already carry invariant write rules, so search/create receive only their new next-step delta.
 export function postToolFiles(toolName: string, answer: string): string[] {
-  if (isTool(toolName, "brain_search")) return ["search-results.md"];
-  if (isTool(toolName, "brain_create")) return ["entry-format.md", "node-created.md"];
-  if (isTool(toolName, "brain_mutate")) return ["entry-format.md", answer.trim() ? "answer-check.md" : "node-modified.md"];
-  if (isTask(toolName)) return ["orchestrate.md", "subtask-spawned.md"];
-  return [];
+  return postToolPromptFiles(toolName, answer);
 }
 
 // Whether agentStop should force another turn, and with which prompt. Bounded to STOP_CAP nudges per

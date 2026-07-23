@@ -7,9 +7,14 @@ import { homedir, tmpdir } from "node:os";
 import { capturePromptEvidence } from "../src/prompt-eval/evidence";
 import { runAssertions } from "../src/prompt-eval/assertions";
 import {
+  appendBenchmarkReminder,
+  benchmarkReminder,
+} from "../src/prompt-eval/reminder-profile";
+import {
   beginBenchmarkRun,
   finishBenchmarkRun,
   initializeBenchmarkDatabase,
+  recordBenchmarkContext,
   recordBenchmarkTool,
   submitBenchmarkResult,
 } from "../src/prompt-eval/benchmark-record";
@@ -60,6 +65,18 @@ test("accepts token savings only after every quality gate passes", () => {
   );
   expect(result.accepted).toBe(true);
   expect(result.safeTokenReduction).toBeCloseTo(0.783, 3);
+});
+
+test("rejects candidates that do not reduce measured tokens", () => {
+  const result = evaluatePrompt(
+    benchmark("baseline", [evidence({ promptTokens: 500 })]),
+    benchmark("candidate", [evidence({ promptTokens: 500 })]),
+  );
+  expect(result.accepted).toBe(false);
+  expect(result.safeTokenReduction).toBeNull();
+  expect(result.failures).toContainEqual(expect.objectContaining({
+    gate: "tokenReduction",
+  }));
 });
 
 test("does not hardcode task-size node or depth targets", () => {
@@ -175,6 +192,7 @@ test("captures isolated agent runs directly from benchmark MCP events", () => {
       trial: 1,
       promptTokens: 400,
     });
+
     const previous = {
       db: process.env.CAIRN_DB_PATH,
       session: process.env.CAIRN_PROMPT_BENCHMARK_SESSION,
@@ -192,6 +210,7 @@ test("captures isolated agent runs directly from benchmark MCP events", () => {
       record("brain_create", { text: "What is unresolved?", edges: ["root", "prior"] }, { id: "child" });
       record("brain_mutate", { id: "child", answer: "done", citation: "https://example.com" }, { id: "child" });
       record("brain_mutate", { id: "root", answer: "done", citation: "https://example.com" }, { id: "root" });
+      recordBenchmarkContext("x".repeat(80));
       submitBenchmarkResult({ status: "complete" });
       finishBenchmarkRun(path, {
         sessionId: "direct-session",
@@ -211,7 +230,7 @@ test("captures isolated agent runs directly from benchmark MCP events", () => {
         taskAssertionsPassed: 1,
         taskAssertionsTotal: 1,
       })).toMatchObject({
-        promptTokens: 400,
+        promptTokens: 420,
         selectedSkillIds: ["skill-a"],
         rootSynthesizedLast: true,
         answeredNodes: 2,
@@ -228,6 +247,51 @@ test("captures isolated agent runs directly from benchmark MCP events", () => {
       else process.env.CAIRN_PROMPT_BENCHMARK_RESULT = previous.result;
       rmSync(root, { recursive: true, force: true });
     }
+});
+
+test("benchmark reminder profiles add the delivered hook context to measured tokens", () => {
+  const root = join(tmpdir(), `cairn-reminder-profile-${randomUUID()}`);
+  const profile = join(root, "profile");
+  const path = join(root, "benchmark.db");
+  mkdirSync(profile, { recursive: true });
+  writeFileSync(join(profile, "search-results.md"), "Use the returned evidence.");
+  initializeBenchmarkDatabase(path, "reminders", "prompt-hash");
+  beginBenchmarkRun(path, {
+    sessionId: "reminder-session",
+    host: "copilot",
+    caseId: "reminders",
+    trial: 1,
+    promptTokens: 100,
+  });
+  const previous = {
+    db: process.env.CAIRN_DB_PATH,
+    session: process.env.CAIRN_PROMPT_BENCHMARK_SESSION,
+    dir: process.env.CAIRN_PROMPT_BENCHMARK_DIR,
+  };
+  process.env.CAIRN_DB_PATH = path;
+  process.env.CAIRN_PROMPT_BENCHMARK_SESSION = "reminder-session";
+  process.env.CAIRN_PROMPT_BENCHMARK_DIR = profile;
+  try {
+    const reminder = benchmarkReminder("brain_search", { query: "x" });
+    const delivered = appendBenchmarkReminder({
+      content: [{ type: "text", text: "[]" }],
+    }, reminder);
+    expect(reminder).toContain("Use the returned evidence.");
+    expect(delivered.content).toHaveLength(2);
+    const db = new Database(path, { readonly: true });
+    const row = db.query("SELECT context_tokens FROM prompt_benchmark_runs")
+      .get() as { context_tokens: number };
+    db.close();
+    expect(row.context_tokens).toBeGreaterThan(100);
+  } finally {
+    if (previous.db == null) delete process.env.CAIRN_DB_PATH;
+    else process.env.CAIRN_DB_PATH = previous.db;
+    if (previous.session == null) delete process.env.CAIRN_PROMPT_BENCHMARK_SESSION;
+    else process.env.CAIRN_PROMPT_BENCHMARK_SESSION = previous.session;
+    if (previous.dir == null) delete process.env.CAIRN_PROMPT_BENCHMARK_DIR;
+    else process.env.CAIRN_PROMPT_BENCHMARK_DIR = previous.dir;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("refuses to inspect the live Cairn database", () => {

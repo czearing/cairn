@@ -132,7 +132,7 @@ function writeSyncConfig(dryRun: boolean): "written" | "would-write" | "none" {
 
 // Install a `cairn` subagent definition so spawned subagents AND agent-team teammates run under the
 // SAME injected brain prompts. Its frontmatter hooks run this same dispatch (SessionStart injects the
-// workflow, PreToolUse/PostToolUse the per-tool reminders, Stop→SubagentStop the record/split gate);
+// workflow, PostToolUse the state-specific reminders, Stop→SubagentStop the completion gate);
 // its body carries the policy for the agent-teams path, where only the body is appended. Idempotent.
 async function installSubagent(dryRun: boolean): Promise<"written" | "would-write" | "already"> {
   const path = agentPath();

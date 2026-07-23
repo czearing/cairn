@@ -46,10 +46,10 @@ test("postToolFiles returns the search reminder for a brain_search", () => {
   expect(postToolFiles("cairn-brain_search", "")).toEqual(["search-results.md"]);
 });
 
-test("postToolFiles delivers entry-format BEFORE the create/mutate reminder (Claude parity)", () => {
-  expect(postToolFiles("cairn-brain_create", "")).toEqual(["entry-format.md", "node-created.md"]);
-  expect(postToolFiles("cairn-brain_mutate", "an answer")).toEqual(["entry-format.md", "answer-check.md"]); // answer set → split-check
-  expect(postToolFiles("cairn-brain_mutate", "")).toEqual(["entry-format.md", "node-modified.md"]); // plain edit (node-modified is empty → dropped by caller)
+test("postToolFiles emits only state-specific graph reminders", () => {
+  expect(postToolFiles("cairn-brain_create", "")).toEqual(["node-created.md"]);
+  expect(postToolFiles("cairn-brain_mutate", "an answer")).toEqual([]);
+  expect(postToolFiles("cairn-brain_mutate", "")).toEqual([]);
 });
 
 test("postToolFiles delivers orchestrate BEFORE subtask-spawned for a subagent spawn", () => {

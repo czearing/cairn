@@ -53,13 +53,11 @@ test("turn_finished routing: unused brain nags, otherwise done", () => {
   expect(matchEvent({ kind: "turn_finished", usedBrain: true })).toBeNull();
 });
 
-// ── entry-format injection + timing ──────────────────────────────────────────────
+// ── post-tool injection + timing ─────────────────────────────────────────────────
 
-test("format prompt fires only before a WRITE (brain_create/brain_mutate)", () => {
-  const fmt = { promptFile: "entry-format.md" };
-  expect(matchEvent({ kind: "tool_pending", tool: "brain_create", input: {} })).toEqual(fmt);
-  expect(matchEvent({ kind: "tool_pending", tool: "mcp__cairn__brain_mutate", input: {} })).toEqual(fmt);
-  // not before a read or an unrelated tool
+test("brain writes do not repeat invariant formatting before the tool", () => {
+  expect(matchEvent({ kind: "tool_pending", tool: "brain_create", input: {} })).toBeNull();
+  expect(matchEvent({ kind: "tool_pending", tool: "mcp__cairn__brain_mutate", input: {} })).toBeNull();
   expect(matchEvent({ kind: "tool_pending", tool: "brain_search", input: {} })).toBeNull();
   expect(matchEvent({ kind: "tool_pending", tool: "Read", input: {} })).toBeNull();
 });
@@ -72,12 +70,11 @@ test("TIMING: a write maps to PreToolUse (before) and PostToolUse (after) distin
   expect(post?.kind).toBe("tool_completed");
 });
 
-test("answering a node (brain_mutate with answer) triggers the split-check", () => {
+test("brain_mutate does not repeat the base atomicity contract", () => {
   const completed = (tool: string, input: Record<string, unknown>) => matchEvent({ kind: "tool_completed", tool, input, output: null });
-  expect(completed("brain_mutate", { answer: "x" })).toEqual({ promptFile: "answer-check.md" });
-  expect(completed("mcp__cairn__brain_mutate", { id: "1", answer: "y" })).toEqual({ promptFile: "answer-check.md" });
-  // edits that don't set an answer are just modifications
-  expect(completed("brain_mutate", { edges: [] })).toEqual({ promptFile: "node-modified.md" });
+  expect(completed("brain_mutate", { answer: "x" })).toBeNull();
+  expect(completed("mcp__cairn__brain_mutate", { id: "1", answer: "y" })).toBeNull();
+  expect(completed("brain_mutate", { edges: [] })).toBeNull();
 });
 
 test("delivery mechanism per moment is correct", () => {

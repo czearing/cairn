@@ -11,6 +11,10 @@ import {
   registerBenchmarkProcess,
   submitBenchmarkResult,
 } from "../prompt-eval/benchmark-record";
+import {
+  appendBenchmarkReminder,
+  benchmarkReminder,
+} from "../prompt-eval/reminder-profile";
 
 // The bridge that lets an agent read and write the brain. THREE tools, each a thin wrapper
 // over src/core (the same code the tests cover). Run: bun src/mcp/server.ts
@@ -31,13 +35,14 @@ const measured = async <T>(
   const started = performance.now();
   try {
     const result = await run();
+    const delivered = appendBenchmarkReminder(result, benchmarkReminder(toolName, input));
     const durationMs = performance.now() - started;
     recordUsage({
       eventKind: "tool",
       source: "mcp",
       toolName,
       inputChars: jsonChars(input),
-      outputChars: jsonChars(result),
+      outputChars: jsonChars(delivered),
       durationMs,
       success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
     });
@@ -47,7 +52,7 @@ const measured = async <T>(
       result,
       success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
     });
-    return result;
+    return delivered;
   } catch (error) {
     const durationMs = performance.now() - started;
     recordUsage({

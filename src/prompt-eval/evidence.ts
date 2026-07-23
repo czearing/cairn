@@ -74,7 +74,7 @@ export function capturePromptEvidence(input: {
        name: normalizeToolName(row.tool_name),
        host: input.host,
       }));
-      run = db.query(`SELECT prompt_tokens AS injected_tokens,completed,workflow_passed,
+      run = db.query(`SELECT context_tokens AS injected_tokens,completed,workflow_passed,
        tool_failures,stop_nudges,unexpected_events
        FROM prompt_benchmark_runs WHERE host=? AND session_id=?`)
        .get(input.host, input.sessionId) as Record<string, number | string> | null;

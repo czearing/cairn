@@ -18,7 +18,10 @@ export interface BenchmarkPlan {
   minimumTrials: number;
   requireQualityImprovement: boolean;
   models?: Partial<Record<PromptHost, string>>;
+  baselineCatalogMode?: "full" | "titles";
   candidateCatalogMode?: "full" | "titles";
+  baselineHookPromptDir?: string;
+  candidateHookPromptDir?: string;
   cases: BenchmarkCase[];
 }
 

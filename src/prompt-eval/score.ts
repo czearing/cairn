@@ -96,6 +96,9 @@ export function evaluatePrompt(
   const tokenReduction = baselineTokens
     ? rounded(1 - candidateTokens / baselineTokens)
     : 0;
+  if (candidateTokens >= baselineTokens) {
+    configFailure("tokenReduction", "greater than zero", tokenReduction);
+  }
   return {
     accepted: failures.length === 0,
     baselinePromptHash: baseline.promptHash,

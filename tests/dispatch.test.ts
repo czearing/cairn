@@ -1,6 +1,5 @@
 // End-to-end: spawn the REAL hook with a payload on stdin, exactly as Claude Code invokes it.
-// Proves the entry-format prompt is injected when a write tool is called — with NO rejection
-// and NO length limit.
+// Proves valid writes need no duplicate prompt while structural violations are still denied.
 import { beforeAll, test, expect } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { rmSync, writeFileSync } from "node:fs";
@@ -23,16 +22,14 @@ beforeAll(async () => {
   (await import("../src/core/db")).db();
 });
 
-test("PreToolUse on a brain write injects the format and ALLOWS", async () => {
+test("PreToolUse on a valid brain write emits no duplicate format prompt", async () => {
   const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "anything" } });
-  const j = JSON.parse(out);
-  expect(j.hookSpecificOutput.permissionDecision).toBe("allow");
-  expect(j.hookSpecificOutput.additionalContext).toContain("terse");
+  expect(out).toBe("");
 });
 
 test("NO length limit — a 5000-char entry is still allowed, never rejected", async () => {
   const out = await fire({ hook_event_name: "PreToolUse", tool_name: "mcp__cairn__brain_mutate", tool_input: { id: "1", answer: "y".repeat(5000) } });
-  expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("allow");
+  expect(out).toBe("");
 });
 
 test("PreToolUse does not inject on brain_search (a read, not a write)", async () => {
@@ -57,12 +54,12 @@ test("PreToolUse DENIES a new root-only branch while an open branch exists", asy
 
 test("PreToolUse no longer judges question phrasing — a yes/no title is allowed (the model decides)", async () => {
   const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "Does compression distinguish great poems?" } });
-  expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("allow");
+  expect(out).toBe("");
 });
 
 test("PreToolUse ALLOWS an open how/why question", async () => {
   const out = await fire({ hook_event_name: "PreToolUse", tool_name: "brain_create", tool_input: { text: "How does compression distinguish great poems?" } });
-  expect(JSON.parse(out).hookSpecificOutput.permissionDecision).toBe("allow");
+  expect(out).toBe("");
 });
 
 test("PostToolUse praises depth (non-root parent), not a flat root-child", async () => {

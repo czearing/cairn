@@ -16,12 +16,9 @@ export function matchEvent(event: NormalizedEvent): Match {
     return null;
   }
 
-  // PreToolUse → remind before the action runs. A brain write gets the entry-format rules; a Task
-  // spawn (and ONLY a Task spawn — no other tool) gets the orchestration protocol injected the moment
-  // the agent reaches for subagents, so the user never has to remember to ask for disjoint,
-  // brain-coordinated delegation.
+  // PreToolUse injects only the Task orchestration protocol. Brain schemas and the per-turn workflow
+  // already carry write invariants, so repeating them before every write adds context without new state.
   if (event.kind === "tool_pending") {
-    if (isTool(event.tool, "brain_create") || isTool(event.tool, "brain_mutate")) return { promptFile: "entry-format.md" };
     if (event.tool === "Task" || event.tool === "Agent") return { promptFile: "orchestrate.md" };
     return null;
   }
@@ -29,12 +26,7 @@ export function matchEvent(event: NormalizedEvent): Match {
   const { tool, input } = event;
   if (isTool(tool, "brain_search")) return { promptFile: "search-results.md" };
   if (isTool(tool, "brain_create")) return { promptFile: "node-created.md" };
-  if (isTool(tool, "brain_mutate")) {
-    // Setting an answer triggers the split-check; other edits are just modifications.
-    return typeof input.answer === "string" && input.answer.trim()
-      ? { promptFile: "answer-check.md" }
-      : { promptFile: "node-modified.md" };
-  }
+  if (isTool(tool, "brain_mutate")) return null;
   if (tool === "Task" || tool === "Agent") return { promptFile: "subtask-spawned.md" };
 
   return null;

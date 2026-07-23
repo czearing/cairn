@@ -16,8 +16,8 @@ test("brain_create → node-created.md", () => {
   expect(tool("brain_create")).toEqual({ promptFile: "node-created.md" });
 });
 
-test("brain_mutate → node-modified.md", () => {
-  expect(tool("brain_mutate")).toEqual({ promptFile: "node-modified.md" });
+test("brain_mutate → no repeated reminder", () => {
+  expect(tool("brain_mutate")).toBeNull();
 });
 
 test("namespaced MCP tool names match", () => {

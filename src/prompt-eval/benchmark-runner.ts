@@ -2,7 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
@@ -30,6 +32,14 @@ import type { PromptBenchmark } from "./types";
 const hash = (value: string): string =>
   createHash("sha256").update(value).digest("hex").slice(0, 24);
 
+function promptProfile(dir?: string): string {
+  if (!dir) return "";
+  return readdirSync(dir).sort().map((name) => {
+    const path = join(dir, name);
+    return statSync(path).isFile() ? `${name}\n${readFileSync(path, "utf8")}` : "";
+  }).join("\n");
+}
+
 async function runPrompt(
   plan: BenchmarkPlan,
   label: string,
@@ -37,10 +47,11 @@ async function runPrompt(
   snapshot: Uint8Array,
   root: string,
   catalogMode: "full" | "titles",
+  hookPromptDir?: string,
 ): Promise<PromptBenchmark> {
   const base = readFileSync(promptPath, "utf8").trim();
   const fullPrompt = `${base}\n\n${formatSkillCatalog(catalogMode)}`;
-  const promptHash = hash(fullPrompt);
+  const promptHash = hash(`${fullPrompt}\n${promptProfile(hookPromptDir)}`);
   const dbPath = join(root, `${label}.db`);
   writeFileSync(dbPath, snapshot);
   initializeBenchmarkDatabase(dbPath, `${plan.name}-${label}`, promptHash);
@@ -71,6 +82,7 @@ async function runPrompt(
           CAIRN_PROMPT_BENCHMARK_SESSION: sessionId,
           CAIRN_PROMPT_BENCHMARK_RESULT: resultPath,
           CAIRN_PROMPT_BENCHMARK_PID_PATH: pidPath,
+          ...(hookPromptDir ? { CAIRN_PROMPT_BENCHMARK_DIR: hookPromptDir } : {}),
         }, plan);
         await stopBenchmarkProcess(pidPath);
         if (!result.ok) {
@@ -122,10 +134,13 @@ export async function runPromptComparison(input: {
   try {
     const snapshot = databaseSnapshot(resolve(input.sourceDatabase || config.dbPath));
     const baseline = await runPrompt(
-      plan, "baseline", resolve(input.baselinePromptPath), snapshot, root, "full");
+      plan, "baseline", resolve(input.baselinePromptPath), snapshot, root,
+      plan.baselineCatalogMode || "full",
+      plan.baselineHookPromptDir ? resolve(plan.baselineHookPromptDir) : undefined);
     const candidate = await runPrompt(
       plan, "candidate", resolve(input.candidatePromptPath), snapshot, root,
-      plan.candidateCatalogMode || "full");
+      plan.candidateCatalogMode || "full",
+      plan.candidateHookPromptDir ? resolve(plan.candidateHookPromptDir) : undefined);
     writeFileSync(join(output, "baseline.json"), JSON.stringify(baseline, null, 2));
     writeFileSync(join(output, "candidate.json"), JSON.stringify(candidate, null, 2));
     return { baseline, candidate, evaluation: evaluatePrompt(baseline, candidate) };

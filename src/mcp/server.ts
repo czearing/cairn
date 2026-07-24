@@ -10,6 +10,7 @@ import {
   releaseVersion,
   telemetryRunClass,
 } from "../core/release";
+import { runtimeMetadata } from "../core/runtime-identity";
 import { formatSkillCatalog, skillCatalogSnapshot } from "../skill/catalog";
 import type { Neuron } from "../core/neurons.types";
 import { searchPayload } from "./search-payload";
@@ -50,8 +51,16 @@ const releaseIdentity = (() => {
     };
   }
 })();
-const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
-const fail = (msg: string) => ({ content: [{ type: "text" as const, text: msg }], isError: true });
+const metadata = runtimeMetadata({ ...releaseIdentity, pid: process.pid });
+const json = (data: unknown) => ({
+  _meta: metadata,
+  content: [{ type: "text" as const, text: JSON.stringify(data) }],
+});
+const fail = (msg: string) => ({
+  _meta: metadata,
+  content: [{ type: "text" as const, text: msg }],
+  isError: true,
+});
 const measured = async <T>(
   toolName: string,
   input: unknown,

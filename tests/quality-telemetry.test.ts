@@ -26,7 +26,7 @@ test("quality telemetry derives reuse and release deltas without storing content
   });
   recordQualityTool({
     ...baseline, eventKey: "baseline-search", toolName: "brain_search",
-    args: { query: marker }, result: [{ id: "node-a", text: marker }], success: true,
+    args: { query: marker }, result: [{ id: "node-a", text: marker, score: 0.91 }], success: true,
   });
   recordQualityTool({
     ...baseline, eventKey: "baseline-use", toolName: "brain_mutate",
@@ -53,7 +53,26 @@ test("quality telemetry derives reuse and release deltas without storing content
   });
   recordQualityTool({
     ...current, eventKey: "current-search", toolName: "brain_search",
-    args: { query: marker }, result: [{ id: "node-a", text: marker }], success: true,
+    args: { query: marker },
+    result: {
+      _meta: {
+        cairn: {
+          version: "0.1.0+stale",
+          releaseFingerprint: "stale-runtime-release",
+          pid: 123,
+        },
+      },
+      content: [{
+        text: JSON.stringify([
+          { id: "node-1", text: marker, score: 0.95 },
+          { id: "node-2", text: marker, score: 0.92 },
+          { id: "node-3", text: marker, score: 0.89 },
+          { id: "node-4", text: marker, score: 0.87 },
+          { id: "node-a", text: marker, score: 0.84 },
+        ]),
+      }],
+    },
+    success: true,
   });
   recordQualityTool({
     ...current, eventKey: "current-create", toolName: "brain_create",
@@ -76,23 +95,35 @@ test("quality telemetry derives reuse and release deltas without storing content
     brainUsed: true, stopNudges: 0,
   });
   beginQualityRun({
-    ...identity("quality-active"), promptHash: promptFingerprint("active"),
+    ...identity("quality-abandoned"), promptHash: promptFingerprint("abandoned"),
     catalogVersion: "catalog-c", injectedChars: 200,
+    ts: Date.now() - 2 * 60 * 60 * 1000,
+  });
+  beginQualityRun({
+    ...identity("quality-active"), promptHash: promptFingerprint("active"),
+    catalogVersion: "catalog-d", injectedChars: 200,
   });
 
   const summary = qualitySummary(1);
   expect(summary).toMatchObject({
-    runs: 3,
+    runs: 2,
     activeRuns: 1,
+    abandonedRuns: 1,
     completedRate: 100,
     workflowRate: 100,
     toolFailures: 1,
     workflowBlocks: 1,
     completionBlocks: 1,
-    searchToUseRate: 100,
-    crossSessionReuseRate: 50,
+    searchToUseRate: 33.3,
+    top3UseRate: 50,
+    maxUsedRank: 5,
+    minimumUsedScorePercent: 85,
+    runtimeObservedCalls: 1,
+    runtimeUnknownCalls: 6,
+    runtimeMismatchCalls: 1,
+    crossSessionReuseRate: 16.7,
     crossSessionNodes: 1,
-    observedNodes: 2,
+    observedNodes: 6,
     selectedSkills: 1,
     editedSkills: 1,
     skillEditRate: 100,
@@ -106,11 +137,14 @@ test("quality telemetry derives reuse and release deltas without storing content
   const db = new Database(process.env.CAIRN_DB_PATH!, { readonly: true });
   const columns = db.query("PRAGMA table_info(telemetry_events)").all() as { name: string }[];
   const serialized = JSON.stringify(db.query("SELECT * FROM telemetry_events").all());
+  const unknownRuntime = db.query(`SELECT COUNT(*) AS count FROM telemetry_events
+    WHERE kind='tool' AND version='unknown'`).get();
   db.close();
   expect(columns.map((column) => column.name)).not.toContain("content");
   expect(serialized).not.toContain(marker);
   expect(serialized).not.toContain("node-a");
   expect(serialized).not.toContain("skill-a");
+  expect(unknownRuntime).toEqual({ count: 6 });
 });
 
 test("quality telemetry records content-free prompt evaluation provenance", () => {
@@ -170,4 +204,28 @@ test("quality summaries exclude benchmark runs", () => {
     else process.env.CAIRN_PROMPT_BENCHMARK_SESSION = previous;
   }
   expect(qualitySummary(1).runs).toBe(0);
+});
+
+test("starting a new turn supersedes the prior active run in the same session", () => {
+  qualityDatabase()?.run("DELETE FROM telemetry_events");
+  qualityDatabase()?.run("DELETE FROM telemetry_runs");
+  const first = { host: "copilot" as const, sessionId: "superseded-session", turnSeq: 1 };
+  beginQualityRun({
+    ...first,
+    promptHash: promptFingerprint("first"),
+    catalogVersion: "catalog",
+    injectedChars: 100,
+  });
+  beginQualityRun({
+    ...first,
+    turnSeq: 2,
+    promptHash: promptFingerprint("second"),
+    catalogVersion: "catalog",
+    injectedChars: 100,
+  });
+  expect(qualityDatabase()?.query(`SELECT turn_seq,status FROM telemetry_runs
+    ORDER BY turn_seq`).all()).toEqual([
+      { turn_seq: 1, status: "superseded" },
+      { turn_seq: 2, status: "active" },
+    ]);
 });

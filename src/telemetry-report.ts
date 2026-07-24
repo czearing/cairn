@@ -34,12 +34,21 @@ export function printTelemetryReport(days: number, json = false): void {
   }
   line();
   line(c.bold("Quality & reuse"));
-  line(`runs ${quality.runs} (${quality.activeRuns} active)  completed ${quality.completedRate}%  ` +
+  line(`completed runs ${quality.runs}  active ${quality.activeRuns}` +
+    `${quality.oldestActiveMinutes ? ` (oldest ${quality.oldestActiveMinutes}m)` : ""}  ` +
+    `abandoned ${quality.abandonedRuns}  superseded ${quality.supersededRuns}`);
+  line(`completed ${quality.completedRate}%  ` +
     `workflow ${quality.workflowRate}%  tool failures ${quality.toolFailures}`);
   line(`brain search-to-use ${quality.searchToUseRate}% ` +
     `(${quality.usedReturnedNodes}/${quality.returnedNodes})  ` +
+    `top-3 use ${quality.top3UseRate}%  max used rank ${quality.maxUsedRank}  ` +
+    `lowest used score ~${quality.minimumUsedScorePercent}%`);
+  line(
     `cross-session reuse ${quality.crossSessionReuseRate}% ` +
-    `(${quality.crossSessionNodes}/${quality.observedNodes})`);
+    `(${quality.crossSessionNodes}/${quality.observedNodes})  ` +
+    `runtime observed ${quality.runtimeObservedCalls}  unknown ${quality.runtimeUnknownCalls}  ` +
+    `mismatch ${quality.runtimeMismatchCalls}`
+  );
   line(`skills selected ${quality.selectedSkills}  edited ${quality.editedSkills} ` +
     `(${quality.skillEditRate}%)  visibility failures ${quality.visibilityFailures}`);
   line(`workflow blocks ${quality.workflowBlocks}  completion blocks ${quality.completionBlocks}`);

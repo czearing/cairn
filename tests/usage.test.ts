@@ -28,9 +28,22 @@ test("usage telemetry is off without an explicit local opt-in", () => {
 });
 
 test("usage events store measurements without user content", async () => {
-  const { recordTelemetry: recordUsage, telemetrySummary: usageSummary } =
+  const {
+    beginTelemetryRun,
+    finishTelemetryRun,
+    promptFingerprint,
+    recordTelemetry: recordUsage,
+    telemetrySummary: usageSummary,
+  } =
     await import("../src/core/telemetry");
   const marker = `private-${randomUUID()}`;
+  const run = { host: "copilot" as const, sessionId: marker, turnSeq: 3 };
+  beginTelemetryRun({
+    ...run,
+    promptHash: promptFingerprint("usage-test"),
+    catalogVersion: "catalog",
+    injectedChars: 9372,
+  });
   expect(recordUsage({
     kind: "context",
     source: "user-prompt",
@@ -57,6 +70,14 @@ test("usage events store measurements without user content", async () => {
     version: "1.2.3",
     runClass: "human",
   })).toBe(true);
+  finishTelemetryRun({
+    ...run,
+    completed: true,
+    workflowPassed: true,
+    skillUsed: false,
+    brainUsed: false,
+    stopNudges: 0,
+  });
 
   const db = new Database(process.env.CAIRN_DB_PATH!);
   const schema = db.query("PRAGMA table_info(telemetry_events)").all() as { name: string }[];
@@ -69,8 +90,8 @@ test("usage events store measurements without user content", async () => {
   expect(typeof stored.session_hash).toBe("string");
   expect(String(stored.session_hash)).toHaveLength(16);
   expect(stored.estimated_tokens).toBe(2343);
-  expect(stored.release_fingerprint).toBe("release-human");
-  expect(stored.version).toBe("1.2.3");
+  expect(String(stored.release_fingerprint)).toHaveLength(24);
+  expect(stored.version).toBe(releaseVersion);
   expect(stored.run_class).toBe("human");
   const summary = usageSummary(1);
   expect(summary.groups.some((group) =>
@@ -84,35 +105,77 @@ test("usage events store measurements without user content", async () => {
   });
   expect(summary.impact.measuredTokensPerPrompt).toBeGreaterThan(0);
   expect(summary.impact).toMatchObject({
-    releaseFingerprint: "release-human",
-    version: "1.2.3",
+    releaseFingerprint: expect.stringMatching(/^[0-9a-f]{24}$/),
+    version: releaseVersion,
     runClass: "human",
   });
 });
 
 test("usage summaries exclude benchmark traffic and older releases", async () => {
-  const { recordTelemetry: recordUsage, telemetrySummary: usageSummary } =
+  const {
+    beginTelemetryRun,
+    finishTelemetryRun,
+    promptFingerprint,
+    releaseFingerprint,
+    recordTelemetry: recordUsage,
+    telemetrySummary: usageSummary,
+  } =
     await import("../src/core/telemetry");
   const key = randomUUID();
+  const old = { host: "copilot" as const, sessionId: `${key}-old`, turnSeq: 1 };
+  const current = { host: "copilot" as const, sessionId: `${key}-current`, turnSeq: 1 };
+  const oldPrompt = promptFingerprint("old");
+  const currentPrompt = promptFingerprint("current");
+  beginTelemetryRun({ ...old, promptHash: oldPrompt, catalogVersion: "catalog", injectedChars: 400 });
   recordUsage({
     kind: "context", source: "user-prompt", contextChars: 400,
-    eventKey: `${key}-old`, releaseFingerprint: "old", version: "1", runClass: "human",
+    eventKey: `${key}-old`, ...old,
   });
-
-  recordUsage({
-    kind: "context", source: "user-prompt", contextChars: 800,
-    eventKey: `${key}-current`, releaseFingerprint: "current", version: "2", runClass: "human",
+  finishTelemetryRun({
+    ...old, completed: true, workflowPassed: true, skillUsed: false, brainUsed: false, stopNudges: 0,
+  });
+  beginTelemetryRun({
+    ...current, promptHash: currentPrompt, catalogVersion: "catalog", injectedChars: 800,
     ts: Date.now() + 1,
   });
   recordUsage({
-    kind: "context", source: "user-prompt", contextChars: 4000,
-    eventKey: `${key}-benchmark`, releaseFingerprint: "current", version: "2",
-    runClass: "benchmark", ts: Date.now() + 2,
+    kind: "context", source: "user-prompt", contextChars: 800,
+    eventKey: `${key}-current`, ...current, ts: Date.now() + 1,
   });
+  finishTelemetryRun({
+    ...current, completed: true, workflowPassed: true, skillUsed: false, brainUsed: false, stopNudges: 0,
+  });
+  const previousBenchmark = process.env.CAIRN_PROMPT_BENCHMARK_SESSION;
+  process.env.CAIRN_PROMPT_BENCHMARK_SESSION = `${key}-benchmark`;
+  try {
+    const benchmark = { host: "copilot" as const, sessionId: `${key}-benchmark`, turnSeq: 1 };
+    beginTelemetryRun({
+      ...benchmark,
+      promptHash: currentPrompt,
+      catalogVersion: "catalog",
+      injectedChars: 4000,
+      ts: Date.now() + 2,
+    });
+    recordUsage({
+      kind: "context", source: "user-prompt", contextChars: 4000,
+      eventKey: `${key}-benchmark`, ...benchmark, ts: Date.now() + 2,
+    });
+    finishTelemetryRun({
+      ...benchmark,
+      completed: true,
+      workflowPassed: true,
+      skillUsed: false,
+      brainUsed: false,
+      stopNudges: 0,
+    });
+  } finally {
+    if (previousBenchmark == null) delete process.env.CAIRN_PROMPT_BENCHMARK_SESSION;
+    else process.env.CAIRN_PROMPT_BENCHMARK_SESSION = previousBenchmark;
+  }
   const summary = usageSummary(1);
   expect(summary.impact).toMatchObject({
-    releaseFingerprint: "current",
-    version: "2",
+    releaseFingerprint: releaseFingerprint(currentPrompt, "catalog"),
+    version: releaseVersion,
     runClass: "human",
     currentPromptTokens: 200,
   });

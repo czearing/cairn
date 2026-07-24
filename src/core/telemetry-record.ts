@@ -1,34 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { releaseFingerprint, releaseVersion, telemetryRunClass } from "./release";
+import { runtimeIdentityFromResult, type RuntimeIdentity } from "./runtime-identity";
 import { resultIds, structuredResult } from "./telemetry-entities";
 import { telemetryDatabase } from "./telemetry-schema";
 import { estimatedTokens, jsonChars, positive } from "./telemetry-size";
-
-export type TelemetryHost = "copilot" | "claude";
-export interface TelemetryRunIdentity {
-  host: TelemetryHost;
-  sessionId: string;
-  turnSeq: number;
-}
-export interface TelemetryEvent {
-  kind: "context" | "tool_transport";
-  source: string;
-  host?: string;
-  sessionId?: string;
-  turnSeq?: number;
-  toolName?: string;
-  inputChars?: number;
-  outputChars?: number;
-  contextChars?: number;
-  durationMs?: number;
-  itemCount?: number;
-  success?: boolean;
-  eventKey?: string;
-  releaseFingerprint?: string;
-  version?: string;
-  runClass?: "human" | "benchmark" | "worker";
-  ts?: number;
-}
+import { toolEntityObservations } from "./telemetry-tool-entities";
+import type { TelemetryEvent, TelemetryRunIdentity } from "./telemetry-record-types";
+export type { TelemetryEvent, TelemetryHost, TelemetryRunIdentity } from "./telemetry-record-types";
 
 const hash = (value: string, length = 16): string =>
   value ? createHash("sha256").update(value).digest("hex").slice(0, length) : "";
@@ -90,6 +68,11 @@ export function beginTelemetryRun(input: TelemetryRunIdentity & {
     const release = releaseFingerprint(input.promptHash, input.catalogVersion);
     const version = process.env.CAIRN_RELEASE || releaseVersion;
     const runClass = telemetryRunClass();
+    const startedTs = input.ts ?? Date.now();
+    db.query(`UPDATE telemetry_runs SET ended_ts=?,status='superseded'
+      WHERE host=? AND session_hash=? AND status='active' AND run_id!=?`).run(
+      startedTs, input.host, sessionHash(input.sessionId), runId,
+    );
     db.query(`INSERT INTO telemetry_runs(
       run_id,host,session_hash,turn_seq,release_fingerprint,version,model,prompt_hash,
       catalog_version,run_class,started_ts,injected_tokens
@@ -100,10 +83,13 @@ export function beginTelemetryRun(input: TelemetryRunIdentity & {
       injected_tokens=excluded.injected_tokens`).run(
       runId, input.host, sessionHash(input.sessionId), input.turnSeq,
       release, version, input.model || "", input.promptHash,
-      input.catalogVersion, runClass, input.ts ?? Date.now(),
+      input.catalogVersion, runClass, startedTs,
       estimatedTokens(input.injectedChars),
     );
-    db.query(`UPDATE telemetry_events SET run_id=?,release_fingerprint=?,version=?,run_class=?
+    db.query(`UPDATE telemetry_events SET run_id=?,
+      release_fingerprint=CASE WHEN runtime_release_fingerprint!='' OR release_fingerprint='unknown'
+        THEN release_fingerprint ELSE ? END,
+      version=CASE WHEN runtime_version!='' OR version='unknown' THEN version ELSE ? END,run_class=?
       WHERE host=? AND session_hash=? AND turn_seq=?`).run(
       runId, release, version, runClass, input.host, sessionHash(input.sessionId), input.turnSeq,
     );
@@ -117,6 +103,8 @@ function recordEvent(input: TelemetryRunIdentity & {
   eventKey: string; kind: string; toolName?: string; entityType?: string;
   entityId?: string; success?: boolean; inputTokens?: number;
   outputTokens?: number; durationMs?: number; itemCount?: number; value?: number;
+  runtime?: RuntimeIdentity | null; runtimeExpected?: boolean;
+  rank?: number; scoreBucket?: number;
 }): void {
   try {
     const db = telemetryDatabase();
@@ -129,17 +117,24 @@ function recordEvent(input: TelemetryRunIdentity & {
     const suffix = `${input.kind}\0${input.entityType || ""}\0${input.entityId || ""}`;
     const inputTokens = input.inputTokens || 0;
     const outputTokens = input.outputTokens || 0;
+    const eventRelease = input.runtime?.releaseFingerprint
+      || (input.runtimeExpected ? "unknown" : run?.release_fingerprint || "");
+    const eventVersion = input.runtime?.version
+      || (input.runtimeExpected ? "unknown" : run?.version || "");
     db.query(`INSERT OR IGNORE INTO telemetry_events(
       event_key,run_id,host,session_hash,turn_seq,ts,kind,source,tool_name,
       entity_type,entity_hash,success,input_tokens,output_tokens,estimated_tokens,
-      duration_ms,item_count,value,release_fingerprint,version,run_class
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      duration_ms,item_count,value,release_fingerprint,version,run_class,
+      runtime_release_fingerprint,runtime_version,rank,score_bucket
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       hash(`${input.eventKey}\0${suffix}`, 64), runId, input.host,
       sessionHash(input.sessionId), input.turnSeq, Date.now(), input.kind, "host",
       input.toolName || "", input.entityType || "", entityHash(input.entityId || ""),
       Number(input.success !== false), inputTokens, outputTokens, inputTokens + outputTokens,
       input.durationMs || 0, input.itemCount || 0, input.value || 0,
-      run?.release_fingerprint || "", run?.version || "", run?.run_class || telemetryRunClass(),
+      eventRelease, eventVersion, run?.run_class || telemetryRunClass(),
+      input.runtime?.releaseFingerprint || "", input.runtime?.version || "",
+      input.rank || 0, input.scoreBucket || 0,
     );
   } catch { /* telemetry never blocks the host */ }
 }
@@ -151,26 +146,17 @@ export function recordTelemetryTool(input: TelemetryRunIdentity & {
   const tool = input.toolName.toLowerCase().replace(/^.*(?:__|-)(?=(?:brain|skill)_)/, "");
   const parsed = structuredResult(input.result);
   const ids = resultIds(parsed);
+  const runtime = runtimeIdentityFromResult(input.result);
   recordEvent({
     ...input, kind: "tool", toolName: tool,
     inputTokens: estimatedTokens(jsonChars(input.args)),
-    outputTokens: estimatedTokens(jsonChars(input.result)),
+    outputTokens: estimatedTokens(jsonChars(parsed)),
     itemCount: Array.isArray(parsed) ? parsed.length : ids.length,
+    runtime,
+    runtimeExpected: /^(brain|skill)_/.test(tool),
   });
-  const entities = (kind: string, type: string, values: string[]) =>
-    [...new Set(values.filter(Boolean))].forEach((id) =>
-      recordEvent({ ...input, kind, toolName: tool, entityType: type, entityId: id }));
-  const strings = (value: unknown): string[] =>
-    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-  if (tool === "skill_select") entities("skill_selected", "skill", strings(input.args.ids));
-  if (tool === "skill_create") entities("skill_created", "skill", ids);
-  if (tool === "skill_edit") entities("skill_edited", "skill", [String(input.args.id || "")]);
-  if (tool === "brain_search") entities("brain_returned", "brain", ids);
-  if (tool === "brain_create") entities("brain_created", "brain", ids);
-  if (tool === "brain_mutate") entities("brain_mutated", "brain", [String(input.args.id || "")]);
-  if (tool === "brain_delete") entities("brain_deleted", "brain", [String(input.args.id || "")]);
-  if (tool === "brain_create" || tool === "brain_mutate") {
-    entities("brain_referenced", "brain", strings(input.args.edges));
+  for (const observation of toolEntityObservations(tool, input.args, parsed, ids)) {
+    recordEvent({ ...input, toolName: tool, ...observation });
   }
   try {
     telemetryDatabase()?.query(`UPDATE telemetry_runs SET tool_calls=tool_calls+1,

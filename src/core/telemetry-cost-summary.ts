@@ -30,10 +30,11 @@ export function telemetryCostSummary(days = 7): {
 } {
   const sinceTs = Date.now() - Math.max(1, days) * 86_400_000;
   const db = telemetryDatabase();
-  const latest = db?.query(`SELECT release_fingerprint AS releaseFingerprint,version
-    FROM telemetry_events WHERE ts>=? AND run_class='human'
-      AND kind='context' AND source='user-prompt'
-    ORDER BY ts DESC LIMIT 1`).get(sinceTs) as {
+  const latest = db?.query(`SELECT e.release_fingerprint AS releaseFingerprint,e.version
+    FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
+    WHERE e.ts>=? AND e.run_class='human' AND r.status='completed'
+      AND e.kind='context' AND e.source='user-prompt'
+    ORDER BY e.ts DESC LIMIT 1`).get(sinceTs) as {
       releaseFingerprint: string; version: string;
     } | null;
   const releaseFingerprint = latest?.releaseFingerprint || process.env.CAIRN_RELEASE || releaseVersion;
@@ -55,7 +56,9 @@ export function telemetryCostSummary(days = 7): {
     };
   }
   const where = `ts>=? AND run_class='human' AND release_fingerprint=?
-    AND kind IN ('context','tool')`;
+    AND kind IN ('context','tool') AND run_id IN (
+      SELECT run_id FROM telemetry_runs WHERE status='completed'
+    )`;
   const totalMetrics = db.query(`SELECT ${metrics} FROM telemetry_events WHERE ${where}`)
     .get(sinceTs, releaseFingerprint) as Omit<
       TelemetryGroup, "eventKind" | "source" | "host" | "toolName"
@@ -77,10 +80,14 @@ export function telemetryCostSummary(days = 7): {
     COUNT(*) AS prompts,COALESCE((
       SELECT estimated_tokens FROM telemetry_events WHERE ts>=?
         AND run_class='human' AND release_fingerprint=?
-        AND kind='context' AND source='user-prompt' ORDER BY ts DESC LIMIT 1
+        AND kind='context' AND source='user-prompt' AND run_id IN (
+          SELECT run_id FROM telemetry_runs WHERE status='completed'
+        ) ORDER BY ts DESC LIMIT 1
     ),0) AS currentPromptTokens
     FROM telemetry_events WHERE ts>=? AND run_class='human' AND release_fingerprint=?
-      AND kind='context' AND source='user-prompt'`)
+      AND kind='context' AND source='user-prompt' AND run_id IN (
+        SELECT run_id FROM telemetry_runs WHERE status='completed'
+      )`)
     .get(sinceTs, releaseFingerprint, sinceTs, releaseFingerprint) as {
       prompts: number; currentPromptTokens: number;
     };

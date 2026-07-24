@@ -11,6 +11,10 @@ const columns = (db: Db, table: string): Set<string> =>
   new Set((db.query(`PRAGMA table_info(${table})`).all() as { name: string }[])
     .map((column) => column.name));
 const literal = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+const ensureColumn = (db: Db, table: string, definition: string): void => {
+  const name = definition.split(/\s+/, 1)[0]!;
+  if (!columns(db, table).has(name)) db.run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+};
 
 function migrate(db: Db): void {
   if (hasTable(db, "quality_runs")) {
@@ -108,7 +112,9 @@ export function telemetryDatabase(): Db | null {
       estimated_tokens INTEGER NOT NULL DEFAULT 0,duration_ms INTEGER NOT NULL DEFAULT 0,
       item_count INTEGER NOT NULL DEFAULT 0,value INTEGER NOT NULL DEFAULT 0,
       release_fingerprint TEXT NOT NULL DEFAULT '',version TEXT NOT NULL DEFAULT '',
-      run_class TEXT NOT NULL DEFAULT 'human'
+      run_class TEXT NOT NULL DEFAULT 'human',runtime_release_fingerprint TEXT NOT NULL DEFAULT '',
+      runtime_version TEXT NOT NULL DEFAULT '',rank INTEGER NOT NULL DEFAULT 0,
+      score_bucket INTEGER NOT NULL DEFAULT 0
     )`);
     db.run(`CREATE TABLE IF NOT EXISTS telemetry_evaluations (
       evaluation_id TEXT PRIMARY KEY,baseline_prompt_hash TEXT NOT NULL,
@@ -118,6 +124,10 @@ export function telemetryDatabase(): Db | null {
       quality_checks INTEGER NOT NULL,compared_runs INTEGER NOT NULL,
       created_ts INTEGER NOT NULL
     )`);
+    ensureColumn(db, "telemetry_events", "runtime_release_fingerprint TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "telemetry_events", "runtime_version TEXT NOT NULL DEFAULT ''");
+    ensureColumn(db, "telemetry_events", "rank INTEGER NOT NULL DEFAULT 0");
+    ensureColumn(db, "telemetry_events", "score_bucket INTEGER NOT NULL DEFAULT 0");
     migrate(db);
     db.run(`UPDATE telemetry_events SET version=${literal(releaseVersion)} WHERE version=''`);
   db.query("UPDATE telemetry_events SET run_class=? WHERE run_class=''")
@@ -126,12 +136,17 @@ export function telemetryDatabase(): Db | null {
     run_id=COALESCE((SELECT r.run_id FROM telemetry_runs r
       WHERE r.host=telemetry_events.host AND r.session_hash=telemetry_events.session_hash
         AND r.turn_seq=telemetry_events.turn_seq LIMIT 1),run_id),
-    release_fingerprint=COALESCE((SELECT r.release_fingerprint FROM telemetry_runs r
+    release_fingerprint=CASE WHEN runtime_release_fingerprint!='' OR release_fingerprint='unknown'
+      THEN release_fingerprint ELSE COALESCE((
+        SELECT r.release_fingerprint FROM telemetry_runs r
+        WHERE r.host=telemetry_events.host AND r.session_hash=telemetry_events.session_hash
+          AND r.turn_seq=telemetry_events.turn_seq LIMIT 1
+      ),release_fingerprint) END,
+    version=CASE WHEN runtime_version!='' OR version='unknown' THEN version ELSE COALESCE((
+      SELECT r.version FROM telemetry_runs r
       WHERE r.host=telemetry_events.host AND r.session_hash=telemetry_events.session_hash
-        AND r.turn_seq=telemetry_events.turn_seq LIMIT 1),release_fingerprint),
-    version=COALESCE((SELECT r.version FROM telemetry_runs r
-      WHERE r.host=telemetry_events.host AND r.session_hash=telemetry_events.session_hash
-        AND r.turn_seq=telemetry_events.turn_seq LIMIT 1),version),
+        AND r.turn_seq=telemetry_events.turn_seq LIMIT 1
+    ),version) END,
     run_class=COALESCE((SELECT r.run_class FROM telemetry_runs r
       WHERE r.host=telemetry_events.host AND r.session_hash=telemetry_events.session_hash
         AND r.turn_seq=telemetry_events.turn_seq LIMIT 1),run_class)

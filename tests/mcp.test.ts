@@ -29,12 +29,24 @@ const call = (name: string, args: Record<string, unknown>) =>
   client.callTool({ name, arguments: args }) as Promise<{
     isError?: boolean;
     content: { text: string }[];
+    _meta?: {
+      cairn?: { version?: string; releaseFingerprint?: string; pid?: number };
+    };
   }>;
 const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.text);
 
 test("exposes only the agent-owned brain and skill tools", async () => {
   const { tools } = await client.listTools();
   expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_edit", "skill_search", "skill_select"]);
+});
+
+test("tool results expose content-free MCP runtime identity", async () => {
+  const result = await call("brain_delete", { id: `missing-${randomUUID()}` });
+  expect(result._meta?.cairn).toMatchObject({
+    version: releaseVersion,
+    releaseFingerprint: expect.stringMatching(/^[0-9a-f]{24}$/),
+    pid: expect.any(Number),
+  });
 });
 
 test("brain_create returns a compact acknowledgement while preserving the thought", async () => {

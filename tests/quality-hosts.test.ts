@@ -29,7 +29,15 @@ test("Copilot hooks correlate returned brain nodes with later use and completion
       sessionId, toolCallId: `call-${++toolCall}`, toolName, toolArgs, toolResult,
     }, env);
   expect(post("cairn-skill_select", { ids: ["software"] }, { ok: true }).status).toBe(0);
-  expect(post("cairn-brain_search", { query: "fix" }, [{ id: "node-a", text: "answer" }]).status).toBe(0);
+  expect(post("cairn-brain_search", { query: "fix" }, {
+    _meta: {
+      cairn: {
+        version: "runtime-version",
+        releaseFingerprint: "runtime-fingerprint",
+      },
+    },
+    content: [{ text: JSON.stringify([{ id: "node-a", text: "answer", score: 0.9 }]) }],
+  }).status).toBe(0);
   expect(post("cairn-brain_mutate", { id: "node-a", answer: "done" }, { id: "node-a" }).status).toBe(0);
   expect(invoke(hook, ["agent-stop"], { sessionId }, env).status).toBe(0);
 
@@ -37,10 +45,19 @@ test("Copilot hooks correlate returned brain nodes with later use and completion
   const runId = telemetryRunId({ host: "copilot", sessionId, turnSeq: 1 });
   const run = db.query("SELECT completed,workflow_passed FROM telemetry_runs WHERE run_id=?").get(runId);
   const kinds = db.query("SELECT kind FROM telemetry_events WHERE run_id=? ORDER BY kind").all(runId);
+  const runtime = db.query(`SELECT version,release_fingerprint,
+      runtime_version,runtime_release_fingerprint
+    FROM telemetry_events WHERE run_id=? AND kind='tool' AND tool_name='brain_search'`).get(runId);
   db.close();
   expect(run).toEqual({ completed: 1, workflow_passed: 1 });
   expect(kinds).toContainEqual({ kind: "brain_returned" });
   expect(kinds).toContainEqual({ kind: "brain_mutated" });
+  expect(runtime).toEqual({
+    version: "runtime-version",
+    release_fingerprint: "runtime-fingerprint",
+    runtime_version: "runtime-version",
+    runtime_release_fingerprint: "runtime-fingerprint",
+  });
 });
 
 test("Copilot can retain the completion continuation as an explicit baseline", () => {

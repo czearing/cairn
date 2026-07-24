@@ -41,7 +41,8 @@ export function printTelemetryReport(days: number, json = false): void {
     `workflow ${quality.workflowRate}%  tool failures ${quality.toolFailures}`);
   line(`brain search-to-use ${quality.searchToUseRate}% ` +
     `(${quality.usedReturnedNodes}/${quality.returnedNodes})  ` +
-    `top-3 use ${quality.top3UseRate}%  max used rank ${quality.maxUsedRank}  ` +
+    `top-3 use ${quality.top3UseRate}% (${quality.top3UsedReturnedNodes}/` +
+    `${quality.rankedUsedReturnedNodes} ranked)  max used rank ${quality.maxUsedRank}  ` +
     `lowest used score ~${quality.minimumUsedScorePercent}%`);
   line(
     `cross-session reuse ${quality.crossSessionReuseRate}% ` +

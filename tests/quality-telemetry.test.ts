@@ -119,6 +119,7 @@ test("quality telemetry derives reuse and release deltas without storing content
     workflowBlocks: 1,
     completionBlocks: 1,
     searchToUseRate: 33.3,
+    rankedUsedReturnedNodes: 2,
     top3UseRate: 50,
     maxUsedRank: 5,
     minimumUsedScorePercent: 85,

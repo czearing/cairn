@@ -80,6 +80,8 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     SELECT (SELECT COUNT(*) FROM returned) AS returnedNodes,
       (SELECT COUNT(*) FROM returned r JOIN used u USING(run_id,entity_hash)) AS usedReturnedNodes,
       (SELECT COUNT(*) FROM returned r JOIN used u USING(run_id,entity_hash)
+        WHERE r.rank>0) AS rankedUsedReturnedNodes,
+      (SELECT COUNT(*) FROM returned r JOIN used u USING(run_id,entity_hash)
         WHERE r.rank BETWEEN 1 AND 3) AS top3UsedReturnedNodes,
       COALESCE((SELECT MAX(r.rank) FROM returned r JOIN used u USING(run_id,entity_hash)),0) AS maxUsedRank,
       COALESCE((SELECT MIN(NULLIF(r.scoreBucket,0))*5
@@ -87,7 +89,8 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
       (SELECT COUNT(*) FROM observed) AS observedNodes,
       (SELECT COUNT(*) FROM observed WHERE sessions>1) AS crossSessionNodes`)
     .get(sinceTs, sinceTs, sinceTs) as {
-      returnedNodes: number; usedReturnedNodes: number; top3UsedReturnedNodes: number;
+      returnedNodes: number; usedReturnedNodes: number; rankedUsedReturnedNodes: number;
+      top3UsedReturnedNodes: number;
       maxUsedRank: number; minimumUsedScorePercent: number;
       observedNodes: number; crossSessionNodes: number;
     };
@@ -154,7 +157,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     workflowRate: percent(runs.workflow, runs.closed),
     toolFailures: runs.failures,
     searchToUseRate: percent(brain.usedReturnedNodes, brain.returnedNodes),
-    top3UseRate: percent(brain.top3UsedReturnedNodes, brain.usedReturnedNodes),
+    top3UseRate: percent(brain.top3UsedReturnedNodes, brain.rankedUsedReturnedNodes),
     ...brain,
     crossSessionReuseRate: percent(brain.crossSessionNodes, brain.observedNodes),
     ...runtime,
@@ -178,7 +181,7 @@ function empty(): QualitySummary {
     runs: 0, activeRuns: 0, abandonedRuns: 0, supersededRuns: 0, oldestActiveMinutes: 0,
     completedRate: 0, workflowRate: 0, toolFailures: 0,
     visibilityFailures: 0, workflowBlocks: 0, completionBlocks: 0,
-    searchToUseRate: 0, returnedNodes: 0, usedReturnedNodes: 0,
+    searchToUseRate: 0, returnedNodes: 0, usedReturnedNodes: 0, rankedUsedReturnedNodes: 0,
     top3UsedReturnedNodes: 0, top3UseRate: 0, maxUsedRank: 0, minimumUsedScorePercent: 0,
     crossSessionReuseRate: 0, crossSessionNodes: 0, observedNodes: 0,
     runtimeObservedCalls: 0, runtimeUnknownCalls: 0, runtimeMismatchCalls: 0,

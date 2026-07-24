@@ -31,6 +31,7 @@ export interface QualitySummary {
   searchToUseRate: number;
   returnedNodes: number;
   usedReturnedNodes: number;
+  rankedUsedReturnedNodes: number;
   top3UsedReturnedNodes: number;
   top3UseRate: number;
   maxUsedRank: number;

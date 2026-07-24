@@ -1,7 +1,12 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  McpServer,
+  type RegisteredTool,
+  type ToolCallback,
+} from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { config } from "../core/config";
 import { jsonChars, recordTelemetry } from "../core/telemetry";
 import { structuredResult } from "../core/telemetry-entities";
@@ -11,7 +16,7 @@ import {
   releaseVersion,
   telemetryRunClass,
 } from "../core/release";
-import { runtimeMetadata } from "../core/runtime-identity";
+import { installedReleaseVersion, runtimeMetadata } from "../core/runtime-identity";
 import { formatSkillCatalog, skillCatalogSnapshot } from "../skill/catalog";
 import type { Neuron } from "../core/neurons.types";
 import { searchPayload } from "./search-payload";
@@ -28,37 +33,61 @@ import {
 // The bridge that lets an agent read and write the brain. THREE tools, each a thin wrapper
 // over src/core (the same code the tests cover). Run: bun src/mcp/server.ts
 //
-// Tool handlers resolve their logic through dynamic imports. Hosts that deliberately run this file with
-// Bun hot reload can refresh handler behavior, while Copilot uses a stable stdio process because it starts
-// the command without a Cairn project cwd. Tool names and schemas are session-scoped in either mode.
+// Bun hot reload re-evaluates this module while the connected server remains on globalThis. Each pass
+// refreshes callbacks and schemas in place, so existing host sessions receive new behavior without
+// replacing their stdio connection.
 
-const server = new McpServer({ name: "cairn", version: "1.0.0" });
+interface HotState {
+  server?: McpServer;
+  connected?: boolean;
+  tools?: Map<string, RegisteredTool>;
+}
+const hotState = globalThis as typeof globalThis & { __cairnHotState?: HotState };
+const state = hotState.__cairnHotState ??= {};
+const server = state.server ??= new McpServer({ name: "cairn", version: "1.0.0" });
+const registeredTools = state.tools ??= new Map<string, RegisteredTool>();
+const registerTool = <Args extends z.ZodRawShape>(
+  name: string,
+  description: string,
+  schema: Args,
+  callback: ToolCallback<Args>,
+): void => {
+  const registered = registeredTools.get(name);
+  if (registered) {
+    registered.update({ description, paramsSchema: schema, callback });
+    return;
+  }
+  registeredTools.set(name, server.tool(name, description, schema, callback));
+};
 registerBenchmarkProcess();
-const releaseIdentity = (() => {
+const currentReleaseIdentity = () => {
+  const version = installedReleaseVersion(releaseVersion);
   try {
     const prompt = readFileSync(new URL("../../prompts/user-message.md", import.meta.url), "utf8").trim();
     const catalog = skillCatalogSnapshot();
     const fullPrompt = `${prompt}\n\n${formatSkillCatalog()}`;
     return {
-      releaseFingerprint: releaseFingerprint(promptFingerprint(fullPrompt), catalog.version),
-      version: releaseVersion,
+      releaseFingerprint: releaseFingerprint(promptFingerprint(fullPrompt), catalog.version, version),
+      version,
       runClass: telemetryRunClass(),
     };
   } catch {
     return {
-      releaseFingerprint: process.env.CAIRN_RELEASE || releaseVersion,
-      version: releaseVersion,
+      releaseFingerprint: version,
+      version,
       runClass: telemetryRunClass(),
     };
   }
-})();
-const metadata = runtimeMetadata({ ...releaseIdentity, pid: process.pid });
+};
+type ReleaseIdentity = ReturnType<typeof currentReleaseIdentity>;
+const releaseIdentityContext = new AsyncLocalStorage<ReleaseIdentity>();
+const activeReleaseIdentity = () => releaseIdentityContext.getStore() ?? currentReleaseIdentity();
 const json = (data: unknown) => ({
-  _meta: metadata,
+  _meta: runtimeMetadata({ ...activeReleaseIdentity(), pid: process.pid }),
   content: [{ type: "text" as const, text: JSON.stringify(data) }],
 });
 const fail = (msg: string) => ({
-  _meta: metadata,
+  _meta: runtimeMetadata({ ...activeReleaseIdentity(), pid: process.pid }),
   content: [{ type: "text" as const, text: msg }],
   isError: true,
 });
@@ -68,41 +97,44 @@ const measured = async <T>(
   run: () => Promise<T> | T,
 ): Promise<T> => {
   const started = performance.now();
-  try {
-    const result = await run();
-    const delivered = appendBenchmarkReminder(result, benchmarkReminder(toolName, input));
-    const durationMs = performance.now() - started;
-    recordTelemetry({
-      kind: "tool_transport",
-      source: "mcp",
-      toolName,
-      inputChars: jsonChars(input),
-      outputChars: jsonChars(structuredResult(delivered)),
-      durationMs,
-      success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
-      ...releaseIdentity,
-    });
-    recordBenchmarkTool({
-      toolName,
-      args: input,
-      result,
-      success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
-    });
-    return delivered;
-  } catch (error) {
-    const durationMs = performance.now() - started;
-    recordTelemetry({
-      kind: "tool_transport",
-      source: "mcp",
-      toolName,
-      inputChars: jsonChars(input),
-      durationMs,
-      success: false,
-      ...releaseIdentity,
-    });
-    recordBenchmarkTool({ toolName, args: input, result: null, success: false });
-    throw error;
-  }
+  const identity = currentReleaseIdentity();
+  return releaseIdentityContext.run(identity, async () => {
+    try {
+      const result = await run();
+      const delivered = appendBenchmarkReminder(result, benchmarkReminder(toolName, input));
+      const durationMs = performance.now() - started;
+      recordTelemetry({
+        kind: "tool_transport",
+        source: "mcp",
+        toolName,
+        inputChars: jsonChars(input),
+        outputChars: jsonChars(structuredResult(delivered)),
+        durationMs,
+        success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
+        ...identity,
+      });
+      recordBenchmarkTool({
+        toolName,
+        args: input,
+        result,
+        success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
+      });
+      return delivered;
+    } catch (error) {
+      const durationMs = performance.now() - started;
+      recordTelemetry({
+        kind: "tool_transport",
+        source: "mcp",
+        toolName,
+        inputChars: jsonChars(input),
+        durationMs,
+        success: false,
+        ...identity,
+      });
+      recordBenchmarkTool({ toolName, args: input, result: null, success: false });
+      throw error;
+    }
+  });
 };
 
 // Attach a viewer deep-link so callers can show/cite the thought in the UI.
@@ -121,7 +153,7 @@ const skillSelectionAck = (result: {
 // count cap. Set CAIRN_SEARCH_LIMIT > 0 to also impose a top-N count cap as a backstop.
 const SEARCH_LIMIT = Number(process.env.CAIRN_SEARCH_LIMIT || "0");
 
-server.tool(
+registerTool(
   "brain_search",
   "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a bounded `score` (0-1) combining semantic relevance with a small boost for links to other relevant results. Weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. A result may also carry `prior`/`next`: the adjacent question above/below it in the brain's reasoning graph, for context. Use this as much as possible to learn from previous thoughts",
   { query: z.string().describe("What you are looking for, in natural language.") },
@@ -144,7 +176,7 @@ server.tool(
 );
 
 if (process.env.CAIRN_PROMPT_BENCHMARK_SESSION) {
-  server.tool(
+  registerTool(
     "benchmark_submit",
     "Submit the exact final structured result for an isolated prompt benchmark.",
     { result: z.unknown().describe("The final structured result required by the benchmark task.") },
@@ -153,7 +185,7 @@ if (process.env.CAIRN_PROMPT_BENCHMARK_SESSION) {
   );
 }
 
-server.tool(
+registerTool(
   "brain_create",
   "Create a thought and return its id and viewer URL. Phrase it as an open question (what / how / why / which) — a yes/no question presumes its answer and cannot be split. Keep it concise, bloated text pollutes search. Link related thoughts by id so future agents can build on them",
   {
@@ -167,7 +199,7 @@ server.tool(
   })
 );
 
-server.tool(
+registerTool(
   "brain_mutate",
   "Update an existing thought by id. Provide only the fields to change. Setting `answer` marks it solved. Returns its id and viewer URL",
   {
@@ -194,7 +226,7 @@ server.tool(
   })
 );
 
-server.tool(
+registerTool(
   "brain_delete",
   "Delete a thought by id (removes it and detaches its edges from other thoughts). Use to clear duplicates or mistakes.",
   { id: z.string().describe("id of the thought to delete.") },
@@ -204,7 +236,7 @@ server.tool(
   })
 );
 
-server.tool(
+registerTool(
   "skill_select",
   "Before starting work, select every injected catalog skill you will use. Pass the exact injected catalog version so selection cannot race a catalog update. Returns exact reusable steps. Choose by title and usage description, never by wording similarity.",
   {
@@ -218,7 +250,7 @@ server.tool(
   })
 );
 
-server.tool(
+registerTool(
   "skill_search",
   "Legacy compatibility bridge. Current agents receive the catalog automatically and should call skill_select. Returns the catalog, or loads an exact id when task is `load:<id>`.",
   { task: z.string() },
@@ -228,7 +260,7 @@ server.tool(
   })
 );
 
-server.tool(
+registerTool(
   "skill_create",
   "Create a broad reusable capability only after comparing the complete catalog. The description must state the distinct situations where it should be used; never create one for a user's mood, wording, one-off state, specific bug, handoff, wait, or response.",
   {
@@ -250,7 +282,7 @@ server.tool(
 // Agent-facing DIRECT refinement. Lets the agent fix a skill's master the moment it learns a better way —
 // classically, the user says "that was wrong, do X next time" — so the correction lands in the master
 // immediately and the very next run uses it.
-server.tool(
+registerTool(
   "skill_edit",
   "Refine a selected or created skill's master prompt directly when the user corrects the method. Pass its exact id and numbered imperative steps.",
   {
@@ -267,8 +299,9 @@ server.tool(
 
 // Bind the stdio transport exactly once. This guard also keeps optional hot-reload hosts from binding a
 // second listener to the same stdin.
-const hotState = globalThis as typeof globalThis & { __cairnConnected?: boolean };
-if (!hotState.__cairnConnected) {
-  hotState.__cairnConnected = true;
+if (!state.connected) {
+  state.connected = true;
   await server.connect(new StdioServerTransport());
+} else {
+  // RegisteredTool.update() emits tools/list_changed for each refreshed definition.
 }

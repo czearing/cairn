@@ -36,8 +36,9 @@ export const promptFingerprint = (value: string): string => hash(value);
 export const releaseFingerprint = (
   promptHash: string,
   catalogVersion: string,
+  version = process.env.CAIRN_RELEASE || sourceRevision || packageVersion,
 ): string => hash(
-  `${process.env.CAIRN_RELEASE || sourceRevision || packageVersion}\0${promptHash}\0${catalogVersion}`,
+  `${version}\0${promptHash}\0${catalogVersion}`,
 );
 
 export type TelemetryRunClass = "human" | "benchmark" | "worker";

@@ -51,10 +51,10 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   const cfg: McpConfig = existsSync(path) ? JSON.parse(await readFile(path, "utf8")) : {};
   const servers = cfg.mcpServers ?? (cfg.mcpServers = {});
   const env = libsqlEnv();
-  // Copilot launches the stdio server without a Cairn cwd. Bun --hot then repeatedly warns that imported
-  // files are outside its project and can enter a reload-warning loop. Tool schemas are session-scoped
-  // anyway, so use one stable process and let /restart pick up source or schema changes.
-  const wantArgs = [SERVER];
+  // Keep the stdio connection stable while Bun reloads changed Cairn modules in place. An explicit cwd
+  // makes the repository the hot-reload project, avoiding the out-of-project warning loop seen when
+  // Copilot launched an absolute entrypoint from an unrelated workspace.
+  const wantArgs = ["--hot", `--cwd=${ROOT}`, SERVER];
   const existing = servers[mcpName()] as {
     command?: string;
     args?: string[];

@@ -270,8 +270,8 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   } else {
     line(`${sym.ok} ${c.green(c.bold("Done."))} ${c.bold("Restart Claude Code")} (or reconnect the cairn MCP server), then ask it something. It will recall and grow the brain.`);
     if (copilotTargeted()) {
-      line(c.dim("   Existing Copilot CLI sessions: run `/restart` once to reload Cairn without losing the session."));
-      line(c.dim("   New sessions load it automatically; Harness workers rotate on their next task."));
+      line(c.dim("   Existing Copilot CLI sessions reload changed Cairn source automatically."));
+      line(c.dim("   Harness workers rotate on their next task when the installed release changes."));
     }
     line(c.dim("   (New terminal? The `cairn` command is ready. Try `cairn doctor`.)"));
   }

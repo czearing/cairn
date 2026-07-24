@@ -98,7 +98,8 @@ test("install registers cairn in Copilot and injects only through userPromptSubm
   expect(mcp.mcpServers.cairn.tools).toEqual(["*"]); // required to enable the tools
   expect(mcp.mcpServers.cairn.deferTools).toBe("never"); // required tools survive context compaction
   expect(JSON.stringify(mcp.mcpServers.cairn.args)).toContain("server.ts");
-  expect(mcp.mcpServers.cairn.args).not.toContain("--hot"); // stable stdio; Copilot has no Cairn cwd
+  expect(mcp.mcpServers.cairn.args).toContain("--hot"); // reloads source without replacing the stdio process
+  expect(mcp.mcpServers.cairn.args).toContain(`--cwd=${root}`); // prevents out-of-project reload loops
   const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
   expect(hook.cairnRelease).toBe(releaseVersion); // lets persistent Harness workers detect Cairn upgrades
   expect(hook.hooks.sessionStart).toBeUndefined(); // avoids a duplicate workflow on the first turn

@@ -123,7 +123,7 @@ const SEARCH_LIMIT = Number(process.env.CAIRN_SEARCH_LIMIT || "0");
 
 server.tool(
   "brain_search",
-  "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a `score` (0-1 cosine relevance): weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. A result may also carry `prior`/`next`: the adjacent question above/below it in the brain's reasoning graph, for context. Use this as much as possible to learn from previous thoughts",
+  "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a bounded `score` (0-1) combining semantic relevance with a small boost for links to other relevant results. Weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. A result may also carry `prior`/`next`: the adjacent question above/below it in the brain's reasoning graph, for context. Use this as much as possible to learn from previous thoughts",
   { query: z.string().describe("What you are looking for, in natural language.") },
   async ({ query }) => measured("brain_search", { query }, async () => {
     const { search } = await import("../core/search");

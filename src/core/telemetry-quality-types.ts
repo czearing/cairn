@@ -1,5 +1,6 @@
 export interface QualityMetrics {
   release: string;
+  workload: "small" | "medium" | "large";
   runs: number;
   completedRate: number;
   workflowRate: number;
@@ -11,6 +12,7 @@ export interface QualityMetrics {
 export interface ReleaseComparison {
   host: string;
   model: string;
+  workload: QualityMetrics["workload"];
   current: QualityMetrics;
   baseline: QualityMetrics | null;
   delta: QualitySummary["delta"];

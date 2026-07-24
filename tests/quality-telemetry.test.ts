@@ -137,7 +137,11 @@ test("quality telemetry derives reuse and release deltas without storing content
   expect(summary.baseline).not.toBeNull();
   expect(summary.delta).not.toBeNull();
   expect(summary.comparisons).toHaveLength(1);
-  expect(summary.comparisons[0]?.host).toBe("copilot");
+  expect(summary.comparisons[0]).toMatchObject({
+    host: "copilot",
+    model: "unknown",
+    workload: "small",
+  });
 
   const db = new Database(process.env.CAIRN_DB_PATH!, { readonly: true });
   const columns = db.query("PRAGMA table_info(telemetry_events)").all() as { name: string }[];
@@ -248,6 +252,7 @@ test("host tool telemetry correlates content-free MCP transport identity", () =>
       catalogVersion: "catalog",
       injectedChars: 100,
     });
+
     recordTelemetry({
       kind: "tool_transport",
       source: "mcp",
@@ -259,6 +264,7 @@ test("host tool telemetry correlates content-free MCP transport identity", () =>
       releaseFingerprint: "runtime-fingerprint",
       version: "runtime-version",
     });
+
     recordQualityTool({
       ...run,
       eventKey: "host-event",
@@ -289,4 +295,44 @@ test("host tool telemetry correlates content-free MCP transport identity", () =>
         runtime_version: "",
       },
     ]);
+});
+
+test("release comparisons do not mix workload sizes", () => {
+  qualityDatabase()?.run("DELETE FROM telemetry_events");
+  qualityDatabase()?.run("DELETE FROM telemetry_runs");
+  const small = identity("workload-small");
+  const large = identity("workload-large");
+  beginQualityRun({
+    ...small,
+    promptHash: promptFingerprint("small"),
+    catalogVersion: "catalog",
+    injectedChars: 100,
+  });
+  finishQualityRun({
+    ...small,
+    completed: true,
+    workflowPassed: true,
+    skillUsed: true,
+    brainUsed: true,
+    stopNudges: 0,
+  });
+  beginQualityRun({
+    ...large,
+    promptHash: promptFingerprint("large"),
+    catalogVersion: "catalog",
+    injectedChars: 100,
+  });
+  qualityDatabase()?.query("UPDATE telemetry_runs SET tool_calls=51 WHERE run_id=?")
+    .run(telemetryRunId(large));
+  finishQualityRun({
+    ...large,
+    completed: true,
+    workflowPassed: true,
+    skillUsed: true,
+    brainUsed: true,
+    stopNudges: 0,
+  });
+  const comparisons = qualitySummary(1).comparisons;
+  expect(comparisons.map((item) => item.workload).sort()).toEqual(["large", "small"]);
+  expect(comparisons.every((item) => item.baseline === null && item.delta === null)).toBe(true);
 });

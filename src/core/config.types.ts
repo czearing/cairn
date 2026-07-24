@@ -41,6 +41,8 @@ export interface CairnConfig {
    * `max(relevanceThreshold, topScore * relativeFloor)`, trimming the weak tail relative to the best
    * match without ever capping the count. A diffuse query (low top) falls back to the absolute floor. */
   relativeFloor: number;
+  /** Bounded relevance boost for results linked to other relevant results in the same response. */
+  searchGraphBoost: number;
   /** When true, a match also pulls in its descendant subtree. Off = return only direct matches. */
   expandSubtree: boolean;
   /** Use the exact metric index at or above this many vectors. Smaller brains use a linear scan. */

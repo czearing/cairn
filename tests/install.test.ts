@@ -8,6 +8,8 @@ import { checks } from "../src/doctor";
 import { verify } from "../src/verify";
 import { releaseVersion } from "../src/core/release";
 
+const root = join(import.meta.dir, "..");
+
 // The installer is proven the same way the user sees it: drive `install` against a throwaway
 // settings file (MCP + verify stubbed for hermeticity) and assert idempotent, non-destructive
 // hook merging — plus a real end-to-end create -> recall round-trip via verify().
@@ -94,6 +96,7 @@ test("install registers cairn in Copilot and injects only through userPromptSubm
   expect(mcp.mcpServers.cairn).toBeDefined();
   expect(mcp.mcpServers.cairn.type).toBe("local"); // Copilot CLI's local-stdio type
   expect(mcp.mcpServers.cairn.tools).toEqual(["*"]); // required to enable the tools
+  expect(mcp.mcpServers.cairn.deferTools).toBe("never"); // required tools survive context compaction
   expect(JSON.stringify(mcp.mcpServers.cairn.args)).toContain("server.ts");
   expect(mcp.mcpServers.cairn.args).not.toContain("--hot"); // stable stdio; Copilot has no Cairn cwd
   const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
@@ -153,6 +156,22 @@ test("install Copilot setup is idempotent and preserves other MCP servers", asyn
   expect(mcp.mcpServers.other).toBeDefined(); // user's own server untouched
   expect(mcp.mcpServers.cairn).toBeDefined();
   expect(Object.keys(mcp.mcpServers).length).toBe(2); // no duplicate cairn on the second run
+});
+
+test("install upgrades an existing Cairn server to eager tool loading", async () => {
+  writeFileSync(copilotMcp, JSON.stringify({
+    mcpServers: {
+      cairn: {
+        type: "local",
+        command: Bun.which("bun"),
+        args: [join(root, "src", "mcp", "server.ts")],
+        env: {},
+        tools: ["*"],
+      },
+    },
+  }));
+  await install();
+  expect(JSON.parse(readFileSync(copilotMcp, "utf8")).mcpServers.cairn.deferTools).toBe("never");
 });
 
 test("CAIRN_SKIP_COPILOT skips the Copilot phase entirely", async () => {

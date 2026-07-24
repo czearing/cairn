@@ -55,17 +55,24 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   // files are outside its project and can enter a reload-warning loop. Tool schemas are session-scoped
   // anyway, so use one stable process and let /restart pick up source or schema changes.
   const wantArgs = [SERVER];
-  const existing = servers[mcpName()] as { command?: string; args?: string[]; env?: Record<string, string> } | undefined;
+  const existing = servers[mcpName()] as {
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    deferTools?: string;
+  } | undefined;
   if (existing) {
     const cur = existing.env ?? (existing.env = {});
     const envMissing = Object.entries(env).filter(([k, v]) => cur[k] !== v);
     const argsStale = JSON.stringify(existing.args) !== JSON.stringify(wantArgs);
     const cmdStale = existing.command !== bunExe();
-    if (!envMissing.length && !argsStale && !cmdStale) return "already";
+    const deferStale = existing.deferTools !== "never";
+    if (!envMissing.length && !argsStale && !cmdStale && !deferStale) return "already";
     if (dryRun) return "would-add";
     for (const [k, v] of envMissing) cur[k] = v;
     if (argsStale) existing.args = wantArgs;
     if (cmdStale) existing.command = bunExe();
+    if (deferStale) existing.deferTools = "never";
     await writeFile(path, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
     return "added";
   }
@@ -75,6 +82,7 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
     command: bunExe(),
     args: wantArgs,
     env, // CAIRN_LIBSQL_* if set (cloud sync), else {} — CAIRN_DB_PATH is still inherited from the env
+    deferTools: "never", // Cairn is required every turn; deferred schemas can disappear after compaction
     tools: ["*"], // required by Copilot CLI to enable the server's tools
   };
   mkdirSync(dirname(path), { recursive: true });

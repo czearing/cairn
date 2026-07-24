@@ -60,7 +60,7 @@ export function printTelemetryReport(days: number, json = false): void {
       : ""));
   const deltas = quality.comparisons.filter((item) => item.delta);
   for (const item of deltas) {
-    line(`${item.host}${item.model ? `/${item.model}` : ""} release delta  ` +
+    line(`${item.host}/${item.model}/${item.workload} release delta  ` +
       `tokens/run ${signed(item.delta!.tokensPerRun)}  ` +
       `completion ${signed(item.delta!.completedRate)}pp  ` +
       `workflow ${signed(item.delta!.workflowRate)}pp  ` +

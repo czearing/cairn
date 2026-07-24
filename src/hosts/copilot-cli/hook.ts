@@ -181,6 +181,7 @@ interface Payload {
   eventId: string;
   toolCallId: string;
   durationMs: number;
+  model: string;
 }
 function parsePayload(raw: string): Payload {
   try {
@@ -202,9 +203,10 @@ function parsePayload(raw: string): Payload {
       eventId: j.timestamp == null ? "" : String(j.timestamp),
       toolCallId: (j.toolCallId as string) ?? (j.tool_call_id as string) ?? (firstCall?.id as string) ?? "",
       durationMs: Number(j.durationMs ?? j.duration_ms ?? 0),
+      model: String(j.model ?? ""),
     };
   } catch {
-    return { sessionId: "", agentId: "", agentName: "", toolName: "", args: {}, result: undefined, transcriptPath: "", prompt: "", eventId: "", toolCallId: "", durationMs: 0 };
+    return { sessionId: "", agentId: "", agentName: "", toolName: "", args: {}, result: undefined, transcriptPath: "", prompt: "", eventId: "", toolCallId: "", durationMs: 0, model: "" };
   }
 }
 
@@ -260,7 +262,7 @@ async function main(): Promise<void> {
   const rawPayload = safeJson(raw);
   let hostEventKey = "";
   try { hostEventKey = recordHostEvent("copilot", mode ?? "", raw, rawPayload); } catch { /* event indexing never blocks the host */ }
-  const { sessionId, agentId, agentName, toolName, args, result, transcriptPath, prompt, eventId, toolCallId, durationMs } = parsePayload(raw);
+  const { sessionId, agentId, agentName, toolName, args, result, transcriptPath, prompt, eventId, toolCallId, durationMs, model } = parsePayload(raw);
   let turnSeq = 0;
   try { turnSeq = readLifecycle(turnScope(sessionId, agentId)).turnSeq; } catch { /* telemetry is optional */ }
   const usageSource = `${mode || "hook"}${toolName ? `:${toolName}` : ""}`;
@@ -311,7 +313,7 @@ async function main(): Promise<void> {
       const state = resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
       beginTelemetryRun({
         host: "copilot", sessionId, turnSeq: state.turnSeq, promptHash: "",
-        catalogVersion: catalogVersion(), injectedChars: 0,
+        catalogVersion: catalogVersion(), injectedChars: 0, model,
       });
       return void emit({});
     }
@@ -324,7 +326,7 @@ async function main(): Promise<void> {
       beginTelemetryRun({
         host: "copilot", sessionId, turnSeq: state.turnSeq,
         promptHash: promptFingerprint(protocol), catalogVersion: catalogVersion(),
-        injectedChars: internalContext(protocol).length,
+        injectedChars: internalContext(protocol).length, model,
       });
       return void emit(protocol ? { additionalContext: internalContext(protocol) } : {});
     }
@@ -335,7 +337,7 @@ async function main(): Promise<void> {
     beginTelemetryRun({
       host: "copilot", sessionId, turnSeq: state.turnSeq,
       promptHash: promptFingerprint(wf), catalogVersion: catalogVersion(),
-      injectedChars: internalContext(wf).length,
+      injectedChars: internalContext(wf).length, model,
     });
     emit(wf ? { additionalContext: internalContext(wf) } : {});
     return;

@@ -42,6 +42,7 @@ export const config: CairnConfig = {
   },
   relevanceThreshold: Number(process.env.CAIRN_RELEVANCE_THRESHOLD || "0.3"),
   relativeFloor: Number(process.env.CAIRN_RELATIVE_FLOOR || "0.85"), // adaptive gate: keep results >= 0.85*top score (0 = off)
+  searchGraphBoost: Number(process.env.CAIRN_SEARCH_GRAPH_BOOST || "0.1"),
   expandSubtree: process.env.CAIRN_SEARCH_EXPAND === "1", // off by default: return only direct matches
   vectorIndexThreshold: Number(process.env.CAIRN_VECTOR_INDEX_THRESHOLD || "50000"),
   maxAnswerChars: Number(process.env.CAIRN_MAX_ANSWER_CHARS || "2000"), // reject insanely verbose answers

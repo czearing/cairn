@@ -6,6 +6,7 @@ import { toNeuron, vecText, SELECT } from "./neurons";
 import { encodeVector, decodeVector } from "./vector";
 import { exactVectorCandidates } from "./vector-index";
 import { prepareVectorIndex, writeNeuronVector } from "./vector-store";
+import { rerankConnectedResults } from "./search-rerank";
 import type { Neuron, Row } from "./neurons.types";
 import type { NeuronVector, ScoredNeuron, ScoredResult } from "./search.types";
 
@@ -106,9 +107,12 @@ export async function search(query: string): Promise<ScoredResult[]> {
         const rows = db().query(`${SELECT} WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Row[];
         for (const row of rows) byId.set(row.id, toNeuron(row, graphEdges.get(row.id) ?? []));
       }
-      return indexed
-        .map((item) => ({ ...byId.get(item.id)!, score: Math.round(item.score * 1000) / 1000 }))
-        .filter((item) => item.id);
+      return rerankConnectedResults(
+        indexed
+          .map((item) => ({ ...byId.get(item.id)!, score: Math.round(item.score * 1000) / 1000 }))
+          .filter((item) => item.id),
+        config.searchGraphBoost,
+      );
     }
   }
   const scored: ScoredNeuron[] = (await vectors(qv.length)).map((entry) => ({ ...entry, sim: cosine(qv, entry.vec) }));
@@ -156,8 +160,11 @@ export async function search(query: string): Promise<ScoredResult[]> {
     }
   }
 
-  return [...included]
-    .map((id) => byId.get(id)!)
-    .sort((a, b) => b.sim - a.sim)
-    .map((s) => ({ ...s.neuron, score: Math.round(s.sim * 1000) / 1000 }));
+  return rerankConnectedResults(
+    [...included]
+      .map((id) => byId.get(id)!)
+      .sort((a, b) => b.sim - a.sim)
+      .map((s) => ({ ...s.neuron, score: Math.round(s.sim * 1000) / 1000 })),
+    config.searchGraphBoost,
+  );
 }

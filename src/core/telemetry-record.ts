@@ -83,7 +83,7 @@ export function beginTelemetryRun(input: TelemetryRunIdentity & {
       catalog_version=excluded.catalog_version,run_class=excluded.run_class,
       injected_tokens=excluded.injected_tokens`).run(
       runId, input.host, sessionHash(input.sessionId), input.turnSeq,
-      release, version, input.model || "", input.promptHash,
+      release, version, input.model?.trim() || "unknown", input.promptHash,
       input.catalogVersion, runClass, startedTs,
       estimatedTokens(input.injectedChars),
     );

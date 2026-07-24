@@ -4,9 +4,12 @@ export type { QualityMetrics, QualitySummary } from "./telemetry-quality-types";
 
 const percent = (part: number, total: number): number =>
   total > 0 ? Math.round(part * 1000 / total) / 10 : 0;
+const workloadSql = `CASE WHEN tool_calls<=10 THEN 'small'
+  WHEN tool_calls<=50 THEN 'medium' ELSE 'large' END`;
+type Workload = QualityMetrics["workload"];
 
 function releaseMetrics(
-  sinceTs: number, release: string, host: string, model: string
+  sinceTs: number, release: string, host: string, model: string, workload: Workload
 ): QualityMetrics | null {
   const db = telemetryDatabase();
   if (!db || !release) return null;
@@ -22,9 +25,9 @@ function releaseMetrics(
     ),0)),1) AS tokensPerRun
     FROM telemetry_runs r WHERE started_ts>=? AND release_fingerprint=? AND host=?
       AND run_class='human' AND status='completed'
-      AND model=?`)
-    .get(sinceTs, release, host, model) as Omit<QualityMetrics, "release"> | null;
-  return row?.runs ? { release, ...row } : null;
+      AND COALESCE(NULLIF(model,''),'unknown')=? AND ${workloadSql}=?`)
+    .get(sinceTs, release, host, model, workload) as Omit<QualityMetrics, "release" | "workload"> | null;
+  return row?.runs ? { release, workload, ...row } : null;
 }
 
 const delta = (current: QualityMetrics, baseline: QualityMetrics | null) => baseline ? {
@@ -132,19 +135,21 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
       qualityChecks: number;
       comparedRuns: number;
     } | null;
-  const dimensions = db.query(`SELECT host,model,MAX(started_ts) AS latest
+  const dimensions = db.query(`SELECT host,COALESCE(NULLIF(model,''),'unknown') AS model,
+      ${workloadSql} AS workload,MAX(started_ts) AS latest
     FROM telemetry_runs WHERE started_ts>=? AND status='completed' AND run_class='human'
-    GROUP BY host,model ORDER BY latest DESC`).all(sinceTs) as { host: string; model: string }[];
-  const comparisons = dimensions.flatMap(({ host, model }) => {
+    GROUP BY host,COALESCE(NULLIF(model,''),'unknown'),${workloadSql}
+    ORDER BY latest DESC`).all(sinceTs) as { host: string; model: string; workload: Workload }[];
+  const comparisons = dimensions.flatMap(({ host, model, workload }) => {
     const releases = db.query(`SELECT release_fingerprint AS release,MAX(started_ts) AS latest
       FROM telemetry_runs WHERE started_ts>=? AND status='completed' AND run_class='human'
-        AND host=? AND model=?
+        AND host=? AND COALESCE(NULLIF(model,''),'unknown')=? AND ${workloadSql}=?
       GROUP BY release_fingerprint ORDER BY latest DESC LIMIT 2`)
-      .all(sinceTs, host, model) as { release: string }[];
-    const current = releaseMetrics(sinceTs, releases[0]?.release || "", host, model);
+      .all(sinceTs, host, model, workload) as { release: string }[];
+    const current = releaseMetrics(sinceTs, releases[0]?.release || "", host, model, workload);
     if (!current) return [];
-    const baseline = releaseMetrics(sinceTs, releases[1]?.release || "", host, model);
-    return [{ host, model, current, baseline, delta: delta(current, baseline) }];
+    const baseline = releaseMetrics(sinceTs, releases[1]?.release || "", host, model, workload);
+    return [{ host, model, workload, current, baseline, delta: delta(current, baseline) }];
   });
   const latest = comparisons[0];
   return {

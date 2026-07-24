@@ -22,7 +22,11 @@ test("Copilot hooks correlate returned brain nodes with later use and completion
   const sessionId = `copilot-quality-${randomUUID()}`;
   const hook = join(root, "src", "hosts", "copilot-cli", "hook.ts");
   const env = { CAIRN_DB_PATH: dbPath, CAIRN_USAGE: "1", CAIRN_SKILLS: "1" };
-  expect(invoke(hook, ["user-prompt"], { sessionId, prompt: "Fix it." }, env).status).toBe(0);
+  expect(invoke(hook, ["user-prompt"], {
+    sessionId,
+    prompt: "Fix it.",
+    model: "gpt-test",
+  }, env).status).toBe(0);
   let toolCall = 0;
   const post = (toolName: string, toolArgs: object, toolResult: unknown) =>
     invoke(hook, ["post-tool"], {
@@ -43,13 +47,13 @@ test("Copilot hooks correlate returned brain nodes with later use and completion
 
   const db = new Database(dbPath, { readonly: true });
   const runId = telemetryRunId({ host: "copilot", sessionId, turnSeq: 1 });
-  const run = db.query("SELECT completed,workflow_passed FROM telemetry_runs WHERE run_id=?").get(runId);
+  const run = db.query("SELECT completed,workflow_passed,model FROM telemetry_runs WHERE run_id=?").get(runId);
   const kinds = db.query("SELECT kind FROM telemetry_events WHERE run_id=? ORDER BY kind").all(runId);
   const runtime = db.query(`SELECT version,release_fingerprint,
       runtime_version,runtime_release_fingerprint
     FROM telemetry_events WHERE run_id=? AND kind='tool' AND tool_name='brain_search'`).get(runId);
   db.close();
-  expect(run).toEqual({ completed: 1, workflow_passed: 1 });
+  expect(run).toEqual({ completed: 1, workflow_passed: 1, model: "gpt-test" });
   expect(kinds).toContainEqual({ kind: "brain_returned" });
   expect(kinds).toContainEqual({ kind: "brain_mutated" });
   expect(runtime).toEqual({

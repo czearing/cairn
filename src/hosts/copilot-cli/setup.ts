@@ -17,7 +17,7 @@ import { releaseVersion } from "../../core/release";
 
 const ROOT = resolve(import.meta.dir, "..", "..", ".."); // src/hosts/copilot-cli → repo root
 const SERVER = join(ROOT, "src", "mcp", "server.ts");
-const HOOK = join(ROOT, "src", "hosts", "copilot-cli", "hook.ts");
+const HOOK = join(ROOT, "src", "hosts", "copilot-cli", "hook-runner.ts");
 
 const mcpName = () => process.env.CAIRN_MCP_NAME || "cairn";
 const bunExe = () => Bun.which("bun") ?? "bun";

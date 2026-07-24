@@ -29,11 +29,11 @@ import { recordHostEvent } from "../../core/host-events";
 import {
   beginTelemetryRun,
   finishTelemetryRun,
-  promptFingerprint,
   recordTelemetry,
   recordTelemetryState,
   recordTelemetryTool,
-} from "../../core/telemetry";
+} from "../../core/telemetry-record";
+import { promptFingerprint } from "../../core/release";
 import { formatSkillCatalog, selectedSkillBlock, skillCatalogSnapshot, skillIdsFromTask } from "../../skill/catalog";
 import {
   claimDelegation,
@@ -245,7 +245,7 @@ function debugLog(mode: string, raw: string): void {
 }
 
 // ── Mode dispatch (only runs when executed directly, so tests can import the helpers above) ─────
-async function main(): Promise<void> {
+export async function runCopilotHook(): Promise<void> {
   // The skill learner runs the brain's own CLI headlessly (`copilot -p` / `claude -p`). When THAT is a
   // copilot subprocess it re-fires these hooks — which would inject the workflow into the learner and, worse,
   // let a legacy learner's own agentStop re-enter Cairn. The learner sets
@@ -524,7 +524,7 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  await main();
+  await runCopilotHook();
   // A timed-out stdin read leaves Bun.stdin.text()'s read handle open, which keeps this process (and any
   // host that waits for the hook to EXIT, not just for its stdout) alive until the host finally closes
   // stdin — the freeze we are guarding against. Flush our emitted JSON, then exit explicitly so the

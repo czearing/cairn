@@ -111,7 +111,7 @@ test("install registers cairn in Copilot and injects only through userPromptSubm
   expect(hook.hooks.agentStop[0].type).toBe("command"); // Stop equivalent: forces a turn
   expect(hook.hooks.subagentStart[0].type).toBe("command"); // subagent-window injection
   const blob = JSON.stringify(hook);
-  expect(blob).toContain("hook.ts");
+  expect(blob).toContain("hook-runner.ts");
   expect(blob).not.toContain("session-start");
   expect(blob).toContain("user-prompt"); // userPromptSubmitted entry carries the user-prompt mode arg
   expect(blob).toContain("pre-tool"); // preToolUse entry carries the pre-tool mode arg

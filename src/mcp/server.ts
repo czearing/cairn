@@ -4,6 +4,7 @@ import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { config } from "../core/config";
 import { jsonChars, recordTelemetry } from "../core/telemetry";
+import { structuredResult } from "../core/telemetry-entities";
 import {
   promptFingerprint,
   releaseFingerprint,
@@ -76,7 +77,7 @@ const measured = async <T>(
       source: "mcp",
       toolName,
       inputChars: jsonChars(input),
-      outputChars: jsonChars(delivered),
+      outputChars: jsonChars(structuredResult(delivered)),
       durationMs,
       success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
       ...releaseIdentity,

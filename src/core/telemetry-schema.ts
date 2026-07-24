@@ -164,6 +164,8 @@ export function telemetryDatabase(): Db | null {
     db.run(`CREATE INDEX IF NOT EXISTS telemetry_events_release
       ON telemetry_events(run_class,release_fingerprint,ts)`);
     db.run("CREATE INDEX IF NOT EXISTS telemetry_events_entity ON telemetry_events(entity_type,entity_hash,session_hash)");
+    db.run(`CREATE INDEX IF NOT EXISTS telemetry_events_transport
+      ON telemetry_events(kind,tool_name,input_chars,output_chars,success,ts)`);
   db.run("CREATE INDEX IF NOT EXISTS telemetry_evaluations_candidate ON telemetry_evaluations(candidate_prompt_hash,created_ts)");
   const cutoff = Date.now()
     - Math.max(1, Number(process.env.CAIRN_USAGE_RETENTION_DAYS || "30")) * 86_400_000;

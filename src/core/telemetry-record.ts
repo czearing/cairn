@@ -6,6 +6,7 @@ import { telemetryDatabase } from "./telemetry-schema";
 import { estimatedTokens, jsonChars, positive } from "./telemetry-size";
 import { toolEntityObservations } from "./telemetry-tool-entities";
 import type { TelemetryEvent, TelemetryRunIdentity } from "./telemetry-record-types";
+import { correlatedTransportRuntime } from "./telemetry-runtime-correlation";
 export type { TelemetryEvent, TelemetryHost, TelemetryRunIdentity } from "./telemetry-record-types";
 
 const hash = (value: string, length = 16): string =>
@@ -146,11 +147,23 @@ export function recordTelemetryTool(input: TelemetryRunIdentity & {
   const tool = input.toolName.toLowerCase().replace(/^.*(?:__|-)(?=(?:brain|skill)_)/, "");
   const parsed = structuredResult(input.result);
   const ids = resultIds(parsed);
-  const runtime = runtimeIdentityFromResult(input.result);
+  const inputChars = jsonChars(input.args);
+  const outputChars = jsonChars(parsed);
+  const runtime = runtimeIdentityFromResult(input.result) || correlatedTransportRuntime({
+    runId: telemetryRunId(input),
+    host: input.host,
+    sessionHash: sessionHash(input.sessionId),
+    turnSeq: input.turnSeq,
+    runClass: telemetryRunClass(),
+    toolName: tool,
+    inputChars,
+    outputChars,
+    success: input.success,
+  });
   recordEvent({
     ...input, kind: "tool", toolName: tool,
-    inputTokens: estimatedTokens(jsonChars(input.args)),
-    outputTokens: estimatedTokens(jsonChars(parsed)),
+    inputTokens: estimatedTokens(inputChars),
+    outputTokens: estimatedTokens(outputChars),
     itemCount: Array.isArray(parsed) ? parsed.length : ids.length,
     runtime,
     runtimeExpected: /^(brain|skill)_/.test(tool),

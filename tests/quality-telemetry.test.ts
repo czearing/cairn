@@ -3,12 +3,16 @@ import { Database } from "bun:sqlite";
 import {
   beginTelemetryRun as beginQualityRun,
   finishTelemetryRun as finishQualityRun,
+  jsonChars,
   promptFingerprint,
   recordPromptEvaluation,
+  recordTelemetry,
   recordTelemetryState,
   recordTelemetryTool as recordQualityTool,
+  telemetryRunId,
   telemetrySummary,
 } from "../src/core/telemetry";
+import { releaseVersion } from "../src/core/release";
 import { telemetryDatabase as qualityDatabase } from "../src/core/telemetry-schema";
 const qualitySummary = (days: number) => telemetrySummary(days).quality;
 
@@ -216,6 +220,7 @@ test("starting a new turn supersedes the prior active run in the same session", 
     catalogVersion: "catalog",
     injectedChars: 100,
   });
+
   beginQualityRun({
     ...first,
     turnSeq: 2,
@@ -227,5 +232,60 @@ test("starting a new turn supersedes the prior active run in the same session", 
     ORDER BY turn_seq`).all()).toEqual([
       { turn_seq: 1, status: "superseded" },
       { turn_seq: 2, status: "active" },
+    ]);
+});
+
+test("host tool telemetry correlates content-free MCP transport identity", () => {
+    qualityDatabase()?.run("DELETE FROM telemetry_events");
+    qualityDatabase()?.run("DELETE FROM telemetry_runs");
+    const run = identity("transport-correlation");
+    const args = { query: "release coherence" };
+    const result = [{ id: "node-a", text: "answer", score: 0.9 }];
+    beginQualityRun({
+      ...run,
+      promptHash: promptFingerprint("correlation"),
+      catalogVersion: "catalog",
+      injectedChars: 100,
+    });
+    recordTelemetry({
+      kind: "tool_transport",
+      source: "mcp",
+      toolName: "brain_search",
+      inputChars: jsonChars(args),
+      outputChars: jsonChars(result),
+      success: true,
+      eventKey: "transport-event",
+      releaseFingerprint: "runtime-fingerprint",
+      version: "runtime-version",
+    });
+    recordQualityTool({
+      ...run,
+      eventKey: "host-event",
+      toolName: "brain_search",
+      args,
+      result,
+      success: true,
+    });
+    const rows = qualityDatabase()?.query(`SELECT kind,run_id,version,runtime_version
+      FROM telemetry_events ORDER BY kind`).all();
+    expect(rows).toEqual([
+      {
+        kind: "brain_returned",
+        run_id: telemetryRunId(run),
+        version: releaseVersion,
+        runtime_version: "",
+      },
+      {
+        kind: "tool",
+        run_id: telemetryRunId(run),
+        version: "runtime-version",
+        runtime_version: "runtime-version",
+      },
+      {
+        kind: "tool_transport",
+        run_id: telemetryRunId(run),
+        version: "runtime-version",
+        runtime_version: "",
+      },
     ]);
 });

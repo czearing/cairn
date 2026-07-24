@@ -269,7 +269,10 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
     line(`${sym.ok} ${c.green(c.bold("Dry run complete."))} Nothing was written. Re-run without ${c.cyan("--dry-run")} to apply.`);
   } else {
     line(`${sym.ok} ${c.green(c.bold("Done."))} ${c.bold("Restart Claude Code")} (or reconnect the cairn MCP server), then ask it something. It will recall and grow the brain.`);
-    if (copilotTargeted()) line(c.dim("   GitHub Copilot CLI picks up the brain on its next session — new `copilot` sessions recall automatically."));
+    if (copilotTargeted()) {
+      line(c.dim("   Existing Copilot CLI sessions: run `/restart` once to reload Cairn without losing the session."));
+      line(c.dim("   New sessions load it automatically; Harness workers rotate on their next task."));
+    }
     line(c.dim("   (New terminal? The `cairn` command is ready. Try `cairn doctor`.)"));
   }
 }

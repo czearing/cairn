@@ -60,11 +60,31 @@ const TRIGGERS = [
     UPDATE engine_meta SET value = value + 1 WHERE key = 'vector_seq';
     DELETE FROM neuron_edges WHERE source_id = OLD.id OR target_id = OLD.id;
   END`,
+  `CREATE TRIGGER IF NOT EXISTS neurons_search_ai AFTER INSERT ON neurons BEGIN
+    UPDATE engine_meta SET value = value + 1 WHERE key = 'search_seq';
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS neurons_search_au
+    AFTER UPDATE OF text,answer,citation,embedding,embedding_model ON neurons BEGIN
+    UPDATE engine_meta SET value = value + 1 WHERE key = 'search_seq';
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS neurons_search_ad AFTER DELETE ON neurons BEGIN
+    UPDATE engine_meta SET value = value + 1 WHERE key = 'search_seq';
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS neuron_edges_search_ai AFTER INSERT ON neuron_edges BEGIN
+    UPDATE engine_meta SET value = value + 1 WHERE key = 'search_seq';
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS neuron_edges_search_au AFTER UPDATE ON neuron_edges BEGIN
+    UPDATE engine_meta SET value = value + 1 WHERE key = 'search_seq';
+  END`,
+  `CREATE TRIGGER IF NOT EXISTS neuron_edges_search_ad AFTER DELETE ON neuron_edges BEGIN
+    UPDATE engine_meta SET value = value + 1 WHERE key = 'search_seq';
+  END`,
 ];
 
 export function ensureEngineSchema(query: Query, exec: Exec): void {
   for (const sql of ENGINE_TABLES) exec(sql);
   exec("INSERT INTO engine_meta(key,value) VALUES ('vector_seq',0) ON CONFLICT(key) DO NOTHING");
+  exec("INSERT INTO engine_meta(key,value) VALUES ('search_seq',0) ON CONFLICT(key) DO NOTHING");
   exec(`INSERT OR IGNORE INTO neuron_edges(source_id,target_id,relation_type,provenance,position)
     SELECT n.id, CAST(j.value AS TEXT), 'related', 'legacy-json', CAST(j.key AS INTEGER)
     FROM neurons n, json_each(CASE WHEN json_valid(n.edges) THEN n.edges ELSE '[]' END) j

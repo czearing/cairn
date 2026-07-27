@@ -82,9 +82,10 @@ test("skillCatalog lists learned skills and hides pending skills without a maste
     description: "Use for writing haiku and short poems or revising poetry through deliberate imagery, form, sound, and compression.",
   });
   expect(cat.some((s) => s.id === "c2")).toBe(false);
-  expect(formatSkillCatalog()).toContain("c1 poetry writing");
+  expect(formatSkillCatalog()).toContain("s1 poetry writing");
+  expect(formatSkillCatalog()).not.toContain("\nc1 ");
   expect(formatSkillCatalog()).not.toContain("Use for writing haiku");
-  expect(formatSkillCatalog("full")).toContain("`c1` **poetry writing**");
+  expect(formatSkillCatalog("full")).toContain("`s1` **poetry writing**");
   expect(formatSkillCatalog("full")).toContain("Use for writing haiku");
   const first = skillCatalogSnapshot();
   expect(formatSkillCatalog()).toContain(`Catalog version: \`${first.version}\``);

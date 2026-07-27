@@ -25,7 +25,18 @@ function releaseMetrics(
     ),0)),1) AS tokensPerRun
     FROM telemetry_runs r WHERE started_ts>=? AND release_fingerprint=? AND host=?
       AND run_class='human' AND status='completed'
-      AND COALESCE(NULLIF(model,''),'unknown')=? AND ${workloadSql}=?`)
+      AND COALESCE(NULLIF(model,''),'unknown')=? AND ${workloadSql}=?
+      AND NOT EXISTS (
+        SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND e.kind='tool'
+          AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
+          AND (e.runtime_version='' OR e.runtime_version!=r.version)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND e.kind='tool_transport'
+          AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
+          AND e.version!=r.version
+      )
+      `)
     .get(sinceTs, release, host, model, workload) as Omit<QualityMetrics, "release" | "workload"> | null;
   return row?.runs ? { release, workload, ...row } : null;
 }
@@ -108,16 +119,32 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
       workflowBlocks: number; completionBlocks: number;
     };
+  const latestVersion = (db.query(`SELECT version FROM telemetry_runs
+    WHERE started_ts>=? AND run_class='human' ORDER BY started_ts DESC LIMIT 1`)
+    .get(sinceTs) as { version?: string } | null)?.version || "";
   const runtime = db.query(`SELECT
     COALESCE(SUM(CASE WHEN e.runtime_version!='' THEN 1 ELSE 0 END),0) AS runtimeObservedCalls,
     COALESCE(SUM(CASE WHEN e.runtime_version='' THEN 1 ELSE 0 END),0) AS runtimeUnknownCalls,
     COALESCE(SUM(CASE WHEN e.runtime_version!='' AND e.runtime_version!=r.version
       THEN 1 ELSE 0 END),0) AS runtimeMismatchCalls
     FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
-    WHERE e.ts>=? AND r.run_class='human' AND r.status='completed' AND e.kind='tool'
-      AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')`).get(sinceTs) as {
+    WHERE e.ts>=? AND r.version=? AND r.run_class='human' AND r.status='completed' AND e.kind='tool'
+      AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')`).get(sinceTs, latestVersion) as {
         runtimeObservedCalls: number; runtimeUnknownCalls: number; runtimeMismatchCalls: number;
       };
+  const coherence = db.query(`SELECT
+    COUNT(*) AS completedRuns,
+    COALESCE(SUM(CASE WHEN EXISTS (
+      SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND (
+        (e.kind='tool' AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
+          AND (e.runtime_version='' OR e.runtime_version!=r.version))
+        OR (e.kind='tool_transport' AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
+          AND e.version!=r.version)
+      )
+    ) THEN 1 ELSE 0 END),0) AS mixedRuntimeRuns
+    FROM telemetry_runs r WHERE r.started_ts>=? AND r.version=?
+      AND r.run_class='human' AND r.status='completed'`)
+    .get(sinceTs, latestVersion) as { completedRuns: number; mixedRuntimeRuns: number };
   const promptEvaluationCounts = db.query(`SELECT COUNT(*) AS total,
     COALESCE(SUM(accepted),0) AS accepted FROM telemetry_evaluations WHERE created_ts>=?`)
     .get(sinceTs) as { total: number; accepted: number };
@@ -166,6 +193,8 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     ...brain,
     crossSessionReuseRate: percent(brain.crossSessionNodes, brain.observedNodes),
     ...runtime,
+    coherentRuns: coherence.completedRuns - coherence.mixedRuntimeRuns,
+    mixedRuntimeRuns: coherence.mixedRuntimeRuns,
     ...skills,
     skillEditRate: percent(skills.editedSkills, skills.selectedSkills),
     promptEvaluations: promptEvaluationCounts.total,
@@ -190,6 +219,7 @@ function empty(): QualitySummary {
     top3UsedReturnedNodes: 0, top3UseRate: 0, maxUsedRank: 0, minimumUsedScorePercent: 0,
     crossSessionReuseRate: 0, crossSessionNodes: 0, observedNodes: 0,
     runtimeObservedCalls: 0, runtimeUnknownCalls: 0, runtimeMismatchCalls: 0,
+    coherentRuns: 0, mixedRuntimeRuns: 0,
     selectedSkills: 0, editedSkills: 0, skillEditRate: 0, comparisons: [],
     promptEvaluations: 0, acceptedPromptEvaluations: 0, latestPromptEvaluation: null,
     current: null, baseline: null, delta: null,

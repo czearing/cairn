@@ -7,13 +7,13 @@
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { writeFileSync, rmSync, mkdirSync, readFileSync } from "node:fs";
-import { embedInProcess, sidecarPort } from "./embed";
+import { embedInProcess, sidecarPort, STARTFILE } from "./embed";
 import { embedModel } from "./embed";
 
 process.env.CAIRN_EMBED_NO_SERVER = "1"; // our own embed calls must stay in-process (never recurse into a server)
 
 const LOCKFILE = join(homedir(), ".cairn", "embed-server.json");
-const IDLE_MS = Number(process.env.CAIRN_EMBED_SERVER_IDLE_MS || "120000"); // self-exit after 2 min idle
+const IDLE_MS = Number(process.env.CAIRN_EMBED_SERVER_IDLE_MS || "1800000"); // self-exit after 30 min idle
 
 // Singleton guard: if a SAME-MODEL server is already alive (its lockfile port answers), don't start a second
 // one. A server running a DIFFERENT model is NOT deferred to; this server takes over so a model change can't
@@ -61,6 +61,7 @@ const server = Bun.serve({
 
 try { mkdirSync(dirname(LOCKFILE), { recursive: true }); } catch { /* exists */ }
 writeFileSync(LOCKFILE, JSON.stringify({ port: server.port, pid: process.pid, model: embedModel() }));
+try { rmSync(STARTFILE, { force: true }); } catch { /* absent */ }
 resetIdle();
 console.error(`[cairn] embed server warm on 127.0.0.1:${server.port}, idle-exit in ${Math.round(IDLE_MS / 1000)}s`);
 

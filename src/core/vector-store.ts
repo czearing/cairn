@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { getLoadablePath } from "sqlite-vec";
 import { db } from "./db";
 
 interface IndexMeta {
@@ -7,14 +6,6 @@ interface IndexMeta {
   dimensions: number;
   tableName: string;
   sourceSeq: number;
-}
-
-let extensionLoaded = false;
-
-function loadExtension(): void {
-  if (extensionLoaded) return;
-  db().loadExtension(getLoadablePath());
-  extensionLoaded = true;
 }
 
 const safeTableName = (model: string, dimensions: number): string =>
@@ -34,7 +25,6 @@ function meta(): IndexMeta | null {
 }
 
 function createTable(tableName: string, dimensions: number): void {
-  loadExtension();
   db().run(`CREATE VIRTUAL TABLE IF NOT EXISTS "${tableName}" USING vec0(
     id TEXT PRIMARY KEY,
     embedding float[${dimensions}] distance_metric=cosine
@@ -62,17 +52,42 @@ function rebuild(model: string, dimensions: number, tableName: string): void {
   });
 }
 
+function hasCompleteCompatibleCoverage(
+  model: string,
+  dimensions: number,
+  tableName: string,
+): boolean {
+  try {
+    const compatible = (db().query(`SELECT COUNT(*) AS count FROM neurons
+      WHERE embedding_model = ? AND length(embedding) = ?`)
+      .get(model, dimensions * 4) as { count: number }).count;
+    const indexed = (db().query(`SELECT COUNT(*) AS count FROM "${tableName}"`)
+      .get() as { count: number }).count;
+    return indexed === compatible;
+  } catch {
+    return false;
+  }
+}
+
 export function prepareVectorIndex(model: string, dimensions: number): string {
   const tableName = safeTableName(model, dimensions);
   const existing = meta();
+  const sourceSeq = currentSeq();
   if (
     !existing
     || existing.model !== model
     || existing.dimensions !== dimensions
     || existing.tableName !== tableName
-    || existing.sourceSeq !== currentSeq()
+    || existing.sourceSeq !== sourceSeq
   ) rebuild(model, dimensions, tableName);
   return tableName;
+}
+
+export function repairVectorIndexCoverage(model: string, dimensions: number): boolean {
+  const tableName = prepareVectorIndex(model, dimensions);
+  if (hasCompleteCompatibleCoverage(model, dimensions, tableName)) return false;
+  rebuild(model, dimensions, tableName);
+  return true;
 }
 
 export function prepareCurrentVectorIndex(): IndexMeta | null {

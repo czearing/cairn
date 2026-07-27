@@ -14,9 +14,13 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { libsqlEnv } from "../../libsql-env";
 import { releaseVersion } from "../../core/release";
+import {
+  buildMcpBundle,
+  mcpBundle,
+  mcpRuntimeEnv,
+} from "../../mcp/bundle";
 
 const ROOT = resolve(import.meta.dir, "..", "..", ".."); // src/hosts/copilot-cli → repo root
-const SERVER = join(ROOT, "src", "mcp", "server.ts");
 const HOOK = join(ROOT, "src", "hosts", "copilot-cli", "hook-runner.ts");
 
 const mcpName = () => process.env.CAIRN_MCP_NAME || "cairn";
@@ -50,11 +54,9 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   const path = copilotMcpPath();
   const cfg: McpConfig = existsSync(path) ? JSON.parse(await readFile(path, "utf8")) : {};
   const servers = cfg.mcpServers ?? (cfg.mcpServers = {});
-  const env = libsqlEnv();
-  // Keep the stdio connection stable while Bun reloads changed Cairn modules in place. An explicit cwd
-  // makes the repository the hot-reload project, avoiding the out-of-project warning loop seen when
-  // Copilot launched an absolute entrypoint from an unrelated workspace.
-  const wantArgs = ["--hot", `--cwd=${ROOT}`, SERVER];
+  if (!dryRun) await buildMcpBundle();
+  const env = { ...libsqlEnv(), ...mcpRuntimeEnv() };
+  const wantArgs = ["--smol", mcpBundle];
   const existing = servers[mcpName()] as {
     command?: string;
     args?: string[];
@@ -97,7 +99,7 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
 //                         model. Do not also inject at sessionStart: both events fire on the first turn.
 //   sessionStart        → workflow fallback only on Copilot versions older than v1.0.66, where
 //                         userPromptSubmitted output is not delivered to the model.
-//   preToolUse          → gate brain_create and prepend the Cairn protocol to general-purpose Task prompts.
+//   preToolUse          → gate premature side effects, gate brain_create structure, and prepare Task prompts.
 //   postToolUse         → entry-format/orchestrate + per-tool reminders after a brain_* or Task call; records
 //                         skill selection for delegation.
 //   agentStop           → the Stop equivalent: decision:"block" re-runs the turn (turn-reminder when brain
@@ -133,7 +135,7 @@ function hookConfig(): object {
   };
   const hooks: Record<string, unknown> = {
     userPromptSubmitted: [cmd("user-prompt")],
-    preToolUse: [cmd("pre-tool", "(?:.*brain_create|task)")],
+    preToolUse: [cmd("pre-tool")],
     postToolUse: [cmd("post-tool")],
     agentStop: [cmd("agent-stop")],
     subagentStop: [cmd("subagent-stop")],

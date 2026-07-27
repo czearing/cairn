@@ -95,6 +95,18 @@ export function changeToken(): string {
   return `${_writeEpoch}:${dv}`;
 }
 
+/** Search-cache token that moves only when searchable brain content or graph edges change. Unlike
+ * PRAGMA data_version it ignores telemetry, host-event, and maintenance writes in the same database. */
+export function searchChangeToken(): string {
+  try {
+    const row = db().query("SELECT value FROM engine_meta WHERE key='search_seq'")
+      .get() as { value?: number } | undefined;
+    return String(row?.value ?? 0);
+  } catch {
+    return changeToken();
+  }
+}
+
 // Safety net (learned the hard way): tests wipe the table in beforeEach. They are isolated onto a
 // temp DB by tests/setup.ts — but ONLY if bunfig.toml's preload loads, which requires `bun test`
 // to run from the repo root. Run it from elsewhere and the preload is skipped, so the real brain

@@ -6,9 +6,11 @@ import {
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { config } from "../core/config";
-import { jsonChars, recordTelemetry } from "../core/telemetry";
+import { recordTelemetry } from "../core/telemetry-record";
+import { jsonChars } from "../core/telemetry-size";
 import { structuredResult } from "../core/telemetry-entities";
 import {
   promptFingerprint,
@@ -17,18 +19,10 @@ import {
   telemetryRunClass,
 } from "../core/release";
 import { installedReleaseVersion, runtimeMetadata } from "../core/runtime-identity";
+import { warmEngineServer } from "../core/engine-client";
 import { formatSkillCatalog, skillCatalogSnapshot } from "../skill/catalog";
 import type { Neuron } from "../core/neurons.types";
 import { searchPayload } from "./search-payload";
-import {
-  recordBenchmarkTool,
-  registerBenchmarkProcess,
-  submitBenchmarkResult,
-} from "../prompt-eval/benchmark-record";
-import {
-  appendBenchmarkReminder,
-  benchmarkReminder,
-} from "../prompt-eval/reminder-profile";
 
 // The bridge that lets an agent read and write the brain. THREE tools, each a thin wrapper
 // over src/core (the same code the tests cover). Run: bun src/mcp/server.ts
@@ -41,17 +35,43 @@ interface HotState {
   server?: McpServer;
   connected?: boolean;
   tools?: Map<string, RegisteredTool>;
+  toolSchemas?: Map<string, { chars: number; fingerprint: string }>;
+  idleGc?: ReturnType<typeof setTimeout>;
 }
 const hotState = globalThis as typeof globalThis & { __cairnHotState?: HotState };
 const state = hotState.__cairnHotState ??= {};
 const server = state.server ??= new McpServer({ name: "cairn", version: "1.0.0" });
 const registeredTools = state.tools ??= new Map<string, RegisteredTool>();
+const toolSchemas = state.toolSchemas ??= new Map<string, { chars: number; fingerprint: string }>();
+const scheduleIdleGc = (): void => {
+  if (state.idleGc) clearTimeout(state.idleGc);
+  state.idleGc = setTimeout(() => {
+    Bun.gc(true);
+    state.idleGc = undefined;
+  }, Number(process.env.CAIRN_MCP_IDLE_GC_MS || "1000"));
+  state.idleGc.unref();
+};
+const benchmark = process.env.CAIRN_PROMPT_BENCHMARK_SESSION
+  ? {
+      ...await import("../prompt-eval/benchmark-record"),
+      ...await import("../prompt-eval/reminder-profile"),
+    }
+  : null;
 const registerTool = <Args extends z.ZodRawShape>(
   name: string,
   description: string,
   schema: Args,
   callback: ToolCallback<Args>,
 ): void => {
+  const definition = JSON.stringify({
+    name,
+    description,
+    inputSchema: z.toJSONSchema(z.object(schema)),
+  });
+  toolSchemas.set(name, {
+    chars: definition.length,
+    fingerprint: promptFingerprint(definition),
+  });
   const registered = registeredTools.get(name);
   if (registered) {
     registered.update({ description, paramsSchema: schema, callback });
@@ -59,11 +79,28 @@ const registerTool = <Args extends z.ZodRawShape>(
   }
   registeredTools.set(name, server.tool(name, description, schema, callback));
 };
-registerBenchmarkProcess();
+benchmark?.registerBenchmarkProcess();
+const warmSearch = async (): Promise<void> => {
+  try {
+    const { warmSearchEngine } = await import("../core/search");
+    await warmSearchEngine();
+  } catch (error) {
+    console.error(`[cairn] search warmup failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+const warmEngine = async (): Promise<void> => {
+  try {
+    if (await warmEngineServer()) return;
+  } catch (error) {
+    console.error(`[cairn] engine warmup failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  await warmSearch();
+};
 const currentReleaseIdentity = () => {
   const version = installedReleaseVersion(releaseVersion);
   try {
-    const prompt = readFileSync(new URL("../../prompts/user-message.md", import.meta.url), "utf8").trim();
+    const root = process.env.CAIRN_ROOT || resolve(import.meta.dir, "..", "..");
+    const prompt = readFileSync(join(root, "prompts", "user-message.md"), "utf8").trim();
     const catalog = skillCatalogSnapshot();
     const fullPrompt = `${prompt}\n\n${formatSkillCatalog()}`;
     return {
@@ -101,7 +138,9 @@ const measured = async <T>(
   return releaseIdentityContext.run(identity, async () => {
     try {
       const result = await run();
-      const delivered = appendBenchmarkReminder(result, benchmarkReminder(toolName, input));
+      const delivered = benchmark
+        ? benchmark.appendBenchmarkReminder(result, benchmark.benchmarkReminder(toolName, input))
+        : result;
       const durationMs = performance.now() - started;
       recordTelemetry({
         kind: "tool_transport",
@@ -113,7 +152,7 @@ const measured = async <T>(
         success: !(result && typeof result === "object" && (result as { isError?: unknown }).isError === true),
         ...identity,
       });
-      recordBenchmarkTool({
+      benchmark?.recordBenchmarkTool({
         toolName,
         args: input,
         result,
@@ -131,8 +170,10 @@ const measured = async <T>(
         success: false,
         ...identity,
       });
-      recordBenchmarkTool({ toolName, args: input, result: null, success: false });
+      benchmark?.recordBenchmarkTool({ toolName, args: input, result: null, success: false });
       throw error;
+    } finally {
+      scheduleIdleGc();
     }
   });
 };
@@ -155,13 +196,13 @@ const SEARCH_LIMIT = Number(process.env.CAIRN_SEARCH_LIMIT || "0");
 
 registerTool(
   "brain_search",
-  "Returns the most relevant thoughts, ranked most-relevant-first (top matches only — refine the query for a different slice). Each result has a bounded `score` (0-1) combining semantic relevance with a small boost for links to other relevant results. Weight high-scoring thoughts heavily and treat low-scoring ones as weak, tangential context. A result may also carry `prior`/`next`: the adjacent question above/below it in the brain's reasoning graph, for context. Use this as much as possible to learn from previous thoughts",
+  "Search thoughts by semantic relevance. Results are score-ordered and may include adjacent `prior`/`next` question context.",
   { query: z.string().describe("What you are looking for, in natural language.") },
   async ({ query }) => measured("brain_search", { query }, async () => {
-    const { search } = await import("../core/search");
+    const { engineSearch } = await import("../core/engine-client");
     const { refsByIds } = await import("../core/neurons");
     // Relevance-ranked search (cosine, most-relevant-first).
-    const hits = await search(query);
+    const hits = await engineSearch(query, activeReleaseIdentity());
     const capped = SEARCH_LIMIT > 0 ? hits.slice(0, SEARCH_LIMIT) : hits;
     // Resolve each hit's adjacent decomposition questions (prior = parent, next = child) to short text:
     // a compact, useful use of edges (where a recalled thought sits in the reasoning flow) instead of
@@ -175,33 +216,41 @@ registerTool(
   })
 );
 
-if (process.env.CAIRN_PROMPT_BENCHMARK_SESSION) {
+if (benchmark) {
   registerTool(
     "benchmark_submit",
     "Submit the exact final structured result for an isolated prompt benchmark.",
     { result: z.unknown().describe("The final structured result required by the benchmark task.") },
     async ({ result }) => measured("benchmark_submit", { result }, () =>
-      json(submitBenchmarkResult(result)))
+      json(benchmark.submitBenchmarkResult(result)))
   );
 }
 
 registerTool(
   "brain_create",
-  "Create a thought and return its id and viewer URL. Phrase it as an open question (what / how / why / which) — a yes/no question presumes its answer and cannot be split. Keep it concise, bloated text pollutes search. Link related thoughts by id so future agents can build on them",
+  "Create a thought and return its id and viewer URL. Any near-duplicate candidates are advisory; creation always succeeds independently.",
   {
     text: z.string().describe("An open question starting with what / how / why / which. Never a yes/no question."),
     edges: z.array(z.string()).optional().describe("ids of related thoughts to link to."),
   },
   async ({ text, edges }) => measured("brain_create", { text, edges }, async () => {
     if (!text.trim()) return fail("text is required");
-    const { create } = await import("../core/neurons");
-    return json(mutationAck(await create(text, edges ?? [])));
+    const { engineCreate } = await import("../core/engine-client");
+    const { neuron, nearDuplicates } = await engineCreate(
+      text,
+      edges ?? [],
+      activeReleaseIdentity(),
+    );
+    return json({
+      ...mutationAck(neuron),
+      ...(nearDuplicates.length ? { nearDuplicates } : {}),
+    });
   })
 );
 
 registerTool(
   "brain_mutate",
-  "Update an existing thought by id. Provide only the fields to change. Setting `answer` marks it solved. Returns its id and viewer URL",
+  "Update an existing thought by id and return its id and viewer URL.",
   {
     id: z.string().describe("id of the thought to update."),
     text: z.string().optional().describe("new question text."),
@@ -217,8 +266,12 @@ registerTool(
     { id, text, answer, citation, edges },
     async () => {
     try {
-      const { mutate } = await import("../core/neurons");
-      const n = await mutate(id, { text, answer, citation, edges });
+      const { engineMutate } = await import("../core/engine-client");
+      const n = await engineMutate(
+        id,
+        { text, answer, citation, edges },
+        activeReleaseIdentity(),
+      );
       return n ? json(mutationAck(n)) : fail(`no thought with id ${id}`);
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
@@ -228,19 +281,19 @@ registerTool(
 
 registerTool(
   "brain_delete",
-  "Delete a thought by id (removes it and detaches its edges from other thoughts). Use to clear duplicates or mistakes.",
+  "Delete a thought by id and detach its graph edges.",
   { id: z.string().describe("id of the thought to delete.") },
   async ({ id }) => measured("brain_delete", { id }, async () => {
-    const { remove } = await import("../core/neurons");
-    return json({ deleted: remove(id) });
+    const { engineDelete } = await import("../core/engine-client");
+    return json({ deleted: await engineDelete(id, activeReleaseIdentity()) });
   })
 );
 
 registerTool(
   "skill_select",
-  "Before starting work, select every injected catalog skill you will use. Pass the exact injected catalog version so selection cannot race a catalog update. Returns exact reusable steps. Choose by title and usage description, never by wording similarity.",
+  "Select skills from the injected catalog and return their reusable steps. Accepts version-scoped aliases or durable ids.",
   {
-    ids: z.array(z.string()).min(1).max(4).describe("Exact skill ids from the auto-injected catalog."),
+    ids: z.array(z.string()).min(1).max(4).describe("Skill aliases from the injected catalog, or durable ids."),
     catalogVersion: z.string().optional().describe("Exact Catalog version value from the injected catalog."),
   },
   async ({ ids, catalogVersion }) => measured("skill_select", { ids, catalogVersion }, async () => {
@@ -262,7 +315,7 @@ registerTool(
 
 registerTool(
   "skill_create",
-  "Create a broad reusable capability only after comparing the complete catalog. The description must state the distinct situations where it should be used; never create one for a user's mood, wording, one-off state, specific bug, handoff, wait, or response.",
+  "Create a reusable capability not covered by the current catalog.",
   {
     title: z.string().describe("Broad capability title, 1-4 words."),
     description: z.string().describe("When this reusable capability should be used, including its method and boundaries."),
@@ -284,7 +337,7 @@ registerTool(
 // immediately and the very next run uses it.
 registerTool(
   "skill_edit",
-  "Refine a selected or created skill's master prompt directly when the user corrects the method. Pass its exact id and numbered imperative steps.",
+  "Refine a selected or created skill's reusable steps.",
   {
     id: z.string().describe("The exact selected or created skill id."),
     master: z.string().describe("The rewritten master: numbered imperative steps only, no rationale/preamble."),
@@ -297,11 +350,26 @@ registerTool(
   })
 );
 
+const schemaIdentity = currentReleaseIdentity();
+for (const [toolName, schema] of toolSchemas) {
+  recordTelemetry({
+    kind: "tool_schema",
+    source: "mcp",
+    toolName,
+    contextChars: schema.chars,
+    itemCount: 1,
+    eventKey: `tool-schema:${schemaIdentity.releaseFingerprint}:${toolName}:${schema.fingerprint}`,
+    ...schemaIdentity,
+  });
+}
+
 // Bind the stdio transport exactly once. This guard also keeps optional hot-reload hosts from binding a
 // second listener to the same stdin.
 if (!state.connected) {
+  await warmEngine();
   state.connected = true;
   await server.connect(new StdioServerTransport());
 } else {
+  void warmEngine();
   // RegisteredTool.update() emits tools/list_changed for each refreshed definition.
 }

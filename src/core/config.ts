@@ -44,7 +44,9 @@ export const config: CairnConfig = {
   relativeFloor: Number(process.env.CAIRN_RELATIVE_FLOOR || "0.85"), // adaptive gate: keep results >= 0.85*top score (0 = off)
   searchGraphBoost: Number(process.env.CAIRN_SEARCH_GRAPH_BOOST || "0.1"),
   expandSubtree: process.env.CAIRN_SEARCH_EXPAND === "1", // off by default: return only direct matches
-  vectorIndexThreshold: Number(process.env.CAIRN_VECTOR_INDEX_THRESHOLD || "50000"),
+  vectorIndexThreshold: Number(process.env.CAIRN_VECTOR_INDEX_THRESHOLD || "10000"),
+  duplicateThreshold: Number(process.env.CAIRN_DUPLICATE_THRESHOLD || "0.92"),
+  duplicateCandidateLimit: Number(process.env.CAIRN_DUPLICATE_CANDIDATES || "3"),
   maxAnswerChars: Number(process.env.CAIRN_MAX_ANSWER_CHARS || "2000"), // reject insanely verbose answers
 
   // The skill layer is ON by default now that the agent-driven learn loop is proven. Turn it OFF per-machine

@@ -1,5 +1,12 @@
-import { all, create, mutate, remove, link, unlink } from "../core/neurons";
-import { search } from "../core/search";
+import { all } from "../core/neurons";
+import {
+  engineCreate,
+  engineDelete,
+  engineLink,
+  engineMutate,
+  engineSearch,
+  engineUnlink,
+} from "../core/engine-client";
 import { config } from "../core/config";
 
 // Optional read/write viewer. Run with `cairn ui`. Serves the brain (+ semantic search) and a
@@ -16,7 +23,9 @@ async function handler(req: Request): Promise<Response> {
   const m = req.method;
 
   if (pathname === "/api/neurons" && m === "GET") return Response.json({ neurons: all() });
-  if (pathname === "/api/search") return Response.json({ results: await search(searchParams.get("q") || "") });
+  if (pathname === "/api/search") return Response.json({
+    results: await engineSearch(searchParams.get("q") || ""),
+  });
   // Skill store viewer: what skills exist, their master prompts, and the score of each run over time.
   if (pathname === "/api/skills" && m === "GET") {
     const { listSkills } = await import("../skill/store");
@@ -62,17 +71,19 @@ async function handler(req: Request): Promise<Response> {
 
   if (pathname === "/api/neurons" && m === "POST") {
     const b = (await req.json()) as Body;
-    return b.text?.trim() ? Response.json({ neuron: await create(b.text) }) : bad("text is required");
+    return b.text?.trim()
+      ? Response.json({ neuron: (await engineCreate(b.text)).neuron })
+      : bad("text is required");
   }
 
   const node = pathname.match(/^\/api\/neurons\/(.+)$/);
   if (node) {
     const id = decodeURIComponent(node[1]!);
-    if (m === "DELETE") return Response.json({ deleted: remove(id) });
+    if (m === "DELETE") return Response.json({ deleted: await engineDelete(id) });
     if (m === "PATCH") {
       const b = (await req.json()) as Body;
       try {
-        const n = await mutate(id, { text: b.text, answer: b.answer, citation: b.citation });
+        const n = await engineMutate(id, { text: b.text, answer: b.answer, citation: b.citation });
         return n ? Response.json({ neuron: n }) : bad("not found", 404);
       } catch (e) {
         return bad(e instanceof Error ? e.message : String(e));
@@ -80,8 +91,16 @@ async function handler(req: Request): Promise<Response> {
     }
   }
 
-  if (pathname === "/api/link" && m === "POST") { const b = (await req.json()) as Body; if (b.a && b.b) link(b.a, b.b); return Response.json({ ok: true }); }
-  if (pathname === "/api/unlink" && m === "POST") { const b = (await req.json()) as Body; if (b.a && b.b) unlink(b.a, b.b); return Response.json({ ok: true }); }
+  if (pathname === "/api/link" && m === "POST") {
+    const b = (await req.json()) as Body;
+    if (b.a && b.b) await engineLink(b.a, b.b);
+    return Response.json({ ok: true });
+  }
+  if (pathname === "/api/unlink" && m === "POST") {
+    const b = (await req.json()) as Body;
+    if (b.a && b.b) await engineUnlink(b.a, b.b);
+    return Response.json({ ok: true });
+  }
 
   if (pathname === "/app.js") return asset("app.js", "text/javascript; charset=utf-8");
   if (pathname === "/graph.js") return asset("graph.js", "text/javascript; charset=utf-8");

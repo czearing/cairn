@@ -6,9 +6,8 @@
 //   user-prompt    (userPromptSubmitted) : inject the workflow and reset the per-turn latch.
 //   session-start  (sessionStart)        : legacy fallback used only when the installer detects a Copilot
 //                                          version that cannot deliver userPromptSubmitted context.
-//   pre-tool       (preToolUse)          : gate a brain_create (deny closed-question / root-only-branch).
-//                                          preToolUse has no additionalContext channel, so entry-format.md /
-//                                          orchestrate.md cannot be injected here — only allow/deny/modify.
+//   pre-tool       (preToolUse)          : gate premature Harness side effects and invalid brain_create
+//                                          structure. preToolUse can only allow, deny, or modify arguments.
 //   post-tool      (postToolUse)         : after a brain_* or Task tool, inject the matching reminder and
 //                                          record brain/skill usage.
 //   agent-stop     (agentStop)           : the Stop equivalent — decision:"block" forces another turn until
@@ -21,9 +20,13 @@ import { readFile } from "node:fs/promises";
 import { Database } from "bun:sqlite";
 import {
   appendFileSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { isSystemEnvelope } from "../../skill/noise";
 import { recordHostEvent } from "../../core/host-events";
 import {
@@ -59,6 +62,8 @@ const emit = (obj: object) => {
   process.stdout.write(JSON.stringify(obj));
 };
 export const internalContext = (text: string): string => text ? `<cairn-internal>\n${text}\n</cairn-internal>` : "";
+export const complianceReceiptPath = (sessionId: string): string =>
+  join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, "cairn-compliance.json");
 const COMPLETION_REMINDER = "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
 const CAIRN_VISIBILITY_REMINDER =
   "Before submitting, attempt the injected Cairn brain and skill workflow now. If Cairn tools are unavailable in this session, do not retry or block on them; finish the user's task.";
@@ -125,13 +130,59 @@ export function postToolFiles(toolName: string, answer: string): string[] {
 // Whether agentStop should force another turn, and with which prompt. Bounded to STOP_CAP nudges per
 // turn so a stubborn agent can never be looped forever (Copilot sends no stop_hook_active flag).
 export const STOP_CAP = 2;
-export function stopDecision(s: { brainUsed: boolean; skillUsed: boolean; stopNudges: number }): {
+export interface WorkflowEvidence {
+  brainUsed: boolean;
+  brainSearched?: boolean;
+  brainCreatedCount?: number;
+  brainAnsweredCount?: number;
+  rootSynthesized?: boolean;
+  skillUsed: boolean;
+  pendingReviewCount?: number;
+  stopNudges: number;
+  strict?: boolean;
+  minimumBrainNodes?: number;
+}
+export function stopDecision(s: WorkflowEvidence): {
   file: string;
 } {
   if (s.stopNudges >= STOP_CAP) return { file: "" };
   if (!s.skillUsed) return { file: "skill-search-reminder.md" };
+  if (s.strict && (
+    !s.brainSearched
+    || (s.brainCreatedCount ?? 0) < (s.minimumBrainNodes ?? 1)
+    || (s.brainAnsweredCount ?? 0) < (s.brainCreatedCount ?? 0)
+    || !s.rootSynthesized
+  )) return { file: "turn-reminder.md" };
   if (!s.brainUsed) return { file: "turn-reminder.md" };
   return { file: "" };
+}
+
+const READ_ONLY_TOOLS = /^(read|view|glob|grep|rg|search|web_fetch|web_search|fetch_copilot_cli_documentation|list_|get_)/i;
+const SHELL_MUTATION = /(?:^|[;&|]\s*)(?:set-content|add-content|out-file|remove-item|move-item|copy-item|rename-item|new-item|stop-process|start-process)\b|\bgit\s+(?:add|commit|push|checkout|switch|reset|clean|merge|rebase|tag)\b|\baz\s+repos\s+pr\s+(?:create|update)\b|\baz\s+devops\s+invoke\b[\s\S]*?--http-method\s+(?:post|put|patch|delete)\b|(?:^|[^<])>{1,2}(?![>&])/i;
+const workflowReady = (s: WorkflowEvidence): boolean =>
+  s.skillUsed
+  && Boolean(s.brainSearched)
+  && (s.brainCreatedCount ?? 0) >= (s.minimumBrainNodes ?? 1)
+  && (s.brainAnsweredCount ?? 0) >= (s.brainCreatedCount ?? 0)
+  && Boolean(s.rootSynthesized);
+
+export function workflowActionDecision(
+  toolName: string,
+  state: WorkflowEvidence,
+  args: Record<string, unknown> = {},
+): { deny: boolean; reason?: string } {
+  const command = typeof args.command === "string" ? args.command : "";
+  const readOnlyShell = /powershell|bash|shell/i.test(toolName) && !SHELL_MUTATION.test(command);
+  if (!state.strict || isCairnMcpTool(toolName) || isNativeSkillTool(toolName)
+    || READ_ONLY_TOOLS.test(toolName) || readOnlyShell) {
+    return { deny: false };
+  }
+  if (workflowReady(state)) return { deny: false };
+  return {
+    deny: true,
+    reason:
+      "Finish the injected Cairn workflow before acting: select a skill, search the brain, create and answer the required decomposition nodes, then synthesize the root. The requested side effect was not executed.",
+  };
 }
 
 // Whether a pending brain_create must be denied (preToolUse). Mirrors the Claude dispatch gate: a node
@@ -210,6 +261,25 @@ function parsePayload(raw: string): Payload {
   }
 }
 
+export function resolveCopilotModel(
+  payloadModel: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const explicit = payloadModel.trim();
+  if (explicit) return explicit;
+  const harnessModel = environment.CAIRN_MODEL?.trim();
+  if (harnessModel) return harnessModel;
+  const copilotHome = environment.COPILOT_HOME || join(homedir(), ".copilot");
+  try {
+    const settings = JSON.parse(readFileSync(join(copilotHome, "settings.json"), "utf8")) as {
+      model?: unknown;
+    };
+    return typeof settings.model === "string" ? settings.model.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 export const shouldStartUserTurn = (prompt: string): boolean =>
   !isSystemEnvelope(prompt);
 const isToolCallSession = (sessionId: string): boolean => sessionId.startsWith("call_");
@@ -262,7 +332,11 @@ export async function runCopilotHook(): Promise<void> {
   const rawPayload = safeJson(raw);
   let hostEventKey = "";
   try { hostEventKey = recordHostEvent("copilot", mode ?? "", raw, rawPayload); } catch { /* event indexing never blocks the host */ }
-  const { sessionId, agentId, agentName, toolName, args, result, transcriptPath, prompt, eventId, toolCallId, durationMs, model } = parsePayload(raw);
+  const {
+    sessionId, agentId, agentName, toolName, args, result, transcriptPath, prompt,
+    eventId, toolCallId, durationMs, model: payloadModel,
+  } = parsePayload(raw);
+  const model = resolveCopilotModel(payloadModel);
   let turnSeq = 0;
   try { turnSeq = readLifecycle(turnScope(sessionId, agentId)).turnSeq; } catch { /* telemetry is optional */ }
   const usageSource = `${mode || "hook"}${toolName ? `:${toolName}` : ""}`;
@@ -331,6 +405,7 @@ export async function runCopilotHook(): Promise<void> {
       return void emit(protocol ? { additionalContext: internalContext(protocol) } : {});
     }
     if (!shouldStartUserTurn(prompt)) return void emit({});
+    rmSync(complianceReceiptPath(sessionId), { force: true });
     const state = resetLifecycle(stateId);
     if (emittedUsage) emittedUsage.turnSeq = state.turnSeq;
     const wf = await workflowPrompt();
@@ -349,6 +424,20 @@ export async function runCopilotHook(): Promise<void> {
     if (process.env.CAIRN_COPILOT_NO_GATE) return void emit({});
     let decision: { deny: boolean; reason?: string } = { deny: false };
     try {
+      if (process.env.AGENT_HARNESS === "1" && !agentId) {
+        const state = readLifecycle(turnScope(sessionId));
+        decision = workflowActionDecision(toolName, {
+          ...state,
+          brainCreatedCount: state.brainCreatedIds.length,
+          brainAnsweredCount: state.brainAnsweredIds.length,
+          strict: true,
+          minimumBrainNodes: Number(process.env.CAIRN_MIN_BRAIN_NODES || "3"),
+        }, args);
+        if (decision.deny) {
+          emit({ permissionDecision: "deny", permissionDecisionReason: decision.reason });
+          return;
+        }
+      }
       if (isTask(toolName) && typeof args.prompt === "string") {
         const parentScope = turnScope(sessionId, agentId);
         const selectedIds = readLifecycle(parentScope).pendingReviewIds.filter((id) => !id.startsWith("__"));
@@ -386,9 +475,20 @@ export async function runCopilotHook(): Promise<void> {
     const state = updateLifecycle(stateId, (current) => {
       const next = { ...current };
       const succeeded = toolResultSucceeded(result);
+      const resultId = skillResultId(result);
       if (isCairnMcpTool(toolName)) next.cairnToolAttempted = true;
       if (isCairnMcpTool(toolName) && succeeded) next.cairnToolObserved = true;
       if ((isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) && succeeded) next.brainUsed = true;
+      if (isTool(toolName, "brain_search") && succeeded) next.brainSearched = true;
+      if (isTool(toolName, "brain_create") && succeeded && resultId) {
+        next.brainCreatedIds = [...new Set([...next.brainCreatedIds, resultId])];
+        if (!next.rootNodeId) next.rootNodeId = resultId;
+      }
+      if (isTool(toolName, "brain_mutate") && succeeded && typeof args.answer === "string" && args.answer.trim()) {
+        const id = typeof args.id === "string" ? args.id : "";
+        if (id) next.brainAnsweredIds = [...new Set([...next.brainAnsweredIds, id])];
+        if (id && id === next.rootNodeId) next.rootSynthesized = true;
+      }
       if (isNativeSkillTool(toolName) && toolResultSucceeded(result)) next.skillUsed = true;
       if (isTool(toolName, "skill_select") && succeeded) {
         const ids = Array.isArray(args.ids) ? args.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0) : [];
@@ -469,8 +569,14 @@ export async function runCopilotHook(): Promise<void> {
     }
     const file = enforceWorkflow ? stopDecision({
       brainUsed: st.brainUsed,
+      brainSearched: st.brainSearched,
+      brainCreatedCount: st.brainCreatedIds.length,
+      brainAnsweredCount: st.brainAnsweredIds.length,
+      rootSynthesized: st.rootSynthesized,
       skillUsed: st.skillUsed,
       stopNudges: st.stopNudges,
+      strict: process.env.AGENT_HARNESS === "1",
+      minimumBrainNodes: Number(process.env.CAIRN_MIN_BRAIN_NODES || "3"),
     }).file : "";
     const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
@@ -510,6 +616,22 @@ export async function runCopilotHook(): Promise<void> {
       return;
     }
     updateLifecycle(stateId, () => ({ ...st, pendingReviewIds: [], pendingReviews: [], stopBlocked: false }));
+    if (process.env.AGENT_HARNESS === "1" && workflowReady({
+      ...st,
+      brainCreatedCount: st.brainCreatedIds.length,
+      brainAnsweredCount: st.brainAnsweredIds.length,
+      strict: true,
+      minimumBrainNodes: Number(process.env.CAIRN_MIN_BRAIN_NODES || "3"),
+    })) {
+      const receipt = complianceReceiptPath(sessionId);
+      mkdirSync(dirname(receipt), { recursive: true });
+      writeFileSync(receipt, JSON.stringify({
+        sessionId,
+        turnSeq: st.turnSeq,
+        rootNodeId: st.rootNodeId,
+        completedAt: new Date().toISOString(),
+      }));
+    }
     finishTelemetryRun({
       host: "copilot", sessionId, turnSeq: st.turnSeq, completed: true,
       workflowPassed: st.brainUsed && st.skillUsed, skillUsed: st.skillUsed,

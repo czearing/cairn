@@ -6,7 +6,7 @@
 // other path is forwarded as-is. The request and response shapes never change, so any OpenAI client
 // works without modification.
 
-import { search } from "../core/search";
+import { engineSearch } from "../core/engine-client";
 import { resolveUpstream, type Upstream } from "./upstreams";
 import { injectMemories, lastUserQuery, formatMemories, type ChatMessage } from "./inject";
 
@@ -15,7 +15,7 @@ const TOPK = Number(process.env.CAIRN_PROXY_MEMORIES || "5");
 async function recall(query: string): Promise<string> {
   if (!query.trim()) return "";
   try {
-    const hits = (await search(query)).slice(0, TOPK);
+    const hits = (await engineSearch(query)).slice(0, TOPK);
     return formatMemories(hits.map((n) => ({ text: n.text, answer: n.answer })));
   } catch {
     return ""; // recall is best-effort; never block the chat on a brain hiccup

@@ -7,7 +7,13 @@ export interface TelemetryRunIdentity {
 }
 
 export interface TelemetryEvent {
-  kind: "context" | "tool_transport";
+  kind:
+    | "context"
+    | "tool_transport"
+    | "tool_schema"
+    | "search_stage"
+    | "engine_transport"
+    | "engine_parity";
   source: string;
   host?: string;
   sessionId?: string;

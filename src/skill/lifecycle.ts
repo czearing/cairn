@@ -11,6 +11,11 @@ export interface ReviewDeclaration {
 export interface LifecycleState {
   turnSeq: number;
   brainUsed: boolean;
+  brainSearched: boolean;
+  brainCreatedIds: string[];
+  brainAnsweredIds: string[];
+  rootNodeId: string;
+  rootSynthesized: boolean;
   skillUsed: boolean;
   pendingReviewIds: string[];
   pendingReviews: ReviewDeclaration[];
@@ -27,6 +32,11 @@ export interface LifecycleState {
 const fresh = (): LifecycleState => ({
   turnSeq: 0,
   brainUsed: false,
+  brainSearched: false,
+  brainCreatedIds: [],
+  brainAnsweredIds: [],
+  rootNodeId: "",
+  rootSynthesized: false,
   skillUsed: false,
   pendingReviewIds: [],
   pendingReviews: [],
@@ -51,6 +61,11 @@ function database(): Database {
     scope TEXT PRIMARY KEY,
     turn_seq INTEGER NOT NULL DEFAULT 0,
     brain_used INTEGER NOT NULL DEFAULT 0,
+    brain_searched INTEGER NOT NULL DEFAULT 0,
+    brain_created_ids TEXT NOT NULL DEFAULT '[]',
+    brain_answered_ids TEXT NOT NULL DEFAULT '[]',
+    root_node_id TEXT NOT NULL DEFAULT '',
+    root_synthesized INTEGER NOT NULL DEFAULT 0,
     skill_used INTEGER NOT NULL DEFAULT 0,
     pending_review_ids TEXT NOT NULL DEFAULT '[]',
     pending_reviews TEXT NOT NULL DEFAULT '[]',
@@ -77,6 +92,21 @@ function database(): Database {
   if (!columns.some((column) => column.name === "cairn_tool_observed")) {
     d.run("ALTER TABLE lifecycle_turns ADD COLUMN cairn_tool_observed INTEGER NOT NULL DEFAULT 0");
   }
+  if (!columns.some((column) => column.name === "brain_searched")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN brain_searched INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columns.some((column) => column.name === "brain_created_ids")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN brain_created_ids TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!columns.some((column) => column.name === "brain_answered_ids")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN brain_answered_ids TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!columns.some((column) => column.name === "root_node_id")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN root_node_id TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columns.some((column) => column.name === "root_synthesized")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN root_synthesized INTEGER NOT NULL DEFAULT 0");
+  }
   d.run(`CREATE TABLE IF NOT EXISTS lifecycle_delegations (
     tool_call_id TEXT PRIMARY KEY,
     parent_scope TEXT NOT NULL,
@@ -99,6 +129,11 @@ function fromRow(row: Record<string, unknown> | null | undefined): LifecycleStat
   return {
     turnSeq: Number(row.turn_seq || 0),
     brainUsed: Boolean(row.brain_used),
+    brainSearched: Boolean(row.brain_searched),
+    brainCreatedIds: parse(row.brain_created_ids, []),
+    brainAnsweredIds: parse(row.brain_answered_ids, []),
+    rootNodeId: String(row.root_node_id || ""),
+    rootSynthesized: Boolean(row.root_synthesized),
     skillUsed: Boolean(row.skill_used),
     pendingReviewIds: parse(row.pending_review_ids, []),
     pendingReviews: parse(row.pending_reviews, []),
@@ -115,12 +150,16 @@ function fromRow(row: Record<string, unknown> | null | undefined): LifecycleStat
 
 function save(d: Database, scope: string, state: LifecycleState): void {
   d.query(`INSERT INTO lifecycle_turns (
-    scope, turn_seq, brain_used, skill_used, pending_review_ids, pending_reviews,
+    scope, turn_seq, brain_used, brain_searched, brain_created_ids, brain_answered_ids,
+    root_node_id, root_synthesized, skill_used, pending_review_ids, pending_reviews,
     stop_nudges, review_nudges, stop_blocked, reminded, completion_nudged,
     cairn_visibility_nudged, cairn_tool_attempted, cairn_tool_observed, updated_ts
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(scope) DO UPDATE SET
-    turn_seq=excluded.turn_seq, brain_used=excluded.brain_used, skill_used=excluded.skill_used,
+    turn_seq=excluded.turn_seq, brain_used=excluded.brain_used,
+    brain_searched=excluded.brain_searched, brain_created_ids=excluded.brain_created_ids,
+    brain_answered_ids=excluded.brain_answered_ids, root_node_id=excluded.root_node_id,
+    root_synthesized=excluded.root_synthesized, skill_used=excluded.skill_used,
     pending_review_ids=excluded.pending_review_ids, pending_reviews=excluded.pending_reviews,
     stop_nudges=excluded.stop_nudges, review_nudges=excluded.review_nudges,
     stop_blocked=excluded.stop_blocked, reminded=excluded.reminded,
@@ -129,7 +168,9 @@ function save(d: Database, scope: string, state: LifecycleState): void {
     cairn_tool_attempted=excluded.cairn_tool_attempted,
     cairn_tool_observed=excluded.cairn_tool_observed, updated_ts=excluded.updated_ts`)
     .run(
-      scope, state.turnSeq, Number(state.brainUsed), Number(state.skillUsed),
+      scope, state.turnSeq, Number(state.brainUsed), Number(state.brainSearched),
+      JSON.stringify(state.brainCreatedIds), JSON.stringify(state.brainAnsweredIds),
+      state.rootNodeId, Number(state.rootSynthesized), Number(state.skillUsed),
       JSON.stringify(state.pendingReviewIds), JSON.stringify(state.pendingReviews),
       state.stopNudges, state.reviewNudges, Number(state.stopBlocked), Number(state.reminded),
       Number(state.completionNudged), Number(state.cairnVisibilityNudged),

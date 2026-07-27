@@ -1,4 +1,5 @@
 import { telemetryCostSummary } from "./telemetry-cost-summary";
+import { telemetryEngineSummary } from "./telemetry-engine-summary";
 import { telemetryQualitySummary } from "./telemetry-quality-summary";
 
 export * from "./telemetry-evaluation";
@@ -8,8 +9,10 @@ export { estimatedTokens, jsonChars } from "./telemetry-size";
 export { promptFingerprint, releaseFingerprint } from "./release";
 
 export function telemetrySummary(days = 7) {
+  const costs = telemetryCostSummary(days);
   return {
-    ...telemetryCostSummary(days),
+    ...costs,
+    engine: telemetryEngineSummary(days),
     quality: telemetryQualitySummary(days),
   };
 }

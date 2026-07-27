@@ -4,7 +4,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { skillsEnabled } from "../core/config";
 import { learnFromTranscript } from "./learn";
 import { getSkill, skillCatalog, visibleSkill } from "./store";
-import { skillCatalogSnapshot } from "./catalog";
+import { skillAliasMap, skillCatalogSnapshot } from "./catalog";
 
 // Entry points the Claude Code dispatch calls. The skill feature is ON by default; turn it OFF per machine
 // with `"skills": false` in ~/.cairn/config.json or CAIRN_SKILLS=0. All are
@@ -93,16 +93,18 @@ export function skillSelect(ids: string[], catalogVersion = ""): {
       error: `stale skill catalog version ${catalogVersion.trim()}; current version is ${snapshot.version}`,
     };
   }
-  const uniqueIds = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
-  if (!uniqueIds.length) return { selected: [], catalogVersion: snapshot.version, error: "select at least one skill id" };
-  const selected = uniqueIds.map(skillLoad);
-  const missing = uniqueIds.filter((_id, index) => !selected[index]);
+  const aliases = skillAliasMap(snapshot);
+  const references = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+  if (!references.length) return { selected: [], catalogVersion: snapshot.version, error: "select at least one skill id or alias" };
+  const durableIds = references.map((reference) => aliases.get(reference.toLowerCase()) ?? reference);
+  const selected = durableIds.map(skillLoad);
+  const missing = references.filter((_reference, index) => !selected[index]);
   if (missing.length) {
     return {
       selected: [],
       catalogVersion: snapshot.version,
       currentCatalog: snapshot.catalog,
-      error: `unknown or unlearned skill ids: ${missing.join(", ")}`,
+      error: `unknown or unlearned skill ids or aliases: ${missing.join(", ")}`,
     };
   }
   return { selected: selected as NonNullable<ReturnType<typeof skillLoad>>[], catalogVersion: snapshot.version };

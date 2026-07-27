@@ -13,3 +13,11 @@ export interface ScoredNeuron extends NeuronVector {
 
 /** A search result plus its bounded semantic-and-graph relevance score (0..1). */
 export type ScoredResult = Neuron & { score: number };
+
+export interface SearchOptions {
+  relevanceThreshold: number;
+  relativeFloor: number;
+  searchGraphBoost: number;
+  expandSubtree: boolean;
+  vectorIndexThreshold: number;
+}

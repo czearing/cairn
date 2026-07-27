@@ -97,16 +97,16 @@ test("install registers cairn in Copilot and injects only through userPromptSubm
   expect(mcp.mcpServers.cairn.type).toBe("local"); // Copilot CLI's local-stdio type
   expect(mcp.mcpServers.cairn.tools).toEqual(["*"]); // required to enable the tools
   expect(mcp.mcpServers.cairn.deferTools).toBe("never"); // required tools survive context compaction
-  expect(JSON.stringify(mcp.mcpServers.cairn.args)).toContain("server.ts");
-  expect(mcp.mcpServers.cairn.args).toContain("--hot"); // reloads source without replacing the stdio process
-  expect(mcp.mcpServers.cairn.args).toContain(`--cwd=${root}`); // prevents out-of-project reload loops
+  expect(JSON.stringify(mcp.mcpServers.cairn.args)).toContain("mcp-server.js");
+  expect(mcp.mcpServers.cairn.args).toContain("--smol");
+  expect(mcp.mcpServers.cairn.env.CAIRN_ROOT).toBe(root);
+  expect(mcp.mcpServers.cairn.env.CAIRN_ENGINE_SERVER).toContain("engine-server.ts");
   const hook = JSON.parse(readFileSync(copilotHook, "utf8"));
   expect(hook.cairnRelease).toBe(releaseVersion); // lets persistent Harness workers detect Cairn upgrades
   expect(hook.hooks.sessionStart).toBeUndefined(); // avoids a duplicate workflow on the first turn
   expect(hook.hooks.userPromptSubmitted[0].type).toBe("command"); // one workflow after the prompt batch
-  expect(hook.hooks.preToolUse[0].type).toBe("command"); // brain_create deny gate
-  expect(hook.hooks.preToolUse[0].matcher).toContain("brain_create");
-  expect(hook.hooks.preToolUse[0].matcher).toContain("task"); // general-purpose agents need parent-level injection
+  expect(hook.hooks.preToolUse[0].type).toBe("command"); // strict workflow and brain_create gates
+  expect(hook.hooks.preToolUse[0].matcher).toBeUndefined(); // every side-effecting tool must be observable
   expect(hook.hooks.postToolUse[0].type).toBe("command"); // per-tool reminders after brain_* / Task calls
   expect(hook.hooks.agentStop[0].type).toBe("command"); // Stop equivalent: forces a turn
   expect(hook.hooks.subagentStart[0].type).toBe("command"); // subagent-window injection

@@ -44,6 +44,8 @@ export interface QualitySummary {
   runtimeObservedCalls: number;
   runtimeUnknownCalls: number;
   runtimeMismatchCalls: number;
+  coherentRuns: number;
+  mixedRuntimeRuns: number;
   selectedSkills: number;
   editedSkills: number;
   skillEditRate: number;

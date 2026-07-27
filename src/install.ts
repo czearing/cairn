@@ -13,6 +13,11 @@ import {
   copilotMcpPath,
 } from "./hosts/copilot-cli/setup";
 import { libsqlEnv } from "./libsql-env";
+import {
+  buildMcpBundle,
+  mcpBundle,
+  mcpRuntimeEnv,
+} from "./mcp/bundle";
 
 // Registers Cairn with Claude Code AND GitHub Copilot CLI as a measured, verified flow:
 //   1 preflight  2 Claude hooks(+.bak)  3 Claude MCP  4 Copilot CLI  5 cairn cmd  6 warm+verify  7 summary
@@ -23,7 +28,6 @@ import { libsqlEnv } from "./libsql-env";
 const MARKER = "cairn";
 const ROOT = resolve(import.meta.dir, "..");
 const DISPATCH = join(ROOT, "src", "hosts", "claude-code", "dispatch.ts").replace(/\\/g, "/");
-const SERVER = join(ROOT, "src", "mcp", "server.ts").replace(/\\/g, "/");
 const CLI = join(ROOT, "src", "cli.ts").replace(/\\/g, "/");
 const AGENT_BODY = join(ROOT, "prompts", "agent-system.md");
 
@@ -74,14 +78,28 @@ async function installHooks(dryRun: boolean): Promise<{ added: string[]; bak: bo
 function registerMcp(dryRun: boolean): "registered" | "updated" | "already" | "failed" | "no-cli" | "would-register" {
   const claude = Bun.which("claude");
   if (!claude) return "no-cli";
-  const env = libsqlEnv();
+  const env = { ...libsqlEnv(), ...mcpRuntimeEnv() };
   const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-  const addArgs = [claude, "mcp", "add", mcpName(), "--scope", "user", ...envArgs, "--", bun(), SERVER];
+  const runtime = mcpBundle.replace(/\\/g, "/");
+  const addArgs = [
+    claude,
+    "mcp",
+    "add",
+    mcpName(),
+    "--scope",
+    "user",
+    ...envArgs,
+    "--",
+    bun(),
+    "--smol",
+    runtime,
+  ];
   const exists = Bun.spawnSync([claude, "mcp", "get", mcpName()], { stdout: "pipe", stderr: "ignore" });
   if (exists.exitCode === 0) {
-    // Already registered. Re-register only to fold in cloud-sync creds that aren't recorded yet.
-    const hasSync = (exists.stdout?.toString() ?? "").includes("CAIRN_LIBSQL_URL");
-    if (!Object.keys(env).length || hasSync) return "already";
+    const current = exists.stdout?.toString() ?? "";
+    const envCurrent = Object.keys(env).every((key) => current.includes(key));
+    const runtimeCurrent = current.replace(/\\/g, "/").includes(runtime);
+    if (envCurrent && runtimeCurrent) return "already";
     if (dryRun) return "would-register";
     Bun.spawnSync([claude, "mcp", "remove", mcpName(), "--scope", "user"], { stdout: "ignore", stderr: "ignore" });
     const u = Bun.spawnSync(addArgs, { stdout: "ignore", stderr: "ignore" });
@@ -164,6 +182,7 @@ async function installSubagent(dryRun: boolean): Promise<"written" | "would-writ
 
 export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   const dryRun = opts.dryRun ?? false;
+  if (!dryRun && !process.env.CAIRN_SKIP_MCP) await buildMcpBundle();
   line(c.bold(`\nInstalling Cairn for Claude Code + GitHub Copilot CLI${dryRun ? c.yellow("  [DRY RUN: nothing is written]") : ""}\n`));
 
   // ── Phase 1: preflight ────────────────────────────────────────────────────────────────────
@@ -188,7 +207,7 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   // ── Phase 3: MCP registration ─────────────────────────────────────────────────────────────
   line(c.dim("\n3/7  Claude Code MCP server (brain_* tools)"));
   const mcp = process.env.CAIRN_SKIP_MCP ? "skipped" : registerMcp(dryRun);
-  const manual = `claude mcp add ${mcpName()} --scope user -- "${bun()}" "${SERVER}"`;
+  const manual = `claude mcp add ${mcpName()} --scope user -- "${bun()}" --smol "${mcpBundle}"`;
   if (mcp === "skipped") step(`${sym.dot} Skipped (CAIRN_SKIP_MCP set).`);
   else if (mcp === "registered") step(`${sym.ok} Registered '${mcpName()}' at user scope.${Object.keys(libsqlEnv()).length ? c.dim(" (cloud sync wired in)") : ""}`);
   else if (mcp === "updated") step(`${sym.ok} Updated '${mcpName()}' with cloud-sync credentials.`);

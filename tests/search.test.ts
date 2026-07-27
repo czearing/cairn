@@ -151,3 +151,11 @@ test("indexed and linear search return identical ranked results", async () => {
   const indexed = await S.search("durable lifecycle vector search");
   expect(indexed).toEqual(linear);
 });
+
+test("search warmup preserves ranked search behavior", async () => {
+  const expected = await N.create("durable semantic memory retrieval");
+  await N.create("unrelated cooking instructions");
+  await S.warmSearchEngine();
+  const results = await S.search("semantic memory");
+  expect(results[0]?.id).toBe(expected.id);
+});

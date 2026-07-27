@@ -12,13 +12,20 @@ import { getLoadablePath } from "sqlite-vec";
 import { releaseVersion } from "../src/core/release";
 
 const TEST_DB = join(tmpdir(), `cairn-mcp-${randomUUID()}.db`);
+const TEST_HOOK = join(tmpdir(), `cairn-mcp-hook-${randomUUID()}.json`);
 let client: Client;
 
 beforeAll(async () => {
   const transport = new StdioClientTransport({
     command: "bun",
     args: ["src/mcp/server.ts"],
-    env: { ...process.env, CAIRN_DB_PATH: TEST_DB, CAIRN_SEARCH_LIMIT: "5", CAIRN_SKILLS: "1" },
+    env: {
+      ...process.env,
+      CAIRN_DB_PATH: TEST_DB,
+      CAIRN_COPILOT_HOOK_PATH: TEST_HOOK,
+      CAIRN_SEARCH_LIMIT: "5",
+      CAIRN_SKILLS: "1",
+    },
   });
   client = new Client({ name: "cairn-test", version: "1.0.0" });
   await client.connect(transport);
@@ -80,6 +87,13 @@ test("MCP calls record local size and latency telemetry", async () => {
       run_class: string;
     };
   const columns = database.query("PRAGMA table_info(telemetry_events)").all() as { name: string }[];
+  const schemas = database.query(`SELECT COUNT(DISTINCT tool_name) AS tools,
+      SUM(context_chars) AS chars,SUM(estimated_tokens) AS tokens
+    FROM telemetry_events WHERE kind='tool_schema'`).get() as {
+      tools: number;
+      chars: number;
+      tokens: number;
+    };
   database.close();
   expect(event.tool_name).toBe("brain_delete");
   expect(event.input_chars).toBeGreaterThan(0);
@@ -90,6 +104,9 @@ test("MCP calls record local size and latency telemetry", async () => {
   expect(event.version).toBe(releaseVersion);
   expect(event.run_class).toBe("human");
   expect(columns.map((column) => column.name)).not.toContain("content");
+  expect(schemas.tools).toBe(8);
+  expect(schemas.chars).toBeGreaterThan(0);
+  expect(schemas.tokens).toBeGreaterThan(0);
 });
 
 test("brain_create works first in a fresh process when the database already contains a vec0 index", async () => {
@@ -126,10 +143,36 @@ test("brain_create no longer rejects by phrasing — a yes/no title is accepted 
   expect(parse(await call("brain_create", { text: "Does compression distinguish great poems?" })).id).toBeTruthy();
 });
 
+test("brain_create surfaces near duplicates without redirecting creation", async () => {
+  const text = `How should exact duplicate candidates stay advisory ${randomUUID()}?`;
+  const first = parse(await call("brain_create", { text }));
+  const second = parse(await call("brain_create", { text }));
+  expect(second.id).not.toBe(first.id);
+  expect(second.nearDuplicates).toContainEqual({
+    id: first.id,
+    text,
+    score: expect.any(Number),
+  });
+});
+
 test("brain_search finds a neuron by meaning", async () => {
   await call("brain_create", { text: "How do I write a haiku poem?" });
   const results = parse(await call("brain_search", { query: "compose some verse" }));
   expect(results.some((r: { text: string }) => r.text.includes("haiku"))).toBe(true);
+});
+
+test("brain_search records content-free stage timings", async () => {
+  await call("brain_search", { query: "semantic stage timing" });
+  const database = new Database(TEST_DB);
+  const stages = database.query(`SELECT DISTINCT source FROM telemetry_events
+    WHERE kind='search_stage' AND tool_name='brain_search'`).all() as { source: string }[];
+  const columns = database.query("PRAGMA table_info(telemetry_events)").all() as { name: string }[];
+  database.close();
+  const names = stages.map((stage) => stage.source);
+  expect(names).toContain("embed_query");
+  expect(names).toContain("vector_retrieve");
+  expect(names).toContain("rerank");
+  expect(columns.map((column) => column.name)).not.toContain("query");
 });
 
 test("brain_search caps the result set at CAIRN_SEARCH_LIMIT and stays score-ordered", async () => {
@@ -262,7 +305,8 @@ test("skill_edit rewrites a skill's master directly (agent-driven fix, no grader
   const bad = await call("skill_edit", { id: "no-such-id", master: "1. x" });
   expect(bad.isError).toBe(true); // unknown id rejected
   const catalog = parse(await call("skill_search", { task: "flash edit" }));
-  const selected = parse(await call("skill_select", { ids: [created.id], catalogVersion: catalog.catalogVersion }));
+  const alias = catalog.catalog.find((skill: { id: string; alias: string }) => skill.id === created.id).alias;
+  const selected = parse(await call("skill_select", { ids: [alias], catalogVersion: catalog.catalogVersion }));
   expect(selected).toEqual({
     selected: [{ id: created.id, steps: expect.stringContaining("do the thing better") }],
     catalogVersion: catalog.catalogVersion,

@@ -18,7 +18,7 @@ const qualitySummary = (days: number) => telemetrySummary(days).quality;
 
 const identity = (sessionId: string) => ({ host: "copilot" as const, sessionId, turnSeq: 1 });
 
-test("quality telemetry derives reuse and release deltas without storing content", () => {
+test("quality telemetry derives reuse and excludes mixed-runtime release comparisons", () => {
   qualityDatabase()?.run("DELETE FROM telemetry_events");
   qualityDatabase()?.run("DELETE FROM telemetry_runs");
   const marker = `private-quality-${crypto.randomUUID()}`;
@@ -126,6 +126,8 @@ test("quality telemetry derives reuse and release deltas without storing content
     runtimeObservedCalls: 1,
     runtimeUnknownCalls: 6,
     runtimeMismatchCalls: 1,
+    coherentRuns: 0,
+    mixedRuntimeRuns: 2,
     crossSessionReuseRate: 16.7,
     crossSessionNodes: 1,
     observedNodes: 6,
@@ -133,15 +135,10 @@ test("quality telemetry derives reuse and release deltas without storing content
     editedSkills: 1,
     skillEditRate: 100,
   });
-  expect(summary.current).not.toBeNull();
-  expect(summary.baseline).not.toBeNull();
-  expect(summary.delta).not.toBeNull();
-  expect(summary.comparisons).toHaveLength(1);
-  expect(summary.comparisons[0]).toMatchObject({
-    host: "copilot",
-    model: "unknown",
-    workload: "small",
-  });
+  expect(summary.current).toBeNull();
+  expect(summary.baseline).toBeNull();
+  expect(summary.delta).toBeNull();
+  expect(summary.comparisons).toEqual([]);
 
   const db = new Database(process.env.CAIRN_DB_PATH!, { readonly: true });
   const columns = db.query("PRAGMA table_info(telemetry_events)").all() as { name: string }[];

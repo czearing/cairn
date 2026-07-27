@@ -285,6 +285,7 @@ test("skill_select binds injected ids to the exact catalog version", async () =>
 
   expect(skillSelect([created.skill.id], "").error).toContain("catalogVersion is required");
   expect(skillSelect([created.skill.id], injected.catalogVersion).selected[0]?.id).toBe(created.skill.id);
+  expect(skillSelect(["s1"], injected.catalogVersion).selected[0]?.id).toBe(created.skill.id);
 
   setMasterPrompt(created.skill.id, "1. reproduce\n2. trace\n3. verify");
   const stale = skillSelect([created.skill.id], injected.catalogVersion);

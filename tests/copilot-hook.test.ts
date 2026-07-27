@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -11,9 +11,11 @@ import {
   internalContext,
   isTool,
   postToolFiles,
+  resolveCopilotModel,
   STOP_CAP,
   shouldStartUserTurn,
   stopDecision,
+  workflowActionDecision,
 } from "../src/hosts/copilot-cli/hook";
 
 const priorCompletionContinuation = process.env.CAIRN_FORCE_COMPLETION_CONTINUATION;
@@ -46,6 +48,21 @@ function lifecycleState(dbPath: string, scope: string): { pendingReviewIds: stri
     database.close();
   }
 }
+
+test("Copilot model attribution prefers payload, Harness environment, then profile settings", () => {
+  const home = join(tmpdir(), `cairn-copilot-home-${randomUUID()}`);
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "settings.json"), JSON.stringify({ model: "settings-model" }));
+  const environment: NodeJS.ProcessEnv = { COPILOT_HOME: home, CAIRN_MODEL: "harness-model" };
+  try {
+    expect(resolveCopilotModel("payload-model", environment)).toBe("payload-model");
+    expect(resolveCopilotModel("", environment)).toBe("harness-model");
+    delete environment.CAIRN_MODEL;
+    expect(resolveCopilotModel("", environment)).toBe("settings-model");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 // ── postToolFiles: which prompts a COMPLETED Copilot tool delivers, mirroring Claude's after-tool set ──
 
@@ -82,6 +99,119 @@ test("stopDecision allows a completed skill and brain workflow to finish", () =>
 
 test("stopDecision requires skill selection even when the brain was used", () => {
   expect(stopDecision({ brainUsed: true, skillUsed: false, stopNudges: 0 })).toEqual({ file: "skill-search-reminder.md" });
+});
+
+test("strict stopDecision requires ordered decomposition and root synthesis", () => {
+  expect(stopDecision({
+    brainUsed: true,
+    brainSearched: true,
+    brainCreatedCount: 3,
+    brainAnsweredCount: 2,
+    rootSynthesized: true,
+    skillUsed: true,
+    pendingReviewCount: 0,
+    stopNudges: 0,
+    strict: true,
+    minimumBrainNodes: 3,
+  })).toEqual({ file: "turn-reminder.md" });
+  expect(stopDecision({
+    brainUsed: true,
+    brainSearched: true,
+    brainCreatedCount: 3,
+    brainAnsweredCount: 3,
+    rootSynthesized: true,
+    skillUsed: true,
+    pendingReviewCount: 0,
+    stopNudges: 0,
+    strict: true,
+    minimumBrainNodes: 3,
+  })).toEqual({ file: "" });
+});
+
+test("Harness side effects are denied until the strict workflow is complete", () => {
+  const incomplete = {
+    brainUsed: true,
+    brainSearched: true,
+    brainCreatedCount: 3,
+    brainAnsweredCount: 2,
+    rootSynthesized: false,
+    skillUsed: true,
+    pendingReviewCount: 0,
+    stopNudges: 0,
+    strict: true,
+    minimumBrainNodes: 3,
+  };
+  expect(workflowActionDecision("discord_send_message", incomplete).deny).toBe(true);
+  expect(workflowActionDecision("cairn-harness-task_complete", incomplete).deny).toBe(true);
+  expect(workflowActionDecision("powershell", incomplete, {
+    command: "git fetch origin master; az repos pr show --id 42",
+  }).deny).toBe(false);
+  expect(workflowActionDecision("powershell", incomplete, {
+    command: "az devops invoke --http-method POST --area git",
+  }).deny).toBe(true);
+  expect(workflowActionDecision("powershell", incomplete, {
+    command: "Set-Content result.txt 'changed'",
+  }).deny).toBe(true);
+  expect(workflowActionDecision("view", incomplete).deny).toBe(false);
+  expect(workflowActionDecision("cairn-brain_mutate", incomplete).deny).toBe(false);
+  expect(workflowActionDecision("discord_send_message", {
+    ...incomplete,
+    brainAnsweredCount: 3,
+    rootSynthesized: true,
+  }).deny).toBe(false);
+});
+
+test("Harness preToolUse blocks premature side effects and allows them after root synthesis", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-strict-action-${id}.db`);
+  const copilotHome = join(tmpdir(), `cairn-strict-action-home-${id}`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    AGENT_HARNESS: "1",
+    CAIRN_DB_PATH: dbPath,
+    COPILOT_HOME: copilotHome,
+    CAIRN_MAX_LEARNERS: "0",
+    CAIRN_SKILLS: "1",
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const post = (toolName: string, toolArgs: object, toolResult: object = { success: true }) =>
+    invoke("post-tool", { sessionId: "strict-action", toolName, toolArgs, toolResult });
+
+  invoke("user-prompt", { sessionId: "strict-action", prompt: "Send a certification message." });
+  post("skill", { skill: "discord" });
+  post("cairn-brain_search", { query: "certification" });
+  for (const nodeId of ["root", "child-1", "child-2"]) {
+    post("cairn-brain_create", { text: nodeId }, { id: nodeId });
+  }
+  post("cairn-brain_mutate", { id: "child-1", answer: "evidence one" });
+  post("cairn-brain_mutate", { id: "child-2", answer: "evidence two" });
+
+  const denied = invoke("pre-tool", {
+    sessionId: "strict-action",
+    toolCalls: [{ id: "send-1", name: "discord-discord_send_message", args: { content: "too early" } }],
+  }).stdout.toString();
+  expect(denied).toContain('"permissionDecision":"deny"');
+  expect(denied).toContain("side effect was not executed");
+
+  post("cairn-brain_mutate", { id: "root", answer: "integrated synthesis" });
+  expect(invoke("pre-tool", {
+    sessionId: "strict-action",
+    toolCalls: [{ id: "send-2", name: "discord-discord_send_message", args: { content: "ready" } }],
+  }).stdout.toString()).toBe("{}");
+  expect(invoke("pre-tool", {
+    sessionId: "strict-action",
+    toolCalls: [{ id: "complete-1", name: "cairn-harness-task_complete", args: { summary: "done" } }],
+  }).stdout.toString()).toBe("{}");
+  expect(invoke("agent-stop", { sessionId: "strict-action" }).stdout.toString()).toContain("completed every requested task");
+  expect(invoke("agent-stop", { sessionId: "strict-action" }).stdout.toString()).toBe("{}");
+  expect(JSON.parse(readFileSync(
+    join(copilotHome, "session-state", "strict-action", "cairn-compliance.json"),
+    "utf8",
+  )).rootNodeId).toBe("root");
+  rmSync(dbPath, { force: true });
+  rmSync(copilotHome, { recursive: true, force: true });
 });
 
 test("stopDecision stops nudging once the per-turn cap is reached (no infinite loop)", () => {
@@ -168,15 +298,34 @@ test("Harness completes without queueing a review after a durable wait resolves"
     toolName: "cairn-brain_search",
     toolArgs: { query: "implementation guidance" },
   });
+  const completeBrain = () => {
+    for (const id of ["root", "child-1", "child-2"]) {
+      invoke("post-tool", {
+        sessionId: "harness-session",
+        toolName: "cairn-brain_create",
+        toolArgs: { text: id },
+        toolResult: { id },
+      });
+    }
+    for (const id of ["child-1", "child-2", "root"]) {
+      invoke("post-tool", {
+        sessionId: "harness-session",
+        toolName: "cairn-brain_mutate",
+        toolArgs: { id, answer: `${id} answer` },
+      });
+    }
+  };
 
   expect(select().status).toBe(0);
   expect(searchBrain().status).toBe(0);
+  completeBrain();
   expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString()).toBe("{}");
   expect(reviewJobs(cairnDb)).toEqual([]);
 
   expect(invoke("user-prompt", { sessionId: "harness-session", prompt: "Complete the retried task." }).status).toBe(0);
   expect(select().status).toBe(0);
   expect(searchBrain().status).toBe(0);
+  completeBrain();
   const completed = new Database(harnessDb);
   completed.query("UPDATE tasks SET status='completed',completed_at=? WHERE id=?")
     .run("2026-07-17T10:02:00Z", "task-1");

@@ -1,6 +1,6 @@
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { config } from "./config";
@@ -100,6 +100,7 @@ export async function embedInProcess(text: string): Promise<number[]> {
 }
 
 export const LOCKFILE = join(homedir(), ".cairn", "embed-server.json");
+export const STARTFILE = join(homedir(), ".cairn", "embed-server-starting.json");
 
 // Pure: is the sidecar described by this lockfile usable for the CURRENT model? It must have a port AND have
 // been started with the same model id, otherwise its vectors live in a different space than our queries (a
@@ -131,14 +132,53 @@ async function tryServer(text: string): Promise<number[] | null> {
 }
 
 let _spawned = false;
+function claimServerStartup(): boolean {
+  try { mkdirSync(join(homedir(), ".cairn"), { recursive: true }); } catch { /* exists */ }
+  try {
+    writeFileSync(STARTFILE, JSON.stringify({ pid: process.pid, startedAt: Date.now(), model: embedModel() }), { flag: "wx" });
+    return true;
+  } catch {
+    try {
+      const staleMs = Number(process.env.CAIRN_EMBED_SERVER_STARTUP_STALE_MS || "120000");
+      if (Date.now() - statSync(STARTFILE).mtimeMs <= staleMs) return false;
+      rmSync(STARTFILE, { force: true });
+      writeFileSync(STARTFILE, JSON.stringify({ pid: process.pid, startedAt: Date.now(), model: embedModel() }), { flag: "wx" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 function ensureServer(): void {
   if (_spawned) return;
-  _spawned = true; // once per process: only the first cold call (server down) starts it
+  if (!claimServerStartup()) return;
+  _spawned = true;
   try {
     const bin = process.platform === "win32" ? "bun.exe" : "bun";
     const path = fileURLToPath(new URL("./embed-server.ts", import.meta.url));
     spawn(bin, [path], { detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env } }).unref();
-  } catch { /* best-effort: the in-process fallback still serves this call */ }
+  } catch {
+    _spawned = false;
+    try { rmSync(STARTFILE, { force: true }); } catch { /* absent */ }
+  }
+}
+
+async function waitForServer(text: string): Promise<number[] | null> {
+  const timeoutMs = Number(process.env.CAIRN_EMBED_SERVER_STARTUP_WAIT_MS || "60000");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await Bun.sleep(100);
+    const vector = await tryServer(text);
+    if (vector) return vector;
+  }
+  return null;
+}
+
+export function warmEmbedServer(): void {
+  if (config.embed.provider === "local" && process.env.CAIRN_EMBED_NO_SERVER !== "1" && !config.dbPath.startsWith(tmpdir())) {
+    ensureServer();
+  }
 }
 
 // Public embed: prefer the warm sidecar (one shared model load across one-shot hook processes), else embed
@@ -152,5 +192,7 @@ export async function embed(text: string): Promise<number[]> {
   const v = await tryServer(text);
   if (v) return v;
   ensureServer();
+  const warmed = await waitForServer(text);
+  if (warmed) return warmed;
   return embedInProcess(text);
 }

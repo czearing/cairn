@@ -13,6 +13,7 @@ import {
   unlinkBoth,
 } from "./graph";
 import { encodeVector } from "./vector";
+import { exactVectorCandidates } from "./vector-index";
 import {
   deleteNeuronVector,
   prepareCurrentVectorIndex,
@@ -67,6 +68,12 @@ export interface NodeRef {
   rowid: number;
 }
 
+export interface DuplicateCandidate {
+  id: string;
+  text: string;
+  score: number;
+}
+
 // Fetch id/text/rowid for a set of ids in ONE query (id-keyed). Used to turn a search hit's edge ids
 // into the adjacent question text for result context; reads only the three light columns, never the
 // ~1.5KB embedding. rowid is creation order, which is how a parent (always created first) is told from
@@ -88,21 +95,76 @@ export function unlink(a: string, b: string): void {
   unlinkBoth(a, b);
 }
 
-// Create a new neuron; embeds on write; mirrors edges so the graph stays undirected.
-export async function create(text: string, edges: string[] = []): Promise<Neuron> {
-  const id = randomUUID();
+async function createResult(
+  text: string,
+  edges: string[],
+  includeCandidates: boolean,
+  requestedId?: string,
+): Promise<{
+  neuron: Neuron;
+  nearDuplicates: DuplicateCandidate[];
+}> {
+  const id = requestedId || randomUUID();
+  const prior = requestedId ? get(id) : null;
+  if (prior) return { neuron: prior, nearDuplicates: [] };
   const safeText = stripCtrl(text);
   const clean = dedupe(edges, id);
-  const vec = encodeVector(await embed(vecText(safeText, "")));
+  const model = embedModel();
+  const rawVector = await embed(vecText(safeText, ""));
+  const vec = encodeVector(rawVector);
+  let nearDuplicates: DuplicateCandidate[] = [];
+  if (includeCandidates && config.duplicateCandidateLimit > 0 && config.duplicateThreshold > 0) {
+    try {
+      prepareVectorIndex(model, rawVector.length);
+      const candidates = exactVectorCandidates(
+        rawVector,
+        model,
+        config.duplicateThreshold,
+        0,
+        1,
+        Math.max(16, config.duplicateCandidateLimit),
+      )?.slice(0, config.duplicateCandidateLimit) ?? [];
+      if (candidates.length) {
+        const rows = db().query(
+          `SELECT id,text FROM neurons WHERE id IN (${candidates.map(() => "?").join(",")})`,
+        ).all(...candidates.map((candidate) => candidate.id)) as { id: string; text: string }[];
+        const textById = new Map(rows.map((row) => [row.id, row.text]));
+        nearDuplicates = candidates.flatMap((candidate) => {
+          const candidateText = textById.get(candidate.id);
+          return candidateText
+            ? [{ id: candidate.id, text: candidateText, score: Math.round(candidate.score * 1000) / 1000 }]
+            : [];
+        });
+      }
+    } catch {
+      // Candidate lookup is advisory; creation remains available if the index cannot be inspected.
+    }
+  }
   db().transaction(() => {
-    prepareVectorIndex(embedModel(), vec.byteLength / 4);
+    prepareVectorIndex(model, vec.byteLength / 4);
     db().query("INSERT INTO neurons (id, text, answer, citation, edges, embedding, embedding_model) VALUES (?, ?, '', '', '[]', ?, ?)")
-      .run(id, safeText, vec, embedModel());
+      .run(id, safeText, vec, model);
     replaceEdges(id, clean);
     for (const target of clean) addEdge(target, id);
-    writeNeuronVector(id, embedModel(), vec);
+    writeNeuronVector(id, model, vec);
   });
-  return { id, text: safeText, answer: "", citation: "", edges: clean };
+  return {
+    neuron: { id, text: safeText, answer: "", citation: "", edges: clean },
+    nearDuplicates,
+  };
+}
+
+// Create a new neuron; embeds on write; mirrors edges so the graph stays undirected.
+export async function create(text: string, edges: string[] = []): Promise<Neuron> {
+  return (await createResult(text, edges, false)).neuron;
+}
+
+export async function createWithDuplicateCandidates(
+  text: string,
+  edges: string[] = [],
+  id?: string,
+): Promise<{ neuron: Neuron; nearDuplicates: DuplicateCandidate[] }> {
+  return createResult(text, edges, true, id);
 }
 
 // Partial merge. Setting `answer` marks it solved. Re-embeds on content change. Idempotent.

@@ -72,6 +72,7 @@ test("a connected Cairn server observes an installed release change in the same 
       CAIRN_COPILOT_HOOK_PATH: hook,
       CAIRN_DB_PATH: database,
       CAIRN_EMBED_NO_SERVER: "1",
+      CAIRN_ENGINE_NO_SERVER: "1",
     },
   });
   const client = new Client({ name: "cairn-release-test", version: "1" });

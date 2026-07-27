@@ -41,9 +41,19 @@ test("a mutated answer changes what the next search recalls (cache invalidates o
   expect((await S.search("pgvector postgres")).map((r) => r.id)).toContain(a.id);
 });
 
-test("changeToken moves on a write and is stable without one", async () => {
-  const t0 = DB.changeToken();
-  expect(DB.changeToken()).toBe(t0); // pure reads don't move it
+test("searchChangeToken tracks searchable writes but ignores unrelated database activity", async () => {
+  const t0 = DB.searchChangeToken();
+  expect(DB.searchChangeToken()).toBe(t0);
+  DB.db().query("INSERT OR REPLACE INTO engine_meta(key,value) VALUES ('unrelated_test_seq',?)").run(Date.now());
+  expect(DB.searchChangeToken()).toBe(t0);
   await N.create("a brand new thought");
-  expect(DB.changeToken()).not.toBe(t0); // the write did
+  expect(DB.searchChangeToken()).not.toBe(t0);
+});
+
+test("searchChangeToken moves when graph edges change", async () => {
+  const a = await N.create("first graph thought");
+  const b = await N.create("second graph thought");
+  const before = DB.searchChangeToken();
+  N.link(a.id, b.id);
+  expect(DB.searchChangeToken()).not.toBe(before);
 });

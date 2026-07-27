@@ -21,6 +21,21 @@ export function printTelemetryReport(days: number, json = false): void {
   );
   line(`${report.impact.prompts} prompts  ${report.totals.events} events  ` +
     `${report.impact.sessions} sessions  ${report.totals.failures} failures`);
+  line(`MCP ${report.engine.version || "runtime"} schemas  ` +
+    `${tokens(report.engine.toolSchemas.estimatedTokens)} tokens  ` +
+    `${tokens(report.engine.toolSchemas.chars)} chars  ${report.engine.toolSchemas.tools} tools`);
+  for (const stage of report.engine.searchStages) {
+    line(`search/${stage.stage}  avg ${stage.averageDurationMs}ms  ` +
+      `max ${stage.maximumDurationMs}ms  ${stage.events} calls`);
+  }
+  for (const transport of report.engine.engineTransports) {
+    line(`engine/${transport.source}/${transport.operation}  avg ${transport.averageDurationMs}ms  ` +
+      `max ${transport.maximumDurationMs}ms  ${transport.calls} calls  ${transport.failures} failures`);
+  }
+  if (report.engine.parity.checks) {
+    line(`engine parity      ${report.engine.parity.checks} checks  ` +
+      `${report.engine.parity.mismatches} mismatches`);
+  }
   line();
   line(c.dim("   TOTAL     AVG       RANGE  CALLS  SURFACE"));
   for (const group of report.groups) {

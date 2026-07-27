@@ -70,6 +70,28 @@ test("usage events store measurements without user content", async () => {
     version: "1.2.3",
     runClass: "human",
   })).toBe(true);
+  expect(recordUsage({
+    kind: "tool_schema",
+    source: "mcp",
+    toolName: "brain_search",
+    contextChars: 400,
+    eventKey: `schema-${marker}`,
+    releaseFingerprint: "engine-release",
+    version: "engine-version",
+    runClass: "human",
+    ts: Date.now() + 10,
+  })).toBe(true);
+  expect(recordUsage({
+    kind: "search_stage",
+    source: "embed_query",
+    toolName: "brain_search",
+    durationMs: 12,
+    eventKey: `stage-${marker}`,
+    releaseFingerprint: "engine-release",
+    version: "engine-version",
+    runClass: "human",
+    ts: Date.now() + 11,
+  })).toBe(true);
   finishTelemetryRun({
     ...run,
     completed: true,
@@ -108,6 +130,16 @@ test("usage events store measurements without user content", async () => {
     releaseFingerprint: expect.stringMatching(/^[0-9a-f]{24}$/),
     version: releaseVersion,
     runClass: "human",
+  });
+  expect(summary.engine).toMatchObject({
+    releaseFingerprint: "engine-release",
+    version: "engine-version",
+    toolSchemas: { tools: 1, chars: 400, estimatedTokens: 100 },
+    searchStages: [{
+      stage: "embed_query",
+      events: 1,
+      averageDurationMs: 12,
+    }],
   });
 });
 

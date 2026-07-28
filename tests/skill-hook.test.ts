@@ -260,7 +260,8 @@ test("skill_search returns the same compact catalog for every query and skill_lo
   const reviewing = skillSearch("review this story");
   if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
   expect(writing.catalog).toEqual(reviewing.catalog);
-  expect(writing.catalogVersion).toBe(reviewing.catalogVersion);
+  expect(writing).not.toHaveProperty("catalogVersion");
+  expect(reviewing).not.toHaveProperty("catalogVersion");
   expect(writing.catalog.map((entry) => entry.title)).toEqual(["short story", "short story review"]);
   expect(writing.catalog[0]!.description).toContain("two-paragraph stories");
   expect(skillLoad(writer.skill.id)?.steps).toContain("two-paragraph story");
@@ -277,21 +278,19 @@ test("hidden retired skills cannot be loaded by exact legacy id", async () => {
   expect(skillSearch(`load:${retired.skill.id}`).loaded).toBeNull();
 });
 
-test("skill_select binds injected ids to the exact catalog version", async () => {
+test("skill_select accepts exact catalog titles without exposing catalog metadata", async () => {
   const created = await categorize("cli troubleshooting", 1);
   setMasterPrompt(created.skill.id, "1. reproduce the CLI failure\n2. fix the earliest broken boundary");
   setSkillMetadata(created.skill.id, "cli troubleshooting", "Use for debugging CLI errors and local integration boundaries from exact evidence.");
   const injected = skillSearch("cli troubleshooting");
 
-  expect(skillSelect([created.skill.id], "").error).toContain("catalogVersion is required");
-  expect(skillSelect([created.skill.id], injected.catalogVersion).selected[0]?.id).toBe(created.skill.id);
-  expect(skillSelect(["s1"], injected.catalogVersion).selected[0]?.id).toBe(created.skill.id);
+  expect(skillSelect(["cli troubleshooting"]).selected[0]?.id).toBe(created.skill.id);
+  expect(skillSelect([created.skill.id]).selected[0]?.id).toBe(created.skill.id);
+  expect(injected).not.toHaveProperty("catalogVersion");
+  expect(injected.catalog[0]).not.toHaveProperty("alias");
 
   setMasterPrompt(created.skill.id, "1. reproduce\n2. trace\n3. verify");
-  const stale = skillSelect([created.skill.id], injected.catalogVersion);
-  expect(stale.error).toContain("stale skill catalog version");
-  expect(stale.catalogVersion).not.toBe(injected.catalogVersion);
-  expect(stale.currentCatalog?.some((skill) => skill.id === created.skill.id)).toBe(true);
+  expect(skillSelect(["cli troubleshooting"]).selected[0]?.steps).toContain("trace");
 });
 
 test("skill_load rejects an unknown or pending skill", async () => {

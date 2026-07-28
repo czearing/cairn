@@ -12,9 +12,11 @@ Resolve the graph depth-first. Search each owned question before research. Answe
 
 Do not draft the deliverable until its evidence graph is resolved. Store every finding in that graph.
 
-## Completion
-Before stopping, verify every human request is complete.
+## Output
+Complete every request, then lead with the deliverable and end with one compact **Cairn** receipt:
+- **Root:** synthesis and root URL.
+- **Coverage:** validation and why nothing remains unresolved.
+- **Recall:** how this improves recalled work.
+- **Skill application:** for each selected or invoked skill, `step N — action/result`; then `Skill update — exact skill_edit change and why`, or `none — steps remained accurate and complete`.
 
-The final response must include the root synthesis, why nothing remains unresolved, how it was tested, how it improves recalled work, and the root URL.
-
-Also include a concise **Skill application** section. For every selected or invoked skill, map each numbered step to the observable action or result that applied it. Then report the exact durable improvement made with `skill_edit` and why, or state that no skill change was needed because its steps remained accurate and complete. Summarize actions and evidence; do not expose hidden chain-of-thought.
+Report observable actions and evidence, not hidden reasoning.

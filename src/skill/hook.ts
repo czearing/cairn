@@ -4,7 +4,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { skillsEnabled } from "../core/config";
 import { learnFromTranscript } from "./learn";
 import { getSkill, skillCatalog, visibleSkill } from "./store";
-import { skillAliasMap, skillCatalogSnapshot } from "./catalog";
+import { skillCatalogSnapshot } from "./catalog";
 
 // Entry points the Claude Code dispatch calls. The skill feature is ON by default; turn it OFF per machine
 // with `"skills": false` in ~/.cairn/config.json or CAIRN_SKILLS=0. All are
@@ -37,24 +37,23 @@ export async function skillInject(text: string, _sessionId?: string): Promise<st
 export function skillSearch(query: string): {
   task: string;
   catalog: ReturnType<typeof skillCatalog>;
-  catalogVersion: string;
   loaded?: ReturnType<typeof skillLoad>;
   matches?: { id: string; task: string; steps: string }[];
 } {
   const task = query.trim();
-  if (!skillsEnabled() || !task) return { task, catalog: [], catalogVersion: "" };
+  if (!skillsEnabled() || !task) return { task, catalog: [] };
   const snapshot = skillCatalogSnapshot();
   const loadId = task.match(/^load:([0-9a-f-]+)$/i)?.[1];
-  if (loadId) return { task, catalog: [], catalogVersion: snapshot.version, loaded: skillLoad(loadId) };
+  if (loadId) return { task, catalog: [], loaded: skillLoad(loadId) };
   try {
     const catalog = snapshot.catalog;
-    const exact = catalog.find((skill) => skill.title.toLowerCase() === task.toLowerCase());
+    const exact = snapshot.catalog.find((skill) => skill.title.toLowerCase() === task.toLowerCase());
     const loaded = exact ? skillLoad(exact.id) : null;
     return loaded
-      ? { task, catalog, catalogVersion: snapshot.version, loaded, matches: [{ id: loaded.id, task: loaded.title, steps: loaded.steps }] }
-      : { task, catalog, catalogVersion: snapshot.version };
+      ? { task, catalog, loaded, matches: [{ id: loaded.id, task: loaded.title, steps: loaded.steps }] }
+      : { task, catalog };
   }
-  catch { return { task, catalog: [], catalogVersion: snapshot.version }; }
+  catch { return { task, catalog: [] }; }
 }
 
 export function skillLoad(id: string): { id: string; title: string; description: string; steps: string } | null {
@@ -69,45 +68,29 @@ export function skillLoad(id: string): { id: string; title: string; description:
   };
 }
 
-export function skillSelect(ids: string[], catalogVersion = ""): {
+export function skillSelect(ids: string[]): {
   selected: NonNullable<ReturnType<typeof skillLoad>>[];
-  catalogVersion: string;
   currentCatalog?: ReturnType<typeof skillCatalog>;
   error?: string;
 } {
-  if (!skillsEnabled()) return { selected: [], catalogVersion: "", error: "skills are disabled" };
+  if (!skillsEnabled()) return { selected: [], error: "skills are disabled" };
   const snapshot = skillCatalogSnapshot();
-  if (!catalogVersion.trim()) {
-    return {
-      selected: [],
-      catalogVersion: snapshot.version,
-      currentCatalog: snapshot.catalog,
-      error: "catalogVersion is required; pass the exact version from the injected catalog",
-    };
-  }
-  if (catalogVersion.trim() !== snapshot.version) {
-    return {
-      selected: [],
-      catalogVersion: snapshot.version,
-      currentCatalog: snapshot.catalog,
-      error: `stale skill catalog version ${catalogVersion.trim()}; current version is ${snapshot.version}`,
-    };
-  }
-  const aliases = skillAliasMap(snapshot);
   const references = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
-  if (!references.length) return { selected: [], catalogVersion: snapshot.version, error: "select at least one skill id or alias" };
-  const durableIds = references.map((reference) => aliases.get(reference.toLowerCase()) ?? reference);
+  if (!references.length) return { selected: [], error: "select at least one skill title or id" };
+  const durableIds = references.map((reference) =>
+    snapshot.catalog.find((skill) => skill.title.toLowerCase() === reference.toLowerCase())?.id
+    ?? reference
+  );
   const selected = durableIds.map(skillLoad);
   const missing = references.filter((_reference, index) => !selected[index]);
   if (missing.length) {
     return {
       selected: [],
-      catalogVersion: snapshot.version,
       currentCatalog: snapshot.catalog,
-      error: `unknown or unlearned skill ids or aliases: ${missing.join(", ")}`,
+      error: `unknown or unlearned skill titles or ids: ${missing.join(", ")}`,
     };
   }
-  return { selected: selected as NonNullable<ReturnType<typeof skillLoad>>[], catalogVersion: snapshot.version };
+  return { selected: selected as NonNullable<ReturnType<typeof skillLoad>>[] };
 }
 
 // New skills must describe a reusable capability with multiple distinct examples and explicitly justify why

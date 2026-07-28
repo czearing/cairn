@@ -183,10 +183,8 @@ const nodeUrl = (id: string): string => `${config.uiUrl}/node/${id}`;
 const mutationAck = ({ id }: Neuron) => ({ id, url: nodeUrl(id) });
 const skillSelectionAck = (result: {
   selected: { id: string; steps: string }[];
-  catalogVersion: string;
 }) => ({
   selected: result.selected.map(({ id, steps }) => ({ id, steps })),
-  catalogVersion: result.catalogVersion,
 });
 
 // Optional hard cap on the agent-facing result set, OFF by default (0): the breadth is controlled by
@@ -291,14 +289,13 @@ registerTool(
 
 registerTool(
   "skill_select",
-  "Select skills from the injected catalog and return their reusable steps. Accepts version-scoped aliases or durable ids.",
+  "Select skills from the injected catalog and return their reusable steps.",
   {
-    ids: z.array(z.string()).min(1).max(4).describe("Skill aliases from the injected catalog, or durable ids."),
-    catalogVersion: z.string().optional().describe("Exact Catalog version value from the injected catalog."),
+    ids: z.array(z.string()).min(1).max(4).describe("Exact skill titles from the injected catalog, or durable ids."),
   },
-  async ({ ids, catalogVersion }) => measured("skill_select", { ids, catalogVersion }, async () => {
+  async ({ ids }) => measured("skill_select", { ids }, async () => {
     const { skillSelect } = await import("../skill/hook");
-    const result = skillSelect(ids, catalogVersion);
+    const result = skillSelect(ids);
     return result.error ? fail(JSON.stringify(result)) : json(skillSelectionAck(result));
   })
 );

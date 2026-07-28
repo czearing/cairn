@@ -221,9 +221,9 @@ test("Claude Stop clears selected skill state without queuing a reviewer", async
   }));
   expect(blocked.reason).toContain("brain");
   expect(blocked.reason).toContain("completed every requested task");
-  expect(blocked.reason).toContain("**Skill application**");
-  expect(blocked.reason).toContain("each numbered step");
-  expect(blocked.reason).toContain("no skill change was needed");
+  expect(blocked.reason).toContain("one compact **Cairn** receipt");
+  expect(blocked.reason).toContain("step N: action/result");
+  expect(blocked.reason).toContain("none — steps remained accurate and complete");
   expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
 
   await fire({

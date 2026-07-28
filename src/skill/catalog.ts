@@ -3,33 +3,24 @@ import { skillCatalogDetails, visibleSkill, type SkillCatalogEntry } from "./sto
 
 export interface SkillCatalogSnapshot {
   version: string;
-  catalog: (SkillCatalogEntry & { alias: string })[];
+  catalog: SkillCatalogEntry[];
 }
-
-const aliasForIndex = (index: number): string => `s${(index + 1).toString(36)}`;
 
 export function skillCatalogSnapshot(): SkillCatalogSnapshot {
   const details = skillCatalogDetails();
   const version = createHash("sha256").update(JSON.stringify(details)).digest("hex");
   return {
     version,
-    catalog: details.map(({ masterPrompt: _masterPrompt, ...entry }, index) => ({
-      ...entry,
-      alias: aliasForIndex(index),
-    })),
+    catalog: details.map(({ masterPrompt: _masterPrompt, ...entry }) => entry),
   };
-}
-
-export function skillAliasMap(snapshot = skillCatalogSnapshot()): Map<string, string> {
-  return new Map(snapshot.catalog.map((skill) => [skill.alias, skill.id]));
 }
 
 export function formatSkillCatalog(mode: "full" | "titles" = "titles"): string {
   const snapshot = skillCatalogSnapshot();
   const rows = snapshot.catalog.map((skill) => mode === "titles"
-    ? `${skill.alias} ${skill.title}`
-    : `- \`${skill.alias}\` **${skill.title}**: ${skill.description}`);
-  return `## Available skill catalog\nCatalog version: \`${snapshot.version}\`\nPass this exact version as \`catalogVersion\` to \`skill_select\`.\n${rows.join("\n") || "(empty)"}`;
+    ? skill.title
+    : `- **${skill.title}**: ${skill.description}`);
+  return `## Available skill catalog\nPass exact titles to \`skill_select\`.\n${rows.join("\n") || "(empty)"}`;
 }
 
 export function selectedSkillBlock(ids: string[]): string {

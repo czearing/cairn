@@ -64,9 +64,9 @@ const emit = (obj: object) => {
 export const internalContext = (text: string): string => text ? `<cairn-internal>\n${text}\n</cairn-internal>` : "";
 export const complianceReceiptPath = (sessionId: string): string =>
   join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, "cairn-compliance.json");
-const COMPLETION_REMINDER = "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
+const COMPLETION_REMINDER = "Ensure you completed every requested task.";
 const SKILL_APPLICATION_REMINDER =
-  "Your final response must include a concise **Skill application** section. For every selected or invoked skill, map each numbered step to the observable action or result that applied it. Then state the exact durable improvement made with `skill_edit` and why, or state that no skill change was needed because its steps remained accurate and complete. Summarize actions and evidence; do not expose hidden chain-of-thought.";
+  "End with one compact **Cairn** receipt: `Root — synthesis (URL)`; `Coverage — validation and why nothing remains`; `Recall — improvement`; `Skill application — step N: action/result` for every selected or invoked skill; `Skill update — exact skill_edit change and why`, or `none — steps remained accurate and complete`. Report observable evidence, not hidden reasoning.";
 const CAIRN_VISIBILITY_REMINDER =
   "Cairn's required brain and skill tools were not visible in this session. The CLI may have cached an earlier MCP startup failure. Do not retry unavailable tools or block the user's task; finish it, clearly report the Cairn quality outage, and tell the user to run `/restart` once to reload MCP tools.";
 

@@ -305,10 +305,8 @@ test("skill_edit rewrites a skill's master directly (agent-driven fix, no grader
   const bad = await call("skill_edit", { id: "no-such-id", master: "1. x" });
   expect(bad.isError).toBe(true); // unknown id rejected
   const catalog = parse(await call("skill_search", { task: "flash edit" }));
-  const alias = catalog.catalog.find((skill: { id: string; alias: string }) => skill.id === created.id).alias;
-  const selected = parse(await call("skill_select", { ids: [alias], catalogVersion: catalog.catalogVersion }));
+  const selected = parse(await call("skill_select", { ids: ["flash edit"] }));
   expect(selected).toEqual({
     selected: [{ id: created.id, steps: expect.stringContaining("do the thing better") }],
-    catalogVersion: catalog.catalogVersion,
   });
 });

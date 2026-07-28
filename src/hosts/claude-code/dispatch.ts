@@ -26,7 +26,7 @@ const COMPLETION_REMINDER =
 const SKILL_CORRECTION_REMINDER =
   "Cairn recorded a failed execution after selecting a reusable skill. Before completing, call skill_edit for every affected selected skill and fold the corrected reusable steps into its master prompt. Saving the discovery only to Brain does not repair the skill.";
 const CAIRN_VISIBILITY_REMINDER =
-  "Before submitting, attempt the injected Cairn brain and skill workflow now. If Cairn tools are unavailable in this session, do not retry or block on them; finish the user's task.";
+  "Cairn's required brain and skill tools were not visible in this session. The host may have cached an earlier MCP startup failure. Do not retry unavailable tools or block the user's task; finish it and clearly report the Cairn quality outage so the MCP connection can be restarted.";
 
 // Awaited write so the buffer is fully flushed before we force-exit (a bare process.exit() right
 // after process.stdout.write() can truncate piped output).

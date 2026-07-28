@@ -66,7 +66,7 @@ export const complianceReceiptPath = (sessionId: string): string =>
   join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, "cairn-compliance.json");
 const COMPLETION_REMINDER = "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
 const CAIRN_VISIBILITY_REMINDER =
-  "Before submitting, attempt the injected Cairn brain and skill workflow now. If Cairn tools are unavailable in this session, do not retry or block on them; finish the user's task.";
+  "Cairn's required brain and skill tools were not visible in this session. The CLI may have cached an earlier MCP startup failure. Do not retry unavailable tools or block the user's task; finish it, clearly report the Cairn quality outage, and tell the user to run `/restart` once to reload MCP tools.";
 
 // Read stdin but NEVER block the host indefinitely. `Bun.stdin.text()` only resolves on EOF, so if the
 // CLI invokes a hook without closing its stdin (observed on some Copilot/Claude CLI versions, and for

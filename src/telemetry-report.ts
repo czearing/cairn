@@ -52,6 +52,9 @@ export function printTelemetryReport(days: number, json = false): void {
   line(`completed runs ${quality.runs}  active ${quality.activeRuns}` +
     `${quality.oldestActiveMinutes ? ` (oldest ${quality.oldestActiveMinutes}m)` : ""}  ` +
     `abandoned ${quality.abandonedRuns}  superseded ${quality.supersededRuns}`);
+  line(`quality status ${quality.verdict.status.toUpperCase()}  ` +
+    `release coherent ${quality.verdict.releaseCoherent ? "yes" : "no"}`);
+  for (const issue of quality.verdict.issues) line(`  ! ${issue}`);
   line(`completed ${quality.completedRate}%  ` +
     `workflow ${quality.workflowRate}%  tool failures ${quality.toolFailures}`);
   line(`brain search-to-use ${quality.searchToUseRate}% ` +

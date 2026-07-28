@@ -14,6 +14,7 @@ import {
 } from "../src/core/telemetry";
 import { releaseVersion } from "../src/core/release";
 import { telemetryDatabase as qualityDatabase } from "../src/core/telemetry-schema";
+import { telemetryQualityVerdict } from "../src/core/telemetry-quality-verdict";
 const qualitySummary = (days: number) => telemetrySummary(days).quality;
 
 const identity = (sessionId: string) => ({ host: "copilot" as const, sessionId, turnSeq: 1 });
@@ -152,6 +153,36 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
   expect(summary.baseline).toBeNull();
   expect(summary.delta).toBeNull();
   expect(summary.comparisons).toEqual([]);
+  const verdict = telemetryQualityVerdict({
+    ...summary,
+    latestVersion: "behavior-release",
+    runs: 38,
+    workflowRate: 0,
+    visibilityFailures: 38,
+  }, {
+    releaseFingerprint: "engine-release",
+    version: "engine-release",
+    toolSchemas: { tools: 0, chars: 0, estimatedTokens: 0, definitions: [] },
+    searchStages: [],
+    engineTransports: [{
+      source: "daemon",
+      operation: "search",
+      calls: 10,
+      averageDurationMs: 55,
+      maximumDurationMs: 90,
+      failures: 0,
+    }],
+    parity: { checks: 10, mismatches: 0 },
+  });
+  expect(verdict).toMatchObject({
+    status: "outage",
+    releaseCoherent: false,
+    behavior: { visibilityFailureRate: 100, workflowRate: 0 },
+    infrastructure: { transportCalls: 10, transportFailures: 0 },
+  });
+  expect(verdict.issues).toContain(
+    "Behavior (behavior-release) and infrastructure (engine-release) are from different releases."
+  );
 
   const db = new Database(process.env.CAIRN_DB_PATH!, { readonly: true });
   const columns = db.query("PRAGMA table_info(telemetry_events)").all() as { name: string }[];
@@ -164,6 +195,88 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
   expect(serialized).not.toContain("node-a");
   expect(serialized).not.toContain("skill-a");
   expect(unknownRuntime).toEqual({ count: 6 });
+});
+
+test("quality verdict scopes outages to the latest runtime release", () => {
+  const db = qualityDatabase()!;
+  db.run("DELETE FROM telemetry_events");
+  db.run("DELETE FROM telemetry_runs");
+  const old = identity("quality-old-outage");
+  beginQualityRun({
+    ...old,
+    promptHash: promptFingerprint("old outage"),
+    catalogVersion: "catalog-old",
+    injectedChars: 0,
+  });
+  recordTelemetryState({
+    ...old,
+    eventKey: "old-visibility-failure",
+    kind: "visibility_failure",
+  });
+  finishQualityRun({
+    ...old,
+    completed: true,
+    workflowPassed: false,
+    skillUsed: false,
+    brainUsed: false,
+    stopNudges: 0,
+  });
+  db.run("UPDATE telemetry_runs SET version='0.1.0+old',release_fingerprint='old-release'");
+
+  const healthy = identity("quality-current-healthy");
+  beginQualityRun({
+    ...healthy,
+    promptHash: promptFingerprint("current healthy"),
+    catalogVersion: "catalog-current",
+    injectedChars: 0,
+  });
+  finishQualityRun({
+    ...healthy,
+    completed: true,
+    workflowPassed: true,
+    skillUsed: true,
+    brainUsed: true,
+    stopNudges: 0,
+  });
+
+  expect(qualitySummary(1)).toMatchObject({
+    latestVersion: releaseVersion,
+    runs: 1,
+    workflowRate: 100,
+    visibilityFailures: 0,
+  });
+
+  const currentFailure = identity("quality-current-outage");
+  beginQualityRun({
+    ...currentFailure,
+    promptHash: promptFingerprint("current outage"),
+    catalogVersion: "catalog-current",
+    injectedChars: 0,
+  });
+  recordTelemetryState({
+    ...currentFailure,
+    eventKey: "current-visibility-failure",
+    kind: "visibility_failure",
+  });
+  finishQualityRun({
+    ...currentFailure,
+    completed: true,
+    workflowPassed: false,
+    skillUsed: false,
+    brainUsed: false,
+    stopNudges: 0,
+  });
+
+  const current = qualitySummary(1);
+  expect(current).toMatchObject({
+    runs: 2,
+    workflowRate: 50,
+    visibilityFailures: 1,
+    verdict: {
+      status: "outage",
+      behavior: { visibilityFailureRate: 50 },
+    },
+  });
 });
 
 test("quality telemetry records content-free prompt evaluation provenance", () => {

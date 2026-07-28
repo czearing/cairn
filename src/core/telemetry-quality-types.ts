@@ -19,6 +19,8 @@ export interface ReleaseComparison {
 }
 
 export interface QualitySummary {
+  latestVersion: string;
+  latestReleaseFingerprint: string;
   runs: number;
   activeRuns: number;
   abandonedRuns: number;

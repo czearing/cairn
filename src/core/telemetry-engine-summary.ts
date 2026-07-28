@@ -23,7 +23,7 @@ export interface EngineTransportMetric {
   failures: number;
 }
 
-export function telemetryEngineSummary(days: number): {
+export interface EngineSummary {
   releaseFingerprint: string;
   version: string;
   toolSchemas: {
@@ -35,7 +35,9 @@ export function telemetryEngineSummary(days: number): {
   searchStages: SearchStageMetric[];
   engineTransports: EngineTransportMetric[];
   parity: { checks: number; mismatches: number };
-} {
+}
+
+export function telemetryEngineSummary(days: number): EngineSummary {
   const empty = {
     releaseFingerprint: "",
     version: "",
@@ -49,7 +51,7 @@ export function telemetryEngineSummary(days: number): {
   const sinceTs = Date.now() - Math.max(1, days) * 86_400_000;
   const latest = db.query(`SELECT release_fingerprint AS releaseFingerprint,version
     FROM telemetry_events
-    WHERE kind IN ('tool_schema','search_stage') AND ts>=?
+    WHERE kind IN ('tool_schema','search_stage','engine_transport','engine_parity') AND ts>=?
     ORDER BY ts DESC LIMIT 1`).get(sinceTs) as {
       releaseFingerprint: string;
       version: string;

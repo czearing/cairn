@@ -446,7 +446,7 @@ test("a stale model tool manifest fails open until a Cairn tool is successfully 
 
   expect(invoke("user-prompt", { sessionId: "stale-manifest", prompt: "Finish the task." }).status).toBe(0);
   const ignored = invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString();
-  expect(ignored).toContain("attempt the injected Cairn brain and skill workflow");
+  expect(ignored).toContain("run `/restart` once");
   expect(invoke("post-tool", {
     sessionId: "stale-manifest",
     toolName: "cairn-brain_search",
@@ -482,7 +482,7 @@ test("an ignored healthy Cairn workflow gets one retry before failing open", () 
 
   expect(invoke("user-prompt", { sessionId: "ignored-workflow", prompt: "Finish the task." }).status).toBe(0);
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
-    .toContain("attempt the injected Cairn brain and skill workflow");
+    .toContain("run `/restart` once");
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
     .toContain("completed every requested task");
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString()).toBe("{}");

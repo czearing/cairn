@@ -57,6 +57,18 @@ test("usage events store measurements without user content", async () => {
     runClass: "human",
   })).toBe(true);
   expect(recordUsage({
+    kind: "engine_transport",
+    source: "daemon",
+    toolName: "search",
+    durationMs: 14,
+    success: true,
+    eventKey: `engine-${marker}`,
+    releaseFingerprint: "engine-release",
+    version: "engine-version",
+    runClass: "human",
+    ts: Date.now() + 12,
+  })).toBe(true);
+  expect(recordUsage({
     kind: "tool_transport",
     source: "mcp",
     toolName: "brain_search",
@@ -140,7 +152,14 @@ test("usage events store measurements without user content", async () => {
       events: 1,
       averageDurationMs: 12,
     }],
+    engineTransports: [{
+      source: "daemon",
+      operation: "search",
+      calls: 1,
+      failures: 0,
+    }],
   });
+  expect(summary.quality.infrastructure).toEqual(summary.engine);
 });
 
 test("usage summaries exclude benchmark traffic and older releases", async () => {

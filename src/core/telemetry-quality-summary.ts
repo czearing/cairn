@@ -52,6 +52,10 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   const db = telemetryDatabase();
   if (!db) return empty();
   const sinceTs = Date.now() - Math.max(1, days) * 86_400_000;
+  const latestIdentity = (db.query(`SELECT version,release_fingerprint AS releaseFingerprint FROM telemetry_runs
+    WHERE started_ts>=? AND run_class='human' ORDER BY started_ts DESC LIMIT 1`)
+    .get(sinceTs) as { version?: string; releaseFingerprint?: string } | null) ?? {};
+  const latestVersion = latestIdentity.version || "";
   const staleCutoff = Date.now()
     - Math.max(60_000, Number(process.env.CAIRN_TELEMETRY_STALE_RUN_MS || "1800000"));
   db.query(`UPDATE telemetry_runs SET ended_ts=?,status='abandoned'
@@ -67,7 +71,8 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     COALESCE(SUM(CASE WHEN status='completed' THEN workflow_passed ELSE 0 END),0) AS workflow,
     COALESCE(SUM(CASE WHEN status='completed' THEN tool_failures ELSE 0 END),0) AS failures,
     COALESCE(MAX(CASE WHEN status='active' THEN (? - started_ts)/60000 ELSE 0 END),0) AS oldestActiveMinutes
-    FROM telemetry_runs WHERE started_ts>=? AND run_class='human'`).get(Date.now(), sinceTs) as {
+    FROM telemetry_runs WHERE started_ts>=? AND run_class='human' AND version=?`)
+    .get(Date.now(), sinceTs, latestVersion) as {
       active: number; closed: number; abandoned: number; superseded: number;
       completed: number; workflow: number; failures: number; oldestActiveMinutes: number;
     };
@@ -77,18 +82,18 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
       FROM telemetry_events e
       JOIN telemetry_runs r USING(run_id)
       WHERE e.ts>=? AND r.status='completed' AND e.kind='brain_returned' AND e.entity_hash!=''
-        AND r.run_class='human'
+        AND r.run_class='human' AND r.version=?
       GROUP BY e.run_id,e.entity_hash
     ), used AS (
       SELECT DISTINCT e.run_id,e.entity_hash FROM telemetry_events e
       JOIN telemetry_runs r USING(run_id)
       WHERE e.ts>=? AND r.status='completed' AND r.run_class='human'
-        AND e.kind IN ('brain_referenced','brain_mutated') AND e.entity_hash!=''
+        AND r.version=? AND e.kind IN ('brain_referenced','brain_mutated') AND e.entity_hash!=''
     ), observed AS (
       SELECT e.entity_hash,COUNT(DISTINCT e.session_hash) AS sessions FROM telemetry_events e
       JOIN telemetry_runs r USING(run_id)
       WHERE e.ts>=? AND r.status='completed' AND r.run_class='human'
-        AND e.entity_type='brain' AND e.entity_hash!=''
+        AND r.version=? AND e.entity_type='brain' AND e.entity_hash!=''
       GROUP BY e.entity_hash
     )
     SELECT (SELECT COUNT(*) FROM returned) AS returnedNodes,
@@ -102,7 +107,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
         FROM returned r JOIN used u USING(run_id,entity_hash)),0) AS minimumUsedScorePercent,
       (SELECT COUNT(*) FROM observed) AS observedNodes,
       (SELECT COUNT(*) FROM observed WHERE sessions>1) AS crossSessionNodes`)
-    .get(sinceTs, sinceTs, sinceTs) as {
+    .get(sinceTs, latestVersion, sinceTs, latestVersion, sinceTs, latestVersion) as {
       returnedNodes: number; usedReturnedNodes: number; rankedUsedReturnedNodes: number;
       top3UsedReturnedNodes: number;
       maxUsedRank: number; minimumUsedScorePercent: number;
@@ -118,15 +123,13 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     COALESCE(SUM(CASE WHEN e.kind='skill_correction_resolved' THEN 1 ELSE 0 END),0) AS skillCorrectionsResolved,
     COALESCE(SUM(CASE WHEN e.kind='skill_correction_blocked' THEN 1 ELSE 0 END),0) AS skillCorrectionBlocks
     FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
-    WHERE e.ts>=? AND r.run_class='human' AND r.status='completed'`).get(sinceTs) as {
+    WHERE e.ts>=? AND r.run_class='human' AND r.status='completed' AND r.version=?`)
+    .get(sinceTs, latestVersion) as {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
       workflowBlocks: number; completionBlocks: number;
       skillCorrectionsRequired: number; skillCorrectionsResolved: number;
       skillCorrectionBlocks: number;
     };
-  const latestVersion = (db.query(`SELECT version FROM telemetry_runs
-    WHERE started_ts>=? AND run_class='human' ORDER BY started_ts DESC LIMIT 1`)
-    .get(sinceTs) as { version?: string } | null)?.version || "";
   const runtime = db.query(`SELECT
     COALESCE(SUM(CASE WHEN e.runtime_version!='' THEN 1 ELSE 0 END),0) AS runtimeObservedCalls,
     COALESCE(SUM(CASE WHEN e.runtime_version='' THEN 1 ELSE 0 END),0) AS runtimeUnknownCalls,
@@ -185,6 +188,8 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   });
   const latest = comparisons[0];
   return {
+    latestVersion,
+    latestReleaseFingerprint: latestIdentity.releaseFingerprint || "",
     runs: runs.closed,
     activeRuns: runs.active,
     abandonedRuns: runs.abandoned,
@@ -221,6 +226,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
 
 function empty(): QualitySummary {
   return {
+    latestVersion: "", latestReleaseFingerprint: "",
     runs: 0, activeRuns: 0, abandonedRuns: 0, supersededRuns: 0, oldestActiveMinutes: 0,
     completedRate: 0, workflowRate: 0, toolFailures: 0,
     visibilityFailures: 0, workflowBlocks: 0, completionBlocks: 0,

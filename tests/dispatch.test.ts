@@ -183,7 +183,7 @@ test("Claude fails open when a resumed model manifest exposes no Cairn tools", a
     }));
   if (previous == null) delete process.env.CAIRN_ENFORCE_STOP_GATES;
   else process.env.CAIRN_ENFORCE_STOP_GATES = previous;
-  expect(stop.reason).toContain("attempt the injected Cairn brain and skill workflow");
+  expect(stop.reason).toContain("cached an earlier MCP startup failure");
   expect(stop.reason).toContain("completed every requested task");
   expect(await fire({
     hook_event_name: "Stop",

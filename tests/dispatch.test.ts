@@ -166,7 +166,7 @@ test("Claude blocks completion until a failed selected skill is repaired with sk
     session_id: sessionId,
     transcript_path: transcriptPath,
   }));
-  expect(after.reason).not.toContain("skill_edit");
+  expect(after.reason).not.toContain("Saving the discovery only to Brain");
   rmSync(transcriptPath, { force: true });
 });
 
@@ -221,6 +221,9 @@ test("Claude Stop clears selected skill state without queuing a reviewer", async
   }));
   expect(blocked.reason).toContain("brain");
   expect(blocked.reason).toContain("completed every requested task");
+  expect(blocked.reason).toContain("**Skill application**");
+  expect(blocked.reason).toContain("each numbered step");
+  expect(blocked.reason).toContain("no skill change was needed");
   expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
 
   await fire({

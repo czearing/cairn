@@ -23,6 +23,8 @@ const SKILL_REMINDER =
   "Before acting, read the injected catalog and call skill_select with every skill id you will use, or skill_create with a broad description and initial numbered plan. You will not be reminded again this turn.";
 const COMPLETION_REMINDER =
   "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
+const SKILL_APPLICATION_REMINDER =
+  "Your final response must include a concise **Skill application** section. For every selected or invoked skill, map each numbered step to the observable action or result that applied it. Then state the exact durable improvement made with skill_edit and why, or state that no skill change was needed because its steps remained accurate and complete. Summarize actions and evidence; do not expose hidden chain-of-thought.";
 const SKILL_CORRECTION_REMINDER =
   "Cairn recorded a failed execution after selecting a reusable skill. Before completing, call skill_edit for every affected selected skill and fold the corrected reusable steps into its master prompt. Saving the discovery only to Brain does not repair the skill.";
 const CAIRN_VISIBILITY_REMINDER =
@@ -267,7 +269,12 @@ async function main(): Promise<void> {
           noteSkillCorrectionNudge(session);
           out = out ? `${out}\n\n${SKILL_CORRECTION_REMINDER}` : SKILL_CORRECTION_REMINDER;
         }
-        if (!stopHookActive) out = out ? `${out}\n\n${COMPLETION_REMINDER}` : COMPLETION_REMINDER;
+        if (!stopHookActive) {
+          const completion = skillState.selected
+            ? `${COMPLETION_REMINDER}\n\n${SKILL_APPLICATION_REMINDER}`
+            : COMPLETION_REMINDER;
+          out = out ? `${out}\n\n${completion}` : completion;
+        }
       }
     } catch { /* skills are best-effort */ }
   }

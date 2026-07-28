@@ -16,3 +16,5 @@ Do not draft the deliverable until its evidence graph is resolved. Store every f
 Before stopping, verify every human request is complete.
 
 The final response must include the root synthesis, why nothing remains unresolved, how it was tested, how it improves recalled work, and the root URL.
+
+Also include a concise **Skill application** section. For every selected or invoked skill, map each numbered step to the observable action or result that applied it. Then report the exact durable improvement made with `skill_edit` and why, or state that no skill change was needed because its steps remained accurate and complete. Summarize actions and evidence; do not expose hidden chain-of-thought.

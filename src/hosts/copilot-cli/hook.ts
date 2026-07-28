@@ -65,6 +65,8 @@ export const internalContext = (text: string): string => text ? `<cairn-internal
 export const complianceReceiptPath = (sessionId: string): string =>
   join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, "cairn-compliance.json");
 const COMPLETION_REMINDER = "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
+const SKILL_APPLICATION_REMINDER =
+  "Your final response must include a concise **Skill application** section. For every selected or invoked skill, map each numbered step to the observable action or result that applied it. Then state the exact durable improvement made with `skill_edit` and why, or state that no skill change was needed because its steps remained accurate and complete. Summarize actions and evidence; do not expose hidden chain-of-thought.";
 const CAIRN_VISIBILITY_REMINDER =
   "Cairn's required brain and skill tools were not visible in this session. The CLI may have cached an earlier MCP startup failure. Do not retry unavailable tools or block the user's task; finish it, clearly report the Cairn quality outage, and tell the user to run `/restart` once to reload MCP tools.";
 
@@ -672,7 +674,10 @@ export async function runCopilotHook(): Promise<void> {
         eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:completion`,
         kind: "completion_blocked",
       });
-      emit({ decision: "block", reason: internalContext(COMPLETION_REMINDER) });
+      const completion = st.skillUsed
+        ? `${COMPLETION_REMINDER}\n\n${SKILL_APPLICATION_REMINDER}`
+        : COMPLETION_REMINDER;
+      emit({ decision: "block", reason: internalContext(completion) });
       return;
     }
     updateLifecycle(stateId, () => ({ ...st, pendingReviewIds: [], pendingReviews: [], stopBlocked: false }));

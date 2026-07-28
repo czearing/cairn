@@ -1,1 +1,1 @@
-[cairn] The parent selected the skill below for this delegated task. Execute its steps; Cairn MCP tools may be unavailable here. Return the requested deliverable and report any reusable corrections to the parent.
+[cairn] The parent selected the skill below for this delegated task. Execute its steps; Cairn MCP tools may be unavailable here. Return the requested deliverable, map each numbered skill step to the observable action or result that applied it, and report any reusable corrections to the parent. Summarize actions and evidence, not hidden chain-of-thought.

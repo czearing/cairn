@@ -427,6 +427,9 @@ test("a host-native skill invocation satisfies the skill gate without creating a
 
   const stop = invoke("agent-stop", { sessionId: "native-skill" }).stdout.toString();
   expect(stop).toContain("completed every requested task");
+  expect(stop).toContain("**Skill application**");
+  expect(stop).toContain("each numbered step");
+  expect(stop).toContain("no skill change was needed");
   expect(stop).not.toContain("skill_select");
   expect(lifecycleState(dbPath, "copilot:native-skill").pendingReviewIds).toEqual([]);
 });
@@ -1105,7 +1108,7 @@ test("agentStop requires a successful skill_edit after selected-skill execution 
   ).get(`copilot:${marker}`) as { ids: string }).ids)).toEqual([]);
   after.close();
   expect(invoke("agent-stop", { sessionId: marker }).stdout.toString())
-    .not.toContain("skill_edit");
+    .not.toContain("call `skill_edit`");
 
   rmSync(dbPath, { force: true });
 });

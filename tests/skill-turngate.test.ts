@@ -30,6 +30,22 @@ test("selecting first suppresses the reminder entirely", () => {
   expect(claimSkillReminder("S")).toBe(false);   // so it is never reminded
 });
 
+test("explicitly selecting no matching skill satisfies the gate without a fake skill id", () => {
+  resetSkillTurn("S");
+  noteSkillSelection(
+    "S",
+    "skill_select",
+    { ids: ["none"] },
+    { content: [{ text: '{"selected":[],"noMatch":true}' }] },
+  );
+  expect(skillTurnState("S")).toMatchObject({
+    selected: true,
+    pendingReviewIds: [],
+    invalidatedSkillIds: [],
+  });
+  expect(claimSkillReminder("S")).toBe(false);
+});
+
 test("a new turn re-arms the one reminder", () => {
   resetSkillTurn("S");
   expect(claimSkillReminder("S")).toBe(true);

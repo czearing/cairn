@@ -70,6 +70,7 @@ export function skillLoad(id: string): { id: string; title: string; description:
 
 export function skillSelect(ids: string[]): {
   selected: NonNullable<ReturnType<typeof skillLoad>>[];
+  noMatch?: boolean;
   currentCatalog?: ReturnType<typeof skillCatalog>;
   error?: string;
 } {
@@ -77,6 +78,9 @@ export function skillSelect(ids: string[]): {
   const snapshot = skillCatalogSnapshot();
   const references = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
   if (!references.length) return { selected: [], error: "select at least one skill title or id" };
+  if (references.length === 1 && references[0]!.toLowerCase() === "none") {
+    return { selected: [], noMatch: true };
+  }
   const durableIds = references.map((reference) =>
     snapshot.catalog.find((skill) => skill.title.toLowerCase() === reference.toLowerCase())?.id
     ?? reference

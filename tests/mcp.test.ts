@@ -309,4 +309,8 @@ test("skill_edit rewrites a skill's master directly (agent-driven fix, no grader
   expect(selected).toEqual({
     selected: [{ id: created.id, steps: expect.stringContaining("do the thing better") }],
   });
+  expect(parse(await call("skill_select", { ids: ["none"] }))).toEqual({
+    selected: [],
+    noMatch: true,
+  });
 });

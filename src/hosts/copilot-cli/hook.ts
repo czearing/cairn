@@ -47,7 +47,7 @@ import {
   resetLifecycle,
   updateLifecycle,
 } from "../../skill/lifecycle";
-import { skillResultId, skillResultIds } from "../../skill/tool-result";
+import { skillResultId, skillResultIds, skillResultNoMatch } from "../../skill/tool-result";
 import { postToolPromptFiles } from "../../inject/post-tool";
 import { completionContinuationEnabled } from "./completion-gate";
 
@@ -513,8 +513,10 @@ export async function runCopilotHook(): Promise<void> {
         const requested = Array.isArray(args.ids)
           ? args.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
           : [];
-        const ids = skillResultIds(result).length ? skillResultIds(result) : requested;
-        if (ids.length) {
+        const noMatch = skillResultNoMatch(result)
+          || (requested.length === 1 && requested[0]!.toLowerCase() === "none");
+        const ids = noMatch ? [] : skillResultIds(result).length ? skillResultIds(result) : requested;
+        if (ids.length || noMatch) {
           next.skillUsed = true;
           next.selectedSkillIds = [...new Set([...next.selectedSkillIds, ...ids])];
           next.pendingReviewIds = [...new Set([...next.pendingReviewIds, ...ids])];

@@ -1,4 +1,4 @@
-import { skillResultId, skillResultIds } from "./tool-result";
+import { skillResultId, skillResultIds, skillResultNoMatch } from "./tool-result";
 import { lifecycleScope, readLifecycle, resetLifecycle, updateLifecycle } from "./lifecycle";
 
 interface TurnState {
@@ -19,9 +19,12 @@ export function noteSkillSelection(session: string, tool: string, input: Record<
   const native = baseName(tool).toLowerCase() === "skill";
   let ids: string[] = [];
   if (baseName(tool) === "skill_select" && Array.isArray(input.ids)) {
-    ids = skillResultIds(output);
-    if (!ids.length) {
-      ids = input.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+    const requested = input.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+    const noMatch = skillResultNoMatch(output)
+      || (requested.length === 1 && requested[0]!.toLowerCase() === "none");
+    ids = noMatch ? [] : skillResultIds(output);
+    if (!ids.length && !noMatch) {
+      ids = requested;
     }
   } else if (baseName(tool) === "skill_create") {
     ids = [skillResultId(output) || "__created__"];

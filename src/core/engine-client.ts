@@ -73,7 +73,7 @@ function claimStartup(): boolean {
   } catch {
     try {
       const staleMs = Number(process.env.CAIRN_ENGINE_STARTUP_STALE_MS || "120000");
-      if (Date.now() - statSync(path).mtimeMs <= staleMs) return false;
+      if (startupClaimActive(path, staleMs)) return false;
       rmSync(path, { force: true });
       writeFileSync(path, JSON.stringify({
         pid: process.pid,
@@ -84,6 +84,22 @@ function claimStartup(): boolean {
     } catch {
       return false;
     }
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as { code?: string })?.code === "EPERM"; }
+}
+
+export function startupClaimActive(path: string, staleMs: number): boolean {
+  try {
+    const claim = JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown };
+    const pid = Number(claim.pid);
+    if (Number.isSafeInteger(pid) && pid > 0 && !pidAlive(pid)) return false;
+    return Date.now() - statSync(path).mtimeMs <= staleMs;
+  } catch {
+    return false;
   }
 }
 

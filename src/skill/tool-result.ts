@@ -33,3 +33,15 @@ export function skillResultIds(value: unknown): string[] {
     .flatMap((key) => skillResultIds(record[key]));
   return [...new Set([...direct, ...selected, ...nested])];
 }
+
+export function skillResultNoMatch(value: unknown): boolean {
+  if (typeof value === "string") {
+    try { return skillResultNoMatch(JSON.parse(value)); } catch { return false; }
+  }
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(skillResultNoMatch);
+  const record = value as Record<string, unknown>;
+  if (record.noMatch === true) return true;
+  return ["textResultForLlm", "text", "content", "result", "toolResult"]
+    .some((key) => skillResultNoMatch(record[key]));
+}

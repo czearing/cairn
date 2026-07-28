@@ -1,9 +1,14 @@
 import { expect, test } from "bun:test";
+import { rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import {
   ENGINE_PROTOCOL_VERSION,
   engineFingerprint,
   parseEngineLock,
 } from "../src/core/engine-protocol";
+import { startupClaimActive } from "../src/core/engine-client";
 
 const fingerprint = engineFingerprint({
   dbPath: "C:\\brain\\cairn.db",
@@ -31,4 +36,16 @@ test("engine fingerprint changes with database ownership", () => {
     model: "model",
   });
   expect(changed).not.toBe(fingerprint);
+});
+
+test("engine startup claims remain active only while their owner is alive", () => {
+  const path = join(tmpdir(), `cairn-engine-claim-${randomUUID()}.json`);
+  try {
+    writeFileSync(path, JSON.stringify({ pid: process.pid }));
+    expect(startupClaimActive(path, 120_000)).toBe(true);
+    writeFileSync(path, JSON.stringify({ pid: 2_147_483_647 }));
+    expect(startupClaimActive(path, 120_000)).toBe(false);
+  } finally {
+    rmSync(path, { force: true });
+  }
 });

@@ -390,7 +390,8 @@ test("Harness user prompts receive the complete user Cairn workflow", () => {
   expect(harnessOutput.additionalContext).toBe(directOutput.additionalContext);
   expect(harnessOutput.additionalContext).toContain("## Brain workflow");
   expect(harnessOutput.additionalContext).toContain("no breadth or depth limit");
-  expect(harnessOutput.additionalContext).toContain("catalog titles do not establish an exact fit");
+  expect(harnessOutput.additionalContext).toContain("select `none`");
+  expect(harnessOutput.additionalContext).toContain("never a one-off task");
   rmSync(cairnDb, { force: true });
 });
 

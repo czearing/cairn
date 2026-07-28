@@ -23,6 +23,8 @@ const SKILL_REMINDER =
   "Before acting, read the injected catalog and call skill_select with every skill id you will use, or skill_create with a broad description and initial numbered plan. You will not be reminded again this turn.";
 const COMPLETION_REMINDER =
   "Before submitting, ensure you have completed every requested task. Finish anything still incomplete now.";
+const SKILL_CORRECTION_REMINDER =
+  "Cairn recorded a failed execution after selecting a reusable skill. Before completing, call skill_edit for every affected selected skill and fold the corrected reusable steps into its master prompt. Saving the discovery only to Brain does not repair the skill.";
 const CAIRN_VISIBILITY_REMINDER =
   "Before submitting, attempt the injected Cairn brain and skill workflow now. If Cairn tools are unavailable in this session, do not retry or block on them; finish the user's task.";
 
@@ -212,16 +214,37 @@ async function main(): Promise<void> {
     try {
       const { skillInject, skillsExist } = await import("../../skill/hook");
       const {
-        noteCairnToolObserved, noteSkillSelection, skillTurnState, claimSkillReminder,
-        isActionTool, isCairnTool, isSkillSelection,
+        noteCairnToolObserved, noteFailedSkillExecution, noteSkillCorrectionNudge,
+        noteSkillEdit, noteSkillSelection, skillTurnState, claimSkillReminder,
+        isActionTool, isCairnTool, isSkillEdit, isSkillSelection,
       } = await import("../../skill/turngate");
       if (event.kind === "user_message") {
         await skillInject(event.text, session);
       }
       else if (event.kind === "tool_completed") {
+        const succeeded = (await import("../../core/telemetry")).telemetryResultSucceeded(event.output);
         if (isCairnTool(event.tool)) noteCairnToolObserved(session);
         if (isSkillSelection(event.tool)) {
           noteSkillSelection(session, event.tool, event.input, event.output);
+        }
+        if (isActionTool(event.tool) && !succeeded && noteFailedSkillExecution(session)) {
+          const telemetry = await import("../../core/telemetry");
+          telemetry.recordTelemetryState({
+            host: "claude", sessionId: session, turnSeq: skillTurnState(session).turnSeq,
+            eventKey: `${qualityEventKey}:skill-correction-required`,
+            kind: "skill_correction_required",
+          });
+        }
+        if (isSkillEdit(event.tool)) {
+          const id = typeof event.input.id === "string" ? event.input.id : "";
+          if (noteSkillEdit(session, id, succeeded)) {
+            const telemetry = await import("../../core/telemetry");
+            telemetry.recordTelemetryState({
+              host: "claude", sessionId: session, turnSeq: skillTurnState(session).turnSeq,
+              eventKey: `${qualityEventKey}:skill-correction-resolved`,
+              kind: "skill_correction_resolved",
+            });
+          }
         }
       } else if (
         event.kind === "tool_pending"
@@ -239,6 +262,11 @@ async function main(): Promise<void> {
         if (canEnforce && !skillState.selected && !stopHookActive) {
           out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
         }
+        if (canEnforce && skillState.invalidatedSkillIds.length
+          && skillState.skillCorrectionNudges < 2 && !stopHookActive) {
+          noteSkillCorrectionNudge(session);
+          out = out ? `${out}\n\n${SKILL_CORRECTION_REMINDER}` : SKILL_CORRECTION_REMINDER;
+        }
         if (!stopHookActive) out = out ? `${out}\n\n${COMPLETION_REMINDER}` : COMPLETION_REMINDER;
       }
     } catch { /* skills are best-effort */ }
@@ -250,9 +278,14 @@ async function main(): Promise<void> {
       const turngate = await import("../../skill/turngate");
       const state = turngate.skillTurnState(session);
       if (out) {
+        const correctionBlocked = state.invalidatedSkillIds.length > 0
+          && state.skillCorrectionNudges > 0;
         telemetry.recordTelemetryState({
           host: "claude", sessionId: session, turnSeq: state.turnSeq,
-          eventKey: qualityEventKey, kind: visibilityReminder ? "visibility_failure" : "stop_blocked",
+          eventKey: qualityEventKey,
+          kind: visibilityReminder
+            ? "visibility_failure"
+            : correctionBlocked ? "skill_correction_blocked" : "stop_blocked",
         });
       } else {
         telemetry.finishTelemetryRun({

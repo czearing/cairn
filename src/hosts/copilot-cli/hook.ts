@@ -47,7 +47,7 @@ import {
   resetLifecycle,
   updateLifecycle,
 } from "../../skill/lifecycle";
-import { skillResultId } from "../../skill/tool-result";
+import { skillResultId, skillResultIds } from "../../skill/tool-result";
 import { postToolPromptFiles } from "../../inject/post-tool";
 import { completionContinuationEnabled } from "./completion-gate";
 
@@ -141,10 +141,16 @@ export interface WorkflowEvidence {
   stopNudges: number;
   strict?: boolean;
   minimumBrainNodes?: number;
+  pendingSkillCorrections?: number;
+  skillCorrectionNudges?: number;
 }
 export function stopDecision(s: WorkflowEvidence): {
   file: string;
 } {
+  if ((s.pendingSkillCorrections ?? 0) > 0
+    && (s.skillCorrectionNudges ?? 0) < STOP_CAP) {
+    return { file: "skill-correction-reminder.md" };
+  }
   if (s.stopNudges >= STOP_CAP) return { file: "" };
   if (!s.skillUsed) return { file: "skill-search-reminder.md" };
   if (s.strict && (
@@ -155,6 +161,15 @@ export function stopDecision(s: WorkflowEvidence): {
   )) return { file: "turn-reminder.md" };
   if (!s.brainUsed) return { file: "turn-reminder.md" };
   return { file: "" };
+}
+
+const NON_EXECUTION_TOOLS =
+  /^(read|view|glob|grep|rg|search|web_fetch|web_search|ask_user|sql|list_|get_|fetch_|manage_schedule)/i;
+export function failedExecutionDisprovesSkill(toolName: string, succeeded: boolean): boolean {
+  return !succeeded
+    && !isCairnMcpTool(toolName)
+    && !isNativeSkillTool(toolName)
+    && !NON_EXECUTION_TOOLS.test(toolName);
 }
 
 const READ_ONLY_TOOLS = /^(read|view|glob|grep|rg|search|web_fetch|web_search|fetch_copilot_cli_documentation|list_|get_)/i;
@@ -472,6 +487,8 @@ export async function runCopilotHook(): Promise<void> {
   if (mode === "post-tool") {
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const stateId = turnScope(sessionId, agentId);
+    let correctionRequired = false;
+    let correctionResolved = false;
     const state = updateLifecycle(stateId, (current) => {
       const next = { ...current };
       const succeeded = toolResultSucceeded(result);
@@ -491,15 +508,21 @@ export async function runCopilotHook(): Promise<void> {
       }
       if (isNativeSkillTool(toolName) && toolResultSucceeded(result)) next.skillUsed = true;
       if (isTool(toolName, "skill_select") && succeeded) {
-        const ids = Array.isArray(args.ids) ? args.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0) : [];
+        const requested = Array.isArray(args.ids)
+          ? args.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+          : [];
+        const ids = skillResultIds(result).length ? skillResultIds(result) : requested;
         if (ids.length) {
           next.skillUsed = true;
+          next.selectedSkillIds = [...new Set([...next.selectedSkillIds, ...ids])];
           next.pendingReviewIds = [...new Set([...next.pendingReviewIds, ...ids])];
         }
       }
       if (isTool(toolName, "skill_create") && succeeded) {
+        const id = skillResultId(result);
         next.skillUsed = true;
-        next.pendingReviewIds = [...new Set([...next.pendingReviewIds, skillResultId(result) || "__created__"])];
+        if (id) next.selectedSkillIds = [...new Set([...next.selectedSkillIds, id])];
+        next.pendingReviewIds = [...new Set([...next.pendingReviewIds, id || "__created__"])];
       }
       if (isTool(toolName, "skill_search") && succeeded) {
         const id = skillResultId(result);
@@ -512,7 +535,20 @@ export async function runCopilotHook(): Promise<void> {
         const id = typeof args.id === "string" ? args.id : "";
         if (id) {
           next.skillUsed = true;
+          next.selectedSkillIds = [...new Set([...next.selectedSkillIds, id])];
           next.pendingReviewIds = [...new Set([...next.pendingReviewIds, id])];
+        }
+      }
+      if (failedExecutionDisprovesSkill(toolName, succeeded) && next.selectedSkillIds.length) {
+        const invalidated = [...new Set([...next.invalidatedSkillIds, ...next.selectedSkillIds])];
+        correctionRequired = invalidated.length > next.invalidatedSkillIds.length;
+        next.invalidatedSkillIds = invalidated;
+      }
+      if (isTool(toolName, "skill_edit") && succeeded) {
+        const id = typeof args.id === "string" ? args.id.trim() : "";
+        if (id && next.invalidatedSkillIds.includes(id)) {
+          next.invalidatedSkillIds = next.invalidatedSkillIds.filter((skillId) => skillId !== id);
+          correctionResolved = next.invalidatedSkillIds.length === 0;
         }
       }
 
@@ -523,6 +559,20 @@ export async function runCopilotHook(): Promise<void> {
       eventKey: hostEventKey || `${eventId}:${toolCallId}`, toolName, args, result,
       success: toolResultSucceeded(result), durationMs,
     });
+    if (correctionRequired) {
+      recordTelemetryState({
+        host: "copilot", sessionId, turnSeq: state.turnSeq,
+        eventKey: `${hostEventKey || `${eventId}:${toolCallId}`}:skill-correction-required`,
+        kind: "skill_correction_required",
+      });
+    }
+    if (correctionResolved) {
+      recordTelemetryState({
+        host: "copilot", sessionId, turnSeq: state.turnSeq,
+        eventKey: `${hostEventKey || `${eventId}:${toolCallId}`}:skill-correction-resolved`,
+        kind: "skill_correction_resolved",
+      });
+    }
 
     if (isCairnMcpTool(toolName) && !toolResultSucceeded(result)) return void emit({});
     const answer = typeof args.answer === "string" ? args.answer : "";
@@ -577,14 +627,24 @@ export async function runCopilotHook(): Promise<void> {
       stopNudges: st.stopNudges,
       strict: process.env.AGENT_HARNESS === "1",
       minimumBrainNodes: Number(process.env.CAIRN_MIN_BRAIN_NODES || "3"),
+      pendingSkillCorrections: st.invalidatedSkillIds.length,
+      skillCorrectionNudges: st.skillCorrectionNudges,
     }).file : "";
     const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
-      updateLifecycle(stateId, () => ({ ...st, stopNudges: st.stopNudges + 1, stopBlocked: true }));
+      const skillCorrection = file === "skill-correction-reminder.md";
+      updateLifecycle(stateId, () => ({
+        ...st,
+        stopNudges: skillCorrection ? st.stopNudges : st.stopNudges + 1,
+        skillCorrectionNudges: skillCorrection
+          ? st.skillCorrectionNudges + 1
+          : st.skillCorrectionNudges,
+        stopBlocked: true,
+      }));
       recordTelemetryState({
         host: "copilot", sessionId, turnSeq: st.turnSeq,
-        eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:workflow`,
-        kind: "stop_blocked",
+        eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:${skillCorrection ? "skill-correction" : "workflow"}`,
+        kind: skillCorrection ? "skill_correction_blocked" : "stop_blocked",
       });
       emit({ decision: "block", reason: text });
       return;

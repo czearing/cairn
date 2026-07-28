@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import {
   resetSkillTurn, noteSkillReviewed, noteSkillSelection, skillTurnState,
   claimSkillReminder, isActionTool, isCairnTool, isSkillSelection,
+  noteFailedSkillExecution, noteSkillCorrectionNudge, noteSkillEdit,
 } from "../src/skill/turngate";
 
 const DIR = join(tmpdir(), `cairn-turn-${randomUUID()}`);
@@ -63,6 +64,25 @@ test("every selected skill remains pending until individually reviewed", () => {
   expect(skillTurnState("S").pendingReviewIds).toEqual(["b"]);
   noteSkillReviewed("S", "b");
   expect(skillTurnState("S").pendingReviewIds).toEqual([]);
+});
+
+test("a failed execution invalidates selected durable skills until skill_edit succeeds", () => {
+  resetSkillTurn("S");
+  noteSkillSelection(
+    "S",
+    "skill_select",
+    { ids: ["s1"] },
+    { content: [{ text: '{"selected":[{"id":"durable-skill"}]}' }] },
+  );
+  expect(noteFailedSkillExecution("S")).toBe(true);
+  expect(noteFailedSkillExecution("S")).toBe(false);
+  expect(skillTurnState("S").invalidatedSkillIds).toEqual(["durable-skill"]);
+  noteSkillCorrectionNudge("S");
+  expect(skillTurnState("S").skillCorrectionNudges).toBe(1);
+  expect(noteSkillEdit("S", "durable-skill", false)).toBe(false);
+  expect(skillTurnState("S").invalidatedSkillIds).toEqual(["durable-skill"]);
+  expect(noteSkillEdit("S", "durable-skill", true)).toBe(true);
+  expect(skillTurnState("S").invalidatedSkillIds).toEqual([]);
 });
 
 test("created skill tracking uses the returned id and ignores unrelated reviews", () => {

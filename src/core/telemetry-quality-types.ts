@@ -49,6 +49,10 @@ export interface QualitySummary {
   selectedSkills: number;
   editedSkills: number;
   skillEditRate: number;
+  skillCorrectionsRequired: number;
+  skillCorrectionsResolved: number;
+  skillCorrectionBlocks: number;
+  skillCorrectionResolutionRate: number;
   promptEvaluations: number;
   acceptedPromptEvaluations: number;
   latestPromptEvaluation: {

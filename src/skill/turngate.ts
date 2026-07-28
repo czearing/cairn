@@ -1,4 +1,4 @@
-import { skillResultId } from "./tool-result";
+import { skillResultId, skillResultIds } from "./tool-result";
 import { lifecycleScope, readLifecycle, resetLifecycle, updateLifecycle } from "./lifecycle";
 
 interface TurnState {
@@ -7,6 +7,8 @@ interface TurnState {
   reminded: boolean;
   turnSeq: number;
   cairnToolObserved: boolean;
+  invalidatedSkillIds: string[];
+  skillCorrectionNudges: number;
 }
 const scope = (session: string) => lifecycleScope("claude", session);
 
@@ -17,7 +19,10 @@ export function noteSkillSelection(session: string, tool: string, input: Record<
   const native = baseName(tool).toLowerCase() === "skill";
   let ids: string[] = [];
   if (baseName(tool) === "skill_select" && Array.isArray(input.ids)) {
-    ids = input.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+    ids = skillResultIds(output);
+    if (!ids.length) {
+      ids = input.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+    }
   } else if (baseName(tool) === "skill_create") {
     ids = [skillResultId(output) || "__created__"];
   } else if (baseName(tool) === "skill_search") {
@@ -28,7 +33,40 @@ export function noteSkillSelection(session: string, tool: string, input: Record<
     skillUsed: true,
     cairnToolAttempted: state.cairnToolAttempted || !native,
     cairnToolObserved: state.cairnToolObserved || !native,
+    selectedSkillIds: [...new Set([...state.selectedSkillIds, ...ids.filter((id) => !id.startsWith("__"))])],
     pendingReviewIds: [...new Set([...state.pendingReviewIds, ...ids])],
+  }));
+}
+
+export function noteFailedSkillExecution(session: string): boolean {
+  let required = false;
+  updateLifecycle(scope(session), (state) => {
+    const invalidated = [...new Set([...state.invalidatedSkillIds, ...state.selectedSkillIds])];
+    required = invalidated.length > state.invalidatedSkillIds.length;
+    return { ...state, invalidatedSkillIds: invalidated };
+  });
+  return required;
+}
+
+export function noteSkillEdit(session: string, id: string, succeeded: boolean): boolean {
+  if (!succeeded || !id.trim()) return false;
+  let resolved = false;
+  updateLifecycle(scope(session), (state) => {
+    const wasInvalidated = state.invalidatedSkillIds.includes(id.trim());
+    const remaining = state.invalidatedSkillIds.filter((skillId) => skillId !== id.trim());
+    resolved = wasInvalidated && remaining.length === 0;
+    return {
+      ...state,
+      invalidatedSkillIds: remaining,
+    };
+  });
+  return resolved;
+}
+
+export function noteSkillCorrectionNudge(session: string): void {
+  updateLifecycle(scope(session), (state) => ({
+    ...state,
+    skillCorrectionNudges: state.skillCorrectionNudges + 1,
   }));
 }
 
@@ -68,6 +106,8 @@ export function skillTurnState(session: string): TurnState {
     reminded: state.reminded,
     turnSeq: state.turnSeq,
     cairnToolObserved: state.cairnToolObserved,
+    invalidatedSkillIds: state.invalidatedSkillIds,
+    skillCorrectionNudges: state.skillCorrectionNudges,
   };
 }
 
@@ -81,6 +121,7 @@ export function isSkillSelection(tool: string): boolean {
   return ["skill", "skill_select", "skill_create", "skill_search"].includes(baseName(tool).toLowerCase());
 }
 export function isSkillReview(tool: string): boolean { return baseName(tool) === "skill_review"; }
+export function isSkillEdit(tool: string): boolean { return baseName(tool) === "skill_edit"; }
 export function isCairnTool(tool: string): boolean {
   const name = baseName(tool).toLowerCase();
   return name.startsWith("brain_") || name.startsWith("skill_");

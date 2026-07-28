@@ -113,11 +113,16 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     COUNT(DISTINCT CASE WHEN e.kind='skill_edited' THEN e.entity_hash END) AS editedSkills,
     COALESCE(SUM(CASE WHEN e.kind='visibility_failure' THEN 1 ELSE 0 END),0) AS visibilityFailures,
     COALESCE(SUM(CASE WHEN e.kind='stop_blocked' THEN 1 ELSE 0 END),0) AS workflowBlocks,
-    COALESCE(SUM(CASE WHEN e.kind='completion_blocked' THEN 1 ELSE 0 END),0) AS completionBlocks
+    COALESCE(SUM(CASE WHEN e.kind='completion_blocked' THEN 1 ELSE 0 END),0) AS completionBlocks,
+    COALESCE(SUM(CASE WHEN e.kind='skill_correction_required' THEN 1 ELSE 0 END),0) AS skillCorrectionsRequired,
+    COALESCE(SUM(CASE WHEN e.kind='skill_correction_resolved' THEN 1 ELSE 0 END),0) AS skillCorrectionsResolved,
+    COALESCE(SUM(CASE WHEN e.kind='skill_correction_blocked' THEN 1 ELSE 0 END),0) AS skillCorrectionBlocks
     FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
     WHERE e.ts>=? AND r.run_class='human' AND r.status='completed'`).get(sinceTs) as {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
       workflowBlocks: number; completionBlocks: number;
+      skillCorrectionsRequired: number; skillCorrectionsResolved: number;
+      skillCorrectionBlocks: number;
     };
   const latestVersion = (db.query(`SELECT version FROM telemetry_runs
     WHERE started_ts>=? AND run_class='human' ORDER BY started_ts DESC LIMIT 1`)
@@ -197,6 +202,10 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     mixedRuntimeRuns: coherence.mixedRuntimeRuns,
     ...skills,
     skillEditRate: percent(skills.editedSkills, skills.selectedSkills),
+    skillCorrectionResolutionRate: percent(
+      skills.skillCorrectionsResolved,
+      skills.skillCorrectionsRequired,
+    ),
     promptEvaluations: promptEvaluationCounts.total,
     acceptedPromptEvaluations: promptEvaluationCounts.accepted,
     latestPromptEvaluation: latestPromptEvaluation ? {
@@ -220,7 +229,9 @@ function empty(): QualitySummary {
     crossSessionReuseRate: 0, crossSessionNodes: 0, observedNodes: 0,
     runtimeObservedCalls: 0, runtimeUnknownCalls: 0, runtimeMismatchCalls: 0,
     coherentRuns: 0, mixedRuntimeRuns: 0,
-    selectedSkills: 0, editedSkills: 0, skillEditRate: 0, comparisons: [],
+    selectedSkills: 0, editedSkills: 0, skillEditRate: 0,
+    skillCorrectionsRequired: 0, skillCorrectionsResolved: 0,
+    skillCorrectionBlocks: 0, skillCorrectionResolutionRate: 0, comparisons: [],
     promptEvaluations: 0, acceptedPromptEvaluations: 0, latestPromptEvaluation: null,
     current: null, baseline: null, delta: null,
   };

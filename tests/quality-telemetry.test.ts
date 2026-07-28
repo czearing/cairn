@@ -55,6 +55,15 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
   recordTelemetryState({
     ...current, eventKey: "current-completion-block", kind: "completion_blocked",
   });
+  recordTelemetryState({
+    ...current, eventKey: "current-skill-correction-required", kind: "skill_correction_required",
+  });
+  recordTelemetryState({
+    ...current, eventKey: "current-skill-correction-blocked", kind: "skill_correction_blocked",
+  });
+  recordTelemetryState({
+    ...current, eventKey: "current-skill-correction-resolved", kind: "skill_correction_resolved",
+  });
   recordQualityTool({
     ...current, eventKey: "current-search", toolName: "brain_search",
     args: { query: marker },
@@ -134,6 +143,10 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
     selectedSkills: 1,
     editedSkills: 1,
     skillEditRate: 100,
+    skillCorrectionsRequired: 1,
+    skillCorrectionsResolved: 1,
+    skillCorrectionBlocks: 1,
+    skillCorrectionResolutionRate: 100,
   });
   expect(summary.current).toBeNull();
   expect(summary.baseline).toBeNull();

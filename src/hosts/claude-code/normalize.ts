@@ -23,12 +23,17 @@ export async function normalizeClaudeCode(payload: unknown): Promise<NormalizedE
     return { kind: "tool_pending", tool, input, callId: typeof payload.tool_use_id === "string" ? payload.tool_use_id : undefined };
   }
 
-  if (eventName === "PostToolUse") {
+  if (eventName === "PostToolUse" || eventName === "PostToolUseFailure") {
     const tool = payload.tool_name;
     const input = payload.tool_input;
     if (typeof tool !== "string" || !isObject(input)) return null;
     // Docs name this `tool_output`; older payloads used `tool_response`. Accept both.
-    const output = payload.tool_output ?? payload.tool_response;
+    const output = eventName === "PostToolUseFailure"
+      ? {
+          success: false,
+          error: payload.error ?? payload.tool_output ?? payload.tool_response ?? "tool failed",
+        }
+      : payload.tool_output ?? payload.tool_response;
     return { kind: "tool_completed", tool, input, output, callId: typeof payload.tool_use_id === "string" ? payload.tool_use_id : undefined };
   }
 

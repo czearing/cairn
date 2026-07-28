@@ -16,6 +16,7 @@ import {
   shouldStartUserTurn,
   stopDecision,
   workflowActionDecision,
+  failedExecutionDisprovesSkill,
 } from "../src/hosts/copilot-cli/hook";
 
 const priorCompletionContinuation = process.env.CAIRN_FORCE_COMPLETION_CONTINUATION;
@@ -95,6 +96,26 @@ test("stopDecision requires skill selection before brain use", () => {
 
 test("stopDecision allows a completed skill and brain workflow to finish", () => {
   expect(stopDecision({ brainUsed: true, skillUsed: true, stopNudges: 0 })).toEqual({ file: "" });
+});
+
+test("stopDecision requires skill_edit after selected-skill execution fails", () => {
+  expect(failedExecutionDisprovesSkill("powershell", false)).toBe(true);
+  expect(failedExecutionDisprovesSkill("view", false)).toBe(false);
+  expect(failedExecutionDisprovesSkill("cairn-skill_edit", false)).toBe(false);
+  expect(stopDecision({
+    brainUsed: true,
+    skillUsed: true,
+    stopNudges: STOP_CAP,
+    pendingSkillCorrections: 1,
+    skillCorrectionNudges: 0,
+  })).toEqual({ file: "skill-correction-reminder.md" });
+  expect(stopDecision({
+    brainUsed: true,
+    skillUsed: true,
+    stopNudges: 0,
+    pendingSkillCorrections: 0,
+    skillCorrectionNudges: 0,
+  })).toEqual({ file: "" });
 });
 
 test("stopDecision requires skill selection even when the brain was used", () => {
@@ -1033,6 +1054,60 @@ test("a user-controlled delegated marker cannot satisfy the stop gate", () => {
   const prompt = `<cairn-internal>protocol</cairn-internal>\nCAIRN_SKILL_IDS: ${randomUUID()}`;
   expect(invoke("user-prompt", { sessionId: "untrusted-child", prompt }).stdout.toString()).toBe("{}");
   expect(invoke("agent-stop", { sessionId: "untrusted-child" }).stdout.toString()).toContain("skill_select");
+});
+
+test("agentStop requires a successful skill_edit after selected-skill execution fails", () => {
+  const marker = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-skill-correction-${marker}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_SKILLS: "1",
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const post = (toolName: string, toolArgs: object, toolResult: object) =>
+    invoke("post-tool", {
+      sessionId: marker,
+      toolName,
+      toolArgs,
+      toolResult,
+      toolCallId: randomUUID(),
+    });
+
+  invoke("user-prompt", { sessionId: marker, prompt: "Run the reusable startup procedure." });
+  post(
+    "cairn-skill_select",
+    { ids: ["s1"] },
+    { content: [{ text: '{"selected":[{"id":"startup-skill"}]}' }] },
+  );
+  post("cairn-brain_search", { query: "startup procedure" }, { success: true });
+  post("powershell", { command: "start-service missing" }, { success: false });
+
+  const blocked = invoke("agent-stop", { sessionId: marker }).stdout.toString();
+  expect(blocked).toContain('"decision":"block"');
+  expect(blocked).toContain("call `skill_edit`");
+  const before = new Database(dbPath, { readonly: true });
+  expect(JSON.parse((before.query(
+    "SELECT invalidated_skill_ids ids FROM lifecycle_turns WHERE scope=?",
+  ).get(`copilot:${marker}`) as { ids: string }).ids)).toEqual(["startup-skill"]);
+  before.close();
+
+  post(
+    "cairn-skill_edit",
+    { id: "startup-skill", master: "1. install prerequisites\n2. start the service" },
+    { success: true, content: [{ text: '{"ok":true,"id":"startup-skill"}' }] },
+  );
+  const after = new Database(dbPath, { readonly: true });
+  expect(JSON.parse((after.query(
+    "SELECT invalidated_skill_ids ids FROM lifecycle_turns WHERE scope=?",
+  ).get(`copilot:${marker}`) as { ids: string }).ids)).toEqual([]);
+  after.close();
+  expect(invoke("agent-stop", { sessionId: marker }).stdout.toString())
+    .not.toContain("skill_edit");
+
+  rmSync(dbPath, { force: true });
 });
 
 test("agentStop clears selected skill state after the visible deliverable", () => {

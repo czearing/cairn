@@ -67,6 +67,9 @@ export function printTelemetryReport(days: number, json = false): void {
   );
   line(`skills selected ${quality.selectedSkills}  edited ${quality.editedSkills} ` +
     `(${quality.skillEditRate}%)  visibility failures ${quality.visibilityFailures}`);
+  line(`skill corrections required ${quality.skillCorrectionsRequired}  ` +
+    `resolved ${quality.skillCorrectionsResolved} (${quality.skillCorrectionResolutionRate}%)  ` +
+    `blocks ${quality.skillCorrectionBlocks}`);
   line(`workflow blocks ${quality.workflowBlocks}  completion blocks ${quality.completionBlocks}`);
   line(`prompt evals ${quality.promptEvaluations}  accepted ${quality.acceptedPromptEvaluations}` +
     (quality.latestPromptEvaluation

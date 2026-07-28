@@ -17,6 +17,9 @@ export interface LifecycleState {
   rootNodeId: string;
   rootSynthesized: boolean;
   skillUsed: boolean;
+  selectedSkillIds: string[];
+  invalidatedSkillIds: string[];
+  skillCorrectionNudges: number;
   pendingReviewIds: string[];
   pendingReviews: ReviewDeclaration[];
   stopNudges: number;
@@ -38,6 +41,9 @@ const fresh = (): LifecycleState => ({
   rootNodeId: "",
   rootSynthesized: false,
   skillUsed: false,
+  selectedSkillIds: [],
+  invalidatedSkillIds: [],
+  skillCorrectionNudges: 0,
   pendingReviewIds: [],
   pendingReviews: [],
   stopNudges: 0,
@@ -67,6 +73,9 @@ function database(): Database {
     root_node_id TEXT NOT NULL DEFAULT '',
     root_synthesized INTEGER NOT NULL DEFAULT 0,
     skill_used INTEGER NOT NULL DEFAULT 0,
+    selected_skill_ids TEXT NOT NULL DEFAULT '[]',
+    invalidated_skill_ids TEXT NOT NULL DEFAULT '[]',
+    skill_correction_nudges INTEGER NOT NULL DEFAULT 0,
     pending_review_ids TEXT NOT NULL DEFAULT '[]',
     pending_reviews TEXT NOT NULL DEFAULT '[]',
     stop_nudges INTEGER NOT NULL DEFAULT 0,
@@ -107,6 +116,15 @@ function database(): Database {
   if (!columns.some((column) => column.name === "root_synthesized")) {
     d.run("ALTER TABLE lifecycle_turns ADD COLUMN root_synthesized INTEGER NOT NULL DEFAULT 0");
   }
+  if (!columns.some((column) => column.name === "selected_skill_ids")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN selected_skill_ids TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!columns.some((column) => column.name === "invalidated_skill_ids")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN invalidated_skill_ids TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!columns.some((column) => column.name === "skill_correction_nudges")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN skill_correction_nudges INTEGER NOT NULL DEFAULT 0");
+  }
   d.run(`CREATE TABLE IF NOT EXISTS lifecycle_delegations (
     tool_call_id TEXT PRIMARY KEY,
     parent_scope TEXT NOT NULL,
@@ -135,6 +153,9 @@ function fromRow(row: Record<string, unknown> | null | undefined): LifecycleStat
     rootNodeId: String(row.root_node_id || ""),
     rootSynthesized: Boolean(row.root_synthesized),
     skillUsed: Boolean(row.skill_used),
+    selectedSkillIds: parse(row.selected_skill_ids, []),
+    invalidatedSkillIds: parse(row.invalidated_skill_ids, []),
+    skillCorrectionNudges: Number(row.skill_correction_nudges || 0),
     pendingReviewIds: parse(row.pending_review_ids, []),
     pendingReviews: parse(row.pending_reviews, []),
     stopNudges: Number(row.stop_nudges || 0),
@@ -151,15 +172,19 @@ function fromRow(row: Record<string, unknown> | null | undefined): LifecycleStat
 function save(d: Database, scope: string, state: LifecycleState): void {
   d.query(`INSERT INTO lifecycle_turns (
     scope, turn_seq, brain_used, brain_searched, brain_created_ids, brain_answered_ids,
-    root_node_id, root_synthesized, skill_used, pending_review_ids, pending_reviews,
+    root_node_id, root_synthesized, skill_used, selected_skill_ids, invalidated_skill_ids,
+    skill_correction_nudges, pending_review_ids, pending_reviews,
     stop_nudges, review_nudges, stop_blocked, reminded, completion_nudged,
     cairn_visibility_nudged, cairn_tool_attempted, cairn_tool_observed, updated_ts
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(scope) DO UPDATE SET
     turn_seq=excluded.turn_seq, brain_used=excluded.brain_used,
     brain_searched=excluded.brain_searched, brain_created_ids=excluded.brain_created_ids,
     brain_answered_ids=excluded.brain_answered_ids, root_node_id=excluded.root_node_id,
     root_synthesized=excluded.root_synthesized, skill_used=excluded.skill_used,
+    selected_skill_ids=excluded.selected_skill_ids,
+    invalidated_skill_ids=excluded.invalidated_skill_ids,
+    skill_correction_nudges=excluded.skill_correction_nudges,
     pending_review_ids=excluded.pending_review_ids, pending_reviews=excluded.pending_reviews,
     stop_nudges=excluded.stop_nudges, review_nudges=excluded.review_nudges,
     stop_blocked=excluded.stop_blocked, reminded=excluded.reminded,
@@ -171,6 +196,8 @@ function save(d: Database, scope: string, state: LifecycleState): void {
       scope, state.turnSeq, Number(state.brainUsed), Number(state.brainSearched),
       JSON.stringify(state.brainCreatedIds), JSON.stringify(state.brainAnsweredIds),
       state.rootNodeId, Number(state.rootSynthesized), Number(state.skillUsed),
+      JSON.stringify(state.selectedSkillIds), JSON.stringify(state.invalidatedSkillIds),
+      state.skillCorrectionNudges,
       JSON.stringify(state.pendingReviewIds), JSON.stringify(state.pendingReviews),
       state.stopNudges, state.reviewNudges, Number(state.stopBlocked), Number(state.reminded),
       Number(state.completionNudged), Number(state.cairnVisibilityNudged),

@@ -53,7 +53,14 @@ const cairnGroups = (s: ReturnType<typeof read>) =>
 test("install adds every Cairn hook, including SubagentStop for subagent learning", async () => {
   await install();
   const s = read();
-  for (const ev of ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop"]) {
+  for (const ev of [
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "Stop",
+    "SubagentStop",
+  ]) {
     expect(s.hooks[ev].some((g: any) => g.hooks.some((h: any) => h.command.includes("cairn")))).toBe(true);
   }
 });

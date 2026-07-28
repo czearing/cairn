@@ -70,6 +70,21 @@ test("TIMING: a write maps to PreToolUse (before) and PostToolUse (after) distin
   expect(post?.kind).toBe("tool_completed");
 });
 
+test("PostToolUseFailure normalizes as an unsuccessful completed execution", async () => {
+  expect(await normalizeClaudeCode({
+    hook_event_name: "PostToolUseFailure",
+    tool_name: "Bash",
+    tool_input: { command: "false" },
+    error: "exit 1",
+  })).toEqual({
+    kind: "tool_completed",
+    tool: "Bash",
+    input: { command: "false" },
+    output: { success: false, error: "exit 1" },
+    callId: undefined,
+  });
+});
+
 test("brain_mutate does not repeat the base atomicity contract", () => {
   const completed = (tool: string, input: Record<string, unknown>) => matchEvent({ kind: "tool_completed", tool, input, output: null });
   expect(completed("brain_mutate", { answer: "x" })).toBeNull();

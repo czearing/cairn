@@ -121,6 +121,55 @@ test("Claude accepts a host-native Skill invocation without requiring a Cairn se
   })).toBe("");
 });
 
+test("Claude blocks completion until a failed selected skill is repaired with skill_edit", async () => {
+  const skillId = randomUUID();
+  const sessionId = `claude-skill-correction-${randomUUID()}`;
+  const transcriptPath = join(tmpdir(), `${sessionId}.jsonl`);
+  writeFileSync(transcriptPath, [
+    JSON.stringify({ type: "user", message: { content: "Run the startup procedure." } }),
+    JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", name: "brain_search", input: { query: "startup" } }] },
+    }),
+  ].join("\n"));
+  await fire({
+    hook_event_name: "PostToolUse",
+    session_id: sessionId,
+    tool_name: "skill_select",
+    tool_input: { ids: ["s1"] },
+    tool_output: { selected: [{ id: skillId }] },
+  });
+  await fire({
+    hook_event_name: "PostToolUseFailure",
+    session_id: sessionId,
+    tool_name: "Bash",
+    tool_input: { command: "start missing-service" },
+    error: "service not found",
+  });
+  const blocked = JSON.parse(await fire({
+    hook_event_name: "Stop",
+    session_id: sessionId,
+    transcript_path: transcriptPath,
+  }));
+  expect(blocked.reason).toContain("skill_edit");
+  expect(blocked.reason).toContain("Saving the discovery only to Brain");
+
+  await fire({
+    hook_event_name: "PostToolUse",
+    session_id: sessionId,
+    tool_name: "skill_edit",
+    tool_input: { id: skillId, master: "1. install prerequisites\n2. start the service" },
+    tool_output: { success: true, id: skillId },
+  });
+  const after = JSON.parse(await fire({
+    hook_event_name: "Stop",
+    session_id: sessionId,
+    transcript_path: transcriptPath,
+  }));
+  expect(after.reason).not.toContain("skill_edit");
+  rmSync(transcriptPath, { force: true });
+});
+
 test("Claude fails open when a resumed model manifest exposes no Cairn tools", async () => {
   const sessionId = `claude-stale-manifest-${randomUUID()}`;
   const transcriptPath = join(tmpdir(), `${sessionId}.jsonl`);

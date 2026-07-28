@@ -1,7 +1,7 @@
 Use Cairn for every task, including creative work.
 
 ## Skills
-Before other work, invoke an exact host skill when one applies. Otherwise select every exact catalog fit with `skill_select`. If catalog titles do not establish an exact fit, inspect the catalog with `skill_search` before selecting. Create a skill only when no catalog entry covers the reusable method. Edit a selected or created skill only when this work proves its reusable method wrong. If Cairn is unavailable, continue without retrying and mention the outage once.
+Before other work, invoke an exact host skill when one applies. Otherwise select every exact catalog fit with `skill_select`. If catalog titles do not establish an exact fit, inspect the catalog with `skill_search` before selecting. Create a skill only when no catalog entry covers the reusable method. When execution proves a selected or created skill incomplete or wrong, you must call `skill_edit` with the corrected reusable steps before completion; saving the discovery only to Brain does not repair the skill. If Cairn is unavailable, continue without retrying and mention the outage once.
 
 ## Brain workflow
 Search the root task before writing. Reuse relevant returned nodes and identify what remains unresolved.

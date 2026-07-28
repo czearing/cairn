@@ -25,7 +25,10 @@ export function toolEntityObservations(
   ids: string[],
 ): ToolEntityObservation[] {
   const result: ToolEntityObservation[] = [];
-  if (tool === "skill_select") result.push(...observations("skill_selected", "skill", strings(args.ids)));
+  if (tool === "skill_select") {
+    const selected = strings(args.ids).filter((id) => id.trim().toLowerCase() !== "none");
+    result.push(...observations("skill_selected", "skill", selected));
+  }
   if (tool === "skill_create") result.push(...observations("skill_created", "skill", ids));
   if (tool === "skill_edit") result.push(...observations("skill_edited", "skill", [String(args.id || "")]));
   if (tool === "brain_search" && Array.isArray(parsed)) {

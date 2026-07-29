@@ -26,6 +26,9 @@ export interface QualitySummary {
   abandonedRuns: number;
   supersededRuns: number;
   oldestActiveMinutes: number;
+  progressingActiveRuns: number;
+  stalledActiveRuns: number;
+  oldestActiveActivityMinutes: number;
   completedRate: number;
   workflowRate: number;
   toolFailures: number;
@@ -43,6 +46,8 @@ export interface QualitySummary {
   crossSessionReuseRate: number;
   crossSessionNodes: number;
   observedNodes: number;
+  crossSessionEligibleNodes: number;
+  crossSessionReusedNodes: number;
   runtimeObservedCalls: number;
   runtimeUnknownCalls: number;
   runtimeMismatchCalls: number;
@@ -55,6 +60,12 @@ export interface QualitySummary {
   skillCorrectionsResolved: number;
   skillCorrectionBlocks: number;
   skillCorrectionResolutionRate: number;
+  skillReceiptChecks: number;
+  completeSkillReceipts: number;
+  skillReceiptComplianceRate: number;
+  duplicateSkillReceipts: number;
+  expectedSkillReceiptSteps: number;
+  reportedSkillReceiptSteps: number;
   promptEvaluations: number;
   acceptedPromptEvaluations: number;
   latestPromptEvaluation: {

@@ -13,6 +13,8 @@ export interface QualityVerdict {
     visibilityFailureRate: number;
     searchToUseRate: number;
     skillCorrectionResolutionRate: number;
+    skillReceiptComplianceRate: number;
+    stalledActiveRuns: number;
   };
   infrastructure: {
     version: string;
@@ -57,6 +59,21 @@ export function telemetryQualityVerdict(
   if (behavior.runs && behavior.workflowRate < 100) {
     issues.push(`Only ${behavior.workflowRate}% of completed human runs passed the Cairn workflow.`);
   }
+  if (behavior.stalledActiveRuns) {
+    issues.push(`${behavior.stalledActiveRuns}/${behavior.activeRuns} active human runs are stalled.`);
+  }
+  if (behavior.skillReceiptChecks < behavior.runs) {
+    issues.push(
+      `Skill receipts were verified for ${behavior.skillReceiptChecks}/${behavior.runs} completed human runs.`
+    );
+  } else if (behavior.skillReceiptComplianceRate < 100) {
+    issues.push(
+      `Only ${behavior.skillReceiptComplianceRate}% of checked final responses had complete skill receipts.`
+    );
+  }
+  if (behavior.duplicateSkillReceipts) {
+    issues.push(`${behavior.duplicateSkillReceipts} final responses contained duplicate Cairn receipts.`);
+  }
   if (!engine.version) issues.push("No infrastructure-health sample is available.");
   if (transportFailures) issues.push(`${transportFailures}/${transportCalls} engine transports failed.`);
   if (fallbackCalls) issues.push(`${fallbackCalls}/${transportCalls} engine calls used direct fallback.`);
@@ -91,6 +108,8 @@ export function telemetryQualityVerdict(
       visibilityFailureRate,
       searchToUseRate: behavior.searchToUseRate,
       skillCorrectionResolutionRate: behavior.skillCorrectionResolutionRate,
+      skillReceiptComplianceRate: behavior.skillReceiptComplianceRate,
+      stalledActiveRuns: behavior.stalledActiveRuns,
     },
     infrastructure: {
       version: engine.version,

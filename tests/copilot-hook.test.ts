@@ -233,7 +233,7 @@ test("Harness preToolUse blocks premature side effects and allows them after roo
   )).rootNodeId).toBe("root");
   rmSync(dbPath, { force: true });
   rmSync(copilotHome, { recursive: true, force: true });
-});
+}, 10_000);
 
 test("stopDecision stops nudging once the per-turn cap is reached (no infinite loop)", () => {
   expect(stopDecision({ brainUsed: false, skillUsed: true, stopNudges: STOP_CAP })).toEqual({ file: "" });

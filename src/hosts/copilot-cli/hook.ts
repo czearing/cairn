@@ -682,6 +682,28 @@ export async function runCopilotHook(): Promise<void> {
       emit({ decision: "block", reason: internalContext(completion) });
       return;
     }
+    if (transcriptPath) {
+      try {
+        const { extractRunCopilot } = await import("../../skill/transcript-copilot");
+        const { analyzeSkillReceipt, expectedSkillSteps } = await import("../../core/skill-receipt");
+        const output = extractRunCopilot(transcriptPath, "", { latestTurn: true })?.output;
+        if (output) {
+          const receipt = analyzeSkillReceipt(output, expectedSkillSteps(st.selectedSkillIds));
+          const receiptKey = `${hostEventKey || `${sessionId}:${st.turnSeq}`}:skill-receipt`;
+          recordTelemetryState({
+            host: "copilot", sessionId, turnSeq: st.turnSeq,
+            eventKey: receiptKey, kind: "skill_receipt_checked",
+            success: receipt.complete, itemCount: receipt.reportedSteps, value: receipt.expectedSteps,
+          });
+          if (receipt.duplicate) {
+            recordTelemetryState({
+              host: "copilot", sessionId, turnSeq: st.turnSeq,
+              eventKey: `${receiptKey}:duplicate`, kind: "skill_receipt_duplicate",
+            });
+          }
+        }
+      } catch { /* receipt telemetry never blocks completion */ }
+    }
     updateLifecycle(stateId, () => ({ ...st, pendingReviewIds: [], pendingReviews: [], stopBlocked: false }));
     if (process.env.AGENT_HARNESS === "1" && workflowReady({
       ...st,

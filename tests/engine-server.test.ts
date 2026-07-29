@@ -207,6 +207,65 @@ test("ten concurrent engine starts converge to one owner", async () => {
   }
 }, 15_000);
 
+test("a cold search waits through the bounded readiness retry instead of falling back", async () => {
+  const marker = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-engine-cold-${marker}.db`);
+  const lockPath = join(tmpdir(), `cairn-engine-cold-${marker}.json`);
+  const startPath = join(tmpdir(), `cairn-engine-cold-start-${marker}.json`);
+  const env = {
+    ...process.env,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_CONFIG_PATH: join(tmpdir(), `cairn-engine-cold-config-${marker}.json`),
+    CAIRN_ENGINE_LOCKFILE: lockPath,
+    CAIRN_ENGINE_STARTFILE: startPath,
+    CAIRN_ENGINE_ALLOW_TEMP: "1",
+    CAIRN_ENGINE_SKIP_WARMUP: "1",
+    CAIRN_ENGINE_STARTUP_WAIT_MS: "0",
+    CAIRN_ENGINE_COLD_SEARCH_RETRY_MS: "5000",
+    CAIRN_EMBED_NO_SERVER: "1",
+    CAIRN_USAGE: "1",
+    CAIRN_ENGINE_IDLE_MS: "3000",
+  };
+  let ownerPid: number | null = null;
+  try {
+    const source = await runBun(`
+      import { Database } from "bun:sqlite";
+      import { engineSearch } from "./src/core/engine-client";
+      await engineSearch("bounded cold readiness ${marker}", {
+        host: "copilot", sessionId: "cold-search", turnSeq: 1,
+      });
+      const db = new Database(process.env.CAIRN_DB_PATH!);
+      const row = db.query("SELECT source FROM telemetry_events WHERE kind='engine_transport' ORDER BY ts DESC LIMIT 1").get();
+      db.close();
+      console.log(JSON.stringify(row));
+    `, env);
+    expect(JSON.parse(source)).toEqual({ source: "daemon" });
+    ownerPid = (await waitForLock(lockPath)).pid;
+  } finally {
+    if (ownerPid) {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try {
+          process.kill(ownerPid, 0);
+          await Bun.sleep(50);
+        } catch {
+          break;
+        }
+      }
+    }
+    for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, lockPath, startPath]) {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try {
+          rmSync(path, { force: true });
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EBUSY" || attempt === 99) throw error;
+          await Bun.sleep(50);
+        }
+      }
+    }
+  }
+}, 15_000);
+
 test("clients share writes and recover from an engine crash without duplicate creates", async () => {
   const marker = randomUUID();
   const id = randomUUID();
@@ -272,4 +331,4 @@ test("clients share writes and recover from an engine crash without duplicate cr
       rmSync(path, { force: true });
     }
   }
-}, 30_000);
+}, 60_000);

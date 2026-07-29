@@ -33,6 +33,10 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
     ...baseline, eventKey: "baseline-search", toolName: "brain_search",
     args: { query: marker }, result: [{ id: "node-a", text: marker, score: 0.91 }], success: true,
   });
+  recordTelemetryState({
+    ...baseline, eventKey: "baseline-receipt", kind: "skill_receipt_checked",
+    success: true, itemCount: 2, value: 2,
+  });
   recordQualityTool({
     ...baseline, eventKey: "baseline-use", toolName: "brain_mutate",
     args: { id: "node-a", answer: marker }, result: { id: "node-a" }, success: true,
@@ -104,6 +108,10 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
     ...current, eventKey: "current-failure", toolName: "Edit",
     args: {}, result: { success: false }, success: false,
   });
+  recordTelemetryState({
+    ...current, eventKey: "current-receipt", kind: "skill_receipt_checked",
+    success: true, itemCount: 3, value: 3,
+  });
   finishQualityRun({
     ...current, completed: true, workflowPassed: true, skillUsed: true,
     brainUsed: true, stopNudges: 0,
@@ -122,6 +130,8 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
   expect(summary).toMatchObject({
     runs: 2,
     activeRuns: 1,
+    progressingActiveRuns: 1,
+    stalledActiveRuns: 0,
     abandonedRuns: 1,
     completedRate: 100,
     workflowRate: 100,
@@ -138,9 +148,9 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
     runtimeMismatchCalls: 1,
     coherentRuns: 0,
     mixedRuntimeRuns: 2,
-    crossSessionReuseRate: 16.7,
+    crossSessionReuseRate: 100,
     crossSessionNodes: 1,
-    observedNodes: 6,
+    observedNodes: 1,
     selectedSkills: 1,
     editedSkills: 1,
     skillEditRate: 100,
@@ -148,6 +158,12 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
     skillCorrectionsResolved: 1,
     skillCorrectionBlocks: 1,
     skillCorrectionResolutionRate: 100,
+    skillReceiptChecks: 2,
+    completeSkillReceipts: 2,
+    skillReceiptComplianceRate: 100,
+    duplicateSkillReceipts: 0,
+    expectedSkillReceiptSteps: 5,
+    reportedSkillReceiptSteps: 5,
   });
   expect(summary.current).toBeNull();
   expect(summary.baseline).toBeNull();
@@ -174,12 +190,14 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
     }],
     parity: { checks: 10, mismatches: 0 },
   });
+
   expect(verdict).toMatchObject({
     status: "outage",
     releaseCoherent: false,
     behavior: { visibilityFailureRate: 100, workflowRate: 0 },
     infrastructure: { transportCalls: 10, transportFailures: 0 },
   });
+
   expect(verdict.issues).toContain(
     "Behavior (behavior-release) and infrastructure (engine-release) are from different releases."
   );
@@ -195,6 +213,83 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
   expect(serialized).not.toContain("node-a");
   expect(serialized).not.toContain("skill-a");
   expect(unknownRuntime).toEqual({ count: 6 });
+});
+
+test("cross-session reuse includes prior releases and active stalls use event inactivity", () => {
+  const db = qualityDatabase()!;
+  db.run("DELETE FROM telemetry_events");
+  db.run("DELETE FROM telemetry_runs");
+  const old = identity(`quality-prior-${crypto.randomUUID()}`);
+  const current = identity(`quality-reuse-${crypto.randomUUID()}`);
+  beginQualityRun({
+    ...old, promptHash: promptFingerprint("prior"), catalogVersion: "old", injectedChars: 1,
+    ts: Date.now() - 60_000,
+  });
+  recordQualityTool({
+    ...old, eventKey: "old-create", toolName: "brain_create",
+    args: { text: "prior" }, result: { id: "shared-node" }, success: true,
+  });
+  recordQualityTool({
+    ...old, eventKey: "old-create-preused", toolName: "brain_create",
+    args: { text: "prior preused" }, result: { id: "preused-node" }, success: true,
+  });
+  finishQualityRun({
+    ...old, completed: true, workflowPassed: true, skillUsed: true,
+    brainUsed: true, stopNudges: 0,
+  });
+  db.query("UPDATE telemetry_runs SET version='0.1.0+prior',release_fingerprint='prior' WHERE run_id=?")
+    .run(telemetryRunId(old));
+
+  beginQualityRun({
+    ...current, promptHash: promptFingerprint("current"), catalogVersion: "current", injectedChars: 1,
+  });
+  recordQualityTool({
+    ...current, eventKey: "current-preuse-shared", toolName: "brain_mutate",
+    args: { id: "shared-node", answer: "used before and after recall" },
+    result: { id: "shared-node" }, success: true,
+  });
+  recordQualityTool({
+    ...current, eventKey: "current-preuse", toolName: "brain_mutate",
+    args: { id: "preused-node", answer: "used too early" },
+    result: { id: "preused-node" }, success: true,
+  });
+  recordQualityTool({
+    ...current, eventKey: "current-search", toolName: "brain_search",
+    args: { query: "shared" }, result: [
+      { id: "shared-node", score: 0.9 },
+      { id: "preused-node", score: 0.8 },
+    ], success: true,
+  });
+  recordQualityTool({
+    ...current, eventKey: "current-mutate", toolName: "brain_mutate",
+    args: { id: "shared-node", answer: "used" }, result: { id: "shared-node" }, success: true,
+  });
+  recordTelemetryState({
+    ...current, eventKey: "current-receipt", kind: "skill_receipt_checked",
+    success: true, itemCount: 1, value: 1,
+  });
+  finishQualityRun({
+    ...current, completed: true, workflowPassed: true, skillUsed: true,
+    brainUsed: true, stopNudges: 0,
+  });
+
+  const stalled = identity(`quality-stalled-${crypto.randomUUID()}`);
+  beginQualityRun({
+    ...stalled, promptHash: promptFingerprint("stalled"), catalogVersion: "current",
+    injectedChars: 1, ts: Date.now() - 15 * 60_000,
+  });
+  const summary = qualitySummary(1);
+  expect(summary).toMatchObject({
+    runs: 1,
+    activeRuns: 1,
+    progressingActiveRuns: 0,
+    stalledActiveRuns: 1,
+    crossSessionEligibleNodes: 2,
+    crossSessionReusedNodes: 1,
+    crossSessionReuseRate: 50,
+  });
+  expect(summary.oldestActiveActivityMinutes).toBeGreaterThanOrEqual(14);
+  expect(summary.verdict.issues).toContain("1/1 active human runs are stalled.");
 });
 
 test("quality verdict scopes outages to the latest runtime release", () => {

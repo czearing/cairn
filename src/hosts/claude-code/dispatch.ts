@@ -295,6 +295,29 @@ async function main(): Promise<void> {
             : correctionBlocked ? "skill_correction_blocked" : "stop_blocked",
         });
       } else {
+        const transcriptPath = String((payload as { transcript_path?: unknown }).transcript_path ?? "");
+        if (transcriptPath) {
+          try {
+            const { extractRun } = await import("../../skill/transcript");
+            const { analyzeSkillReceipt, expectedSkillSteps } = await import("../../core/skill-receipt");
+            const output = extractRun(transcriptPath, "", { latestTurn: true })?.output;
+            if (output) {
+              const receipt = analyzeSkillReceipt(output, expectedSkillSteps(state.pendingReviewIds));
+              const receiptKey = `${qualityEventKey}:skill-receipt`;
+              telemetry.recordTelemetryState({
+                host: "claude", sessionId: session, turnSeq: state.turnSeq,
+                eventKey: receiptKey, kind: "skill_receipt_checked",
+                success: receipt.complete, itemCount: receipt.reportedSteps, value: receipt.expectedSteps,
+              });
+              if (receipt.duplicate) {
+                telemetry.recordTelemetryState({
+                  host: "claude", sessionId: session, turnSeq: state.turnSeq,
+                  eventKey: `${receiptKey}:duplicate`, kind: "skill_receipt_duplicate",
+                });
+              }
+            }
+          } catch { /* receipt telemetry never blocks completion */ }
+        }
         telemetry.finishTelemetryRun({
           host: "claude", sessionId: session, turnSeq: state.turnSeq,
           completed: true, workflowPassed: Boolean(event.usedBrain && state.selected),

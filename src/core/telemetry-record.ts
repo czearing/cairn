@@ -187,9 +187,20 @@ export function recordTelemetryState(input: TelemetryRunIdentity & {
     | "deferred"
     | "skill_correction_required"
     | "skill_correction_resolved"
-    | "skill_correction_blocked";
+    | "skill_correction_blocked"
+    | "skill_receipt_checked"
+    | "skill_receipt_duplicate";
+  success?: boolean;
+  itemCount?: number;
+  value?: number;
 }): void {
-  recordEvent({ ...input, kind: input.kind });
+  recordEvent({
+    ...input,
+    kind: input.kind,
+    success: input.success,
+    itemCount: input.itemCount,
+    value: input.value,
+  });
 }
 
 export function finishTelemetryRun(input: TelemetryRunIdentity & {

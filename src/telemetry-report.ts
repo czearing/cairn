@@ -51,6 +51,7 @@ export function printTelemetryReport(days: number, json = false): void {
   line(c.bold("Quality & reuse"));
   line(`completed runs ${quality.runs}  active ${quality.activeRuns}` +
     `${quality.oldestActiveMinutes ? ` (oldest ${quality.oldestActiveMinutes}m)` : ""}  ` +
+    `progressing ${quality.progressingActiveRuns}  stalled ${quality.stalledActiveRuns}  ` +
     `abandoned ${quality.abandonedRuns}  superseded ${quality.supersededRuns}`);
   line(`quality status ${quality.verdict.status.toUpperCase()}  ` +
     `release coherent ${quality.verdict.releaseCoherent ? "yes" : "no"}`);
@@ -63,8 +64,8 @@ export function printTelemetryReport(days: number, json = false): void {
     `${quality.rankedUsedReturnedNodes} ranked)  max used rank ${quality.maxUsedRank}  ` +
     `lowest used score ~${quality.minimumUsedScorePercent}%`);
   line(
-    `cross-session reuse ${quality.crossSessionReuseRate}% ` +
-    `(${quality.crossSessionNodes}/${quality.observedNodes})  ` +
+    `cross-session reuse (eligible recalled-use) ${quality.crossSessionReuseRate}% ` +
+    `(${quality.crossSessionReusedNodes}/${quality.crossSessionEligibleNodes})  ` +
     `runtime observed ${quality.runtimeObservedCalls}  unknown ${quality.runtimeUnknownCalls}  ` +
     `mismatch ${quality.runtimeMismatchCalls}`
   );
@@ -73,6 +74,9 @@ export function printTelemetryReport(days: number, json = false): void {
   line(`skill corrections required ${quality.skillCorrectionsRequired}  ` +
     `resolved ${quality.skillCorrectionsResolved} (${quality.skillCorrectionResolutionRate}%)  ` +
     `blocks ${quality.skillCorrectionBlocks}`);
+  line(`skill receipts ${quality.completeSkillReceipts}/${quality.skillReceiptChecks} complete ` +
+    `(${quality.skillReceiptComplianceRate}%)  duplicate ${quality.duplicateSkillReceipts}  ` +
+    `steps ${quality.reportedSkillReceiptSteps}/${quality.expectedSkillReceiptSteps}`);
   line(`workflow blocks ${quality.workflowBlocks}  completion blocks ${quality.completionBlocks}`);
   line(`prompt evals ${quality.promptEvaluations}  accepted ${quality.acceptedPromptEvaluations}` +
     (quality.latestPromptEvaluation

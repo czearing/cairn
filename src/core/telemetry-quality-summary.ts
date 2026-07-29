@@ -58,60 +58,91 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   const latestVersion = latestIdentity.version || "";
   const staleCutoff = Date.now()
     - Math.max(60_000, Number(process.env.CAIRN_TELEMETRY_STALE_RUN_MS || "1800000"));
+  const stalledCutoff = Date.now()
+    - Math.max(60_000, Number(process.env.CAIRN_TELEMETRY_STALLED_RUN_MS || "600000"));
   db.query(`UPDATE telemetry_runs SET ended_ts=?,status='abandoned'
     WHERE status='active' AND COALESCE((
       SELECT MAX(ts) FROM telemetry_events e WHERE e.run_id=telemetry_runs.run_id
     ),started_ts)<?`).run(Date.now(), staleCutoff);
-  const runs = db.query(`SELECT
+  const runs = db.query(`WITH run_activity AS (
+    SELECT r.*,COALESCE(MAX(e.ts),r.started_ts) AS lastActivityTs
+    FROM telemetry_runs r LEFT JOIN telemetry_events e USING(run_id)
+    WHERE r.started_ts>=? AND r.run_class='human' AND r.version=?
+    GROUP BY r.run_id
+  ) SELECT
     COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0) AS closed,
     COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END),0) AS active,
+    COALESCE(SUM(CASE WHEN status='active' AND lastActivityTs>=? THEN 1 ELSE 0 END),0) AS progressingActive,
+    COALESCE(SUM(CASE WHEN status='active' AND lastActivityTs<? THEN 1 ELSE 0 END),0) AS stalledActive,
     COALESCE(SUM(CASE WHEN status='abandoned' THEN 1 ELSE 0 END),0) AS abandoned,
     COALESCE(SUM(CASE WHEN status='superseded' THEN 1 ELSE 0 END),0) AS superseded,
     COALESCE(SUM(CASE WHEN status='completed' THEN completed ELSE 0 END),0) AS completed,
     COALESCE(SUM(CASE WHEN status='completed' THEN workflow_passed ELSE 0 END),0) AS workflow,
     COALESCE(SUM(CASE WHEN status='completed' THEN tool_failures ELSE 0 END),0) AS failures,
-    COALESCE(MAX(CASE WHEN status='active' THEN (? - started_ts)/60000 ELSE 0 END),0) AS oldestActiveMinutes
-    FROM telemetry_runs WHERE started_ts>=? AND run_class='human' AND version=?`)
-    .get(Date.now(), sinceTs, latestVersion) as {
+    COALESCE(MAX(CASE WHEN status='active' THEN (? - started_ts)/60000 ELSE 0 END),0) AS oldestActiveMinutes,
+    COALESCE(MAX(CASE WHEN status='active' THEN (? - lastActivityTs)/60000 ELSE 0 END),0) AS oldestActiveActivityMinutes
+    FROM run_activity`)
+    .get(sinceTs, latestVersion, stalledCutoff, stalledCutoff, Date.now(), Date.now()) as {
       active: number; closed: number; abandoned: number; superseded: number;
+      progressingActive: number; stalledActive: number; oldestActiveActivityMinutes: number;
       completed: number; workflow: number; failures: number; oldestActiveMinutes: number;
     };
   const brain = db.query(`WITH returned AS (
       SELECT e.run_id,e.entity_hash,MIN(NULLIF(e.rank,0)) AS rank,
-        MAX(e.score_bucket) AS scoreBucket
+        MAX(e.score_bucket) AS scoreBucket,MIN(e.rowid) AS returnedRowId
       FROM telemetry_events e
       JOIN telemetry_runs r USING(run_id)
       WHERE e.ts>=? AND r.status='completed' AND e.kind='brain_returned' AND e.entity_hash!=''
         AND r.run_class='human' AND r.version=?
       GROUP BY e.run_id,e.entity_hash
     ), used AS (
-      SELECT DISTINCT e.run_id,e.entity_hash FROM telemetry_events e
+      SELECT e.run_id,e.entity_hash,e.rowid AS usedRowId FROM telemetry_events e
       JOIN telemetry_runs r USING(run_id)
       WHERE e.ts>=? AND r.status='completed' AND r.run_class='human'
         AND r.version=? AND e.kind IN ('brain_referenced','brain_mutated') AND e.entity_hash!=''
-    ), observed AS (
-      SELECT e.entity_hash,COUNT(DISTINCT e.session_hash) AS sessions FROM telemetry_events e
-      JOIN telemetry_runs r USING(run_id)
-      WHERE e.ts>=? AND r.status='completed' AND r.run_class='human'
-        AND r.version=? AND e.entity_type='brain' AND e.entity_hash!=''
-      GROUP BY e.entity_hash
+    ), cross_session AS (
+      SELECT returned.* FROM returned WHERE EXISTS (
+        SELECT 1 FROM telemetry_events prior
+        JOIN telemetry_runs prior_run ON prior_run.run_id=prior.run_id
+        JOIN telemetry_runs returned_run ON returned_run.run_id=returned.run_id
+        WHERE prior.entity_hash=returned.entity_hash AND prior.entity_type='brain'
+          AND prior.entity_hash!='' AND prior_run.run_class='human'
+          AND prior_run.session_hash!=returned_run.session_hash
+          AND prior.rowid<returned.returnedRowId
+      )
     )
     SELECT (SELECT COUNT(*) FROM returned) AS returnedNodes,
-      (SELECT COUNT(*) FROM returned r JOIN used u USING(run_id,entity_hash)) AS usedReturnedNodes,
-      (SELECT COUNT(*) FROM returned r JOIN used u USING(run_id,entity_hash)
-        WHERE r.rank>0) AS rankedUsedReturnedNodes,
-      (SELECT COUNT(*) FROM returned r JOIN used u USING(run_id,entity_hash)
-        WHERE r.rank BETWEEN 1 AND 3) AS top3UsedReturnedNodes,
-      COALESCE((SELECT MAX(r.rank) FROM returned r JOIN used u USING(run_id,entity_hash)),0) AS maxUsedRank,
-      COALESCE((SELECT MIN(NULLIF(r.scoreBucket,0))*5
-        FROM returned r JOIN used u USING(run_id,entity_hash)),0) AS minimumUsedScorePercent,
-      (SELECT COUNT(*) FROM observed) AS observedNodes,
-      (SELECT COUNT(*) FROM observed WHERE sessions>1) AS crossSessionNodes`)
-    .get(sinceTs, latestVersion, sinceTs, latestVersion, sinceTs, latestVersion) as {
+      (SELECT COUNT(*) FROM returned r WHERE EXISTS (
+        SELECT 1 FROM used u WHERE u.run_id=r.run_id AND u.entity_hash=r.entity_hash
+          AND u.usedRowId>r.returnedRowId
+      )) AS usedReturnedNodes,
+      (SELECT COUNT(*) FROM returned r WHERE r.rank>0 AND EXISTS (
+        SELECT 1 FROM used u WHERE u.run_id=r.run_id AND u.entity_hash=r.entity_hash
+          AND u.usedRowId>r.returnedRowId
+      )) AS rankedUsedReturnedNodes,
+      (SELECT COUNT(*) FROM returned r WHERE r.rank BETWEEN 1 AND 3 AND EXISTS (
+        SELECT 1 FROM used u WHERE u.run_id=r.run_id AND u.entity_hash=r.entity_hash
+          AND u.usedRowId>r.returnedRowId
+      )) AS top3UsedReturnedNodes,
+      COALESCE((SELECT MAX(r.rank) FROM returned r WHERE EXISTS (
+        SELECT 1 FROM used u WHERE u.run_id=r.run_id AND u.entity_hash=r.entity_hash
+          AND u.usedRowId>r.returnedRowId
+      )),0) AS maxUsedRank,
+      COALESCE((SELECT MIN(NULLIF(r.scoreBucket,0))*5 FROM returned r WHERE EXISTS (
+        SELECT 1 FROM used u WHERE u.run_id=r.run_id AND u.entity_hash=r.entity_hash
+          AND u.usedRowId>r.returnedRowId
+      )),0) AS minimumUsedScorePercent,
+      (SELECT COUNT(*) FROM cross_session) AS crossSessionEligibleNodes,
+      (SELECT COUNT(*) FROM cross_session r WHERE EXISTS (
+        SELECT 1 FROM used u WHERE u.run_id=r.run_id AND u.entity_hash=r.entity_hash
+          AND u.usedRowId>r.returnedRowId
+      ))
+        AS crossSessionReusedNodes`)
+    .get(sinceTs, latestVersion, sinceTs, latestVersion) as {
       returnedNodes: number; usedReturnedNodes: number; rankedUsedReturnedNodes: number;
       top3UsedReturnedNodes: number;
       maxUsedRank: number; minimumUsedScorePercent: number;
-      observedNodes: number; crossSessionNodes: number;
+      crossSessionEligibleNodes: number; crossSessionReusedNodes: number;
     };
   const skills = db.query(`SELECT
     COUNT(DISTINCT CASE WHEN e.kind='skill_selected' THEN e.entity_hash END) AS selectedSkills,
@@ -121,7 +152,15 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     COALESCE(SUM(CASE WHEN e.kind='completion_blocked' THEN 1 ELSE 0 END),0) AS completionBlocks,
     COALESCE(SUM(CASE WHEN e.kind='skill_correction_required' THEN 1 ELSE 0 END),0) AS skillCorrectionsRequired,
     COALESCE(SUM(CASE WHEN e.kind='skill_correction_resolved' THEN 1 ELSE 0 END),0) AS skillCorrectionsResolved,
-    COALESCE(SUM(CASE WHEN e.kind='skill_correction_blocked' THEN 1 ELSE 0 END),0) AS skillCorrectionBlocks
+    COALESCE(SUM(CASE WHEN e.kind='skill_correction_blocked' THEN 1 ELSE 0 END),0) AS skillCorrectionBlocks,
+    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' THEN 1 ELSE 0 END),0) AS skillReceiptChecks,
+    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' AND e.success=1 THEN 1 ELSE 0 END),0)
+      AS completeSkillReceipts,
+    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_duplicate' THEN 1 ELSE 0 END),0) AS duplicateSkillReceipts,
+    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' THEN e.value ELSE 0 END),0)
+      AS expectedSkillReceiptSteps,
+    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' THEN e.item_count ELSE 0 END),0)
+      AS reportedSkillReceiptSteps
     FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
     WHERE e.ts>=? AND r.run_class='human' AND r.status='completed' AND r.version=?`)
     .get(sinceTs, latestVersion) as {
@@ -129,6 +168,9 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
       workflowBlocks: number; completionBlocks: number;
       skillCorrectionsRequired: number; skillCorrectionsResolved: number;
       skillCorrectionBlocks: number;
+      skillReceiptChecks: number; completeSkillReceipts: number;
+      duplicateSkillReceipts: number; expectedSkillReceiptSteps: number;
+      reportedSkillReceiptSteps: number;
     };
   const runtime = db.query(`SELECT
     COALESCE(SUM(CASE WHEN e.runtime_version!='' THEN 1 ELSE 0 END),0) AS runtimeObservedCalls,
@@ -195,13 +237,21 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     abandonedRuns: runs.abandoned,
     supersededRuns: runs.superseded,
     oldestActiveMinutes: Math.round(runs.oldestActiveMinutes),
+    progressingActiveRuns: runs.progressingActive,
+    stalledActiveRuns: runs.stalledActive,
+    oldestActiveActivityMinutes: Math.round(runs.oldestActiveActivityMinutes),
     completedRate: percent(runs.completed, runs.closed),
     workflowRate: percent(runs.workflow, runs.closed),
     toolFailures: runs.failures,
     searchToUseRate: percent(brain.usedReturnedNodes, brain.returnedNodes),
     top3UseRate: percent(brain.top3UsedReturnedNodes, brain.rankedUsedReturnedNodes),
     ...brain,
-    crossSessionReuseRate: percent(brain.crossSessionNodes, brain.observedNodes),
+    crossSessionReuseRate: percent(
+      brain.crossSessionReusedNodes,
+      brain.crossSessionEligibleNodes,
+    ),
+    crossSessionNodes: brain.crossSessionReusedNodes,
+    observedNodes: brain.crossSessionEligibleNodes,
     ...runtime,
     coherentRuns: coherence.completedRuns - coherence.mixedRuntimeRuns,
     mixedRuntimeRuns: coherence.mixedRuntimeRuns,
@@ -210,6 +260,10 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     skillCorrectionResolutionRate: percent(
       skills.skillCorrectionsResolved,
       skills.skillCorrectionsRequired,
+    ),
+    skillReceiptComplianceRate: percent(
+      skills.completeSkillReceipts,
+      skills.skillReceiptChecks,
     ),
     promptEvaluations: promptEvaluationCounts.total,
     acceptedPromptEvaluations: promptEvaluationCounts.accepted,
@@ -228,16 +282,20 @@ function empty(): QualitySummary {
   return {
     latestVersion: "", latestReleaseFingerprint: "",
     runs: 0, activeRuns: 0, abandonedRuns: 0, supersededRuns: 0, oldestActiveMinutes: 0,
+    progressingActiveRuns: 0, stalledActiveRuns: 0, oldestActiveActivityMinutes: 0,
     completedRate: 0, workflowRate: 0, toolFailures: 0,
     visibilityFailures: 0, workflowBlocks: 0, completionBlocks: 0,
     searchToUseRate: 0, returnedNodes: 0, usedReturnedNodes: 0, rankedUsedReturnedNodes: 0,
     top3UsedReturnedNodes: 0, top3UseRate: 0, maxUsedRank: 0, minimumUsedScorePercent: 0,
     crossSessionReuseRate: 0, crossSessionNodes: 0, observedNodes: 0,
+    crossSessionEligibleNodes: 0, crossSessionReusedNodes: 0,
     runtimeObservedCalls: 0, runtimeUnknownCalls: 0, runtimeMismatchCalls: 0,
     coherentRuns: 0, mixedRuntimeRuns: 0,
     selectedSkills: 0, editedSkills: 0, skillEditRate: 0,
     skillCorrectionsRequired: 0, skillCorrectionsResolved: 0,
     skillCorrectionBlocks: 0, skillCorrectionResolutionRate: 0, comparisons: [],
+    skillReceiptChecks: 0, completeSkillReceipts: 0, skillReceiptComplianceRate: 0,
+    duplicateSkillReceipts: 0, expectedSkillReceiptSteps: 0, reportedSkillReceiptSteps: 0,
     promptEvaluations: 0, acceptedPromptEvaluations: 0, latestPromptEvaluation: null,
     current: null, baseline: null, delta: null,
   };

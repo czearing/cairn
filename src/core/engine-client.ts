@@ -123,14 +123,17 @@ function ensureServer(): void {
   }
 }
 
-async function readyServer(wait: boolean): Promise<NonNullable<ReturnType<typeof lock>> | null> {
+async function readyServer(
+  wait: boolean,
+  waitMs = Number(process.env.CAIRN_ENGINE_STARTUP_WAIT_MS || "3000"),
+): Promise<NonNullable<ReturnType<typeof lock>> | null> {
   if (!eligible()) return null;
   const current = lock();
   if (current && await health(current)) return current;
   spawned = false;
   ensureServer();
   if (!wait) return null;
-  const deadline = Date.now() + Number(process.env.CAIRN_ENGINE_STARTUP_WAIT_MS || "3000");
+  const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
     await Bun.sleep(100);
     const candidate = lock();
@@ -148,7 +151,13 @@ async function execute(
   telemetry?: EngineTelemetryIdentity,
 ): Promise<EngineResponse | null> {
   const started = performance.now();
-  const candidate = await readyServer(true);
+  let candidate = await readyServer(true);
+  if (!candidate && request.operation === "search") {
+    candidate = await readyServer(
+      true,
+      Number(process.env.CAIRN_ENGINE_COLD_SEARCH_RETRY_MS || "5000"),
+    );
+  }
   if (!candidate) {
     recordTelemetry({
       kind: "engine_transport",

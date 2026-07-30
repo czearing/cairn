@@ -4,6 +4,7 @@ export interface QualityMetrics {
   runs: number;
   /** Completed runs in this dimension dropped from the comparison for mixed hook/runtime releases. */
   excludedRuns: number;
+  unattributedRuns: number;
   completedRate: number;
   workflowRate: number;
   tokensPerRun: number;
@@ -57,6 +58,7 @@ export interface QualitySummary {
   runtimeMismatchCalls: number;
   coherentRuns: number;
   mixedRuntimeRuns: number;
+  unattributedRuntimeRuns: number;
   selectedSkills: number;
   editedSkills: number;
   skillEditRate: number;

@@ -7,6 +7,15 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and 
 
 ### Fixed
 
+- Release comparisons discarded a whole run whenever a single Cairn tool call failed to report its
+  runtime release. Missing attribution was treated as proof that the hook and runtime releases
+  differed, so runs that were in fact wholly served by one release were thrown away and comparable
+  runs collapsed toward zero, leaving no quality claim falsifiable. A run is now excluded only on
+  positive evidence of a different release; a run whose Cairn calls carry no runtime identity is
+  reported separately as unattributed instead of being counted as mixed, and a run that never called a
+  Cairn tool stays comparable because it has no runtime to disagree with. On the live 7-day sample this
+  moves coherent runs from 2 to 3 and mixed runs from 4 to 2 without dropping any release comparison.
+
 - The Copilot submission gate counted only nodes a turn *created*, so a turn that correctly reused an
   existing answered node could never satisfy it. Agents were blocked repeatedly and told they had
   "recorded nothing to the brain", which pushed them into creating duplicate nodes for work the graph

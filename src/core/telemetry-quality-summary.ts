@@ -12,15 +12,35 @@ type Workload = QualityMetrics["workload"];
 // same release. Hooks adopt a release on the next hook event while the MCP server keeps the build it
 // started with, so release-spanning sessions are legitimately excluded — but the exclusion must be
 // counted and reported, not silently dropped.
-const mixedRuntimeSql = `(EXISTS (
+//
+// Exclusion requires POSITIVE evidence of a different release. A call that simply failed to carry
+// runtime identity is missing attribution, not proof of a split: treating it as mixed discarded whole
+// runs on the strength of one unattributed call, which drove comparable runs to zero and made every
+// quality claim unfalsifiable. Unattributed runs are reported as their own category instead.
+const cairnToolSql = `(e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')`;
+const mismatchedRuntimeSql = `(EXISTS (
     SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND e.kind='tool'
-      AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
-      AND (e.runtime_version='' OR e.runtime_version!=r.version)
+      AND ${cairnToolSql} AND e.runtime_version!='' AND e.runtime_version!=r.version
   ) OR EXISTS (
     SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND e.kind='tool_transport'
-      AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
-      AND e.version!=r.version
+      AND ${cairnToolSql} AND e.version!='' AND e.version!=r.version
   ))`;
+const attributedRuntimeSql = `(EXISTS (
+    SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND e.kind='tool'
+      AND ${cairnToolSql} AND e.runtime_version=r.version
+  ) OR EXISTS (
+    SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND e.kind='tool_transport'
+      AND ${cairnToolSql} AND e.version=r.version
+  ))`;
+// A run that never called a Cairn tool has no runtime to disagree with, so it stays comparable.
+const cairnCallsSql = `EXISTS (
+    SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id
+      AND e.kind IN ('tool','tool_transport') AND ${cairnToolSql}
+  )`;
+const comparableRuntimeSql = `(NOT ${mismatchedRuntimeSql}
+  AND (${attributedRuntimeSql} OR NOT ${cairnCallsSql}))`;
+const unattributedRuntimeSql = `(NOT ${mismatchedRuntimeSql}
+  AND ${cairnCallsSql} AND NOT ${attributedRuntimeSql})`;
 
 function releaseMetrics(
   sinceTs: number, release: string, host: string, model: string, workload: Workload
@@ -40,13 +60,18 @@ function releaseMetrics(
       WHERE e.run_id=r.run_id AND e.kind='tool'
         AND e.version=r.version
     ),0)),1) AS tokensPerRun
-    ${dimensionSql} AND NOT ${mixedRuntimeSql}`)
+    ${dimensionSql} AND ${comparableRuntimeSql}`)
     .get(sinceTs, release, host, model, workload) as
-      Omit<QualityMetrics, "release" | "workload" | "excludedRuns"> | null;
-  const excluded = db.query(`SELECT COUNT(*) AS excludedRuns ${dimensionSql} AND ${mixedRuntimeSql}`)
-    .get(sinceTs, release, host, model, workload) as { excludedRuns: number } | null;
+      Omit<QualityMetrics, "release" | "workload" | "excludedRuns" | "unattributedRuns"> | null;
+  const excluded = db.query(`SELECT
+    COALESCE(SUM(CASE WHEN ${mismatchedRuntimeSql} THEN 1 ELSE 0 END),0) AS excludedRuns,
+    COALESCE(SUM(CASE WHEN ${unattributedRuntimeSql} THEN 1 ELSE 0 END),0) AS unattributedRuns
+    ${dimensionSql}`)
+    .get(sinceTs, release, host, model, workload) as
+      { excludedRuns: number; unattributedRuns: number } | null;
   const excludedRuns = excluded?.excludedRuns ?? 0;
-  return row?.runs ? { release, workload, excludedRuns, ...row } : null;
+  const unattributedRuns = excluded?.unattributedRuns ?? 0;
+  return row?.runs ? { release, workload, excludedRuns, unattributedRuns, ...row } : null;
 }
 
 const delta = (current: QualityMetrics, baseline: QualityMetrics | null) => baseline ? {
@@ -203,17 +228,13 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
       };
   const coherence = db.query(`SELECT
     COUNT(*) AS completedRuns,
-    COALESCE(SUM(CASE WHEN EXISTS (
-      SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND (
-        (e.kind='tool' AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
-          AND (e.runtime_version='' OR e.runtime_version!=r.version))
-        OR (e.kind='tool_transport' AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
-          AND e.version!=r.version)
-      )
-    ) THEN 1 ELSE 0 END),0) AS mixedRuntimeRuns
+    COALESCE(SUM(CASE WHEN ${mismatchedRuntimeSql} THEN 1 ELSE 0 END),0) AS mixedRuntimeRuns,
+    COALESCE(SUM(CASE WHEN ${unattributedRuntimeSql} THEN 1 ELSE 0 END),0) AS unattributedRuntimeRuns
     FROM telemetry_runs r WHERE r.started_ts>=? AND r.version=?
       AND r.run_class='human' AND r.status='completed'`)
-    .get(sinceTs, sampleVersion) as { completedRuns: number; mixedRuntimeRuns: number };
+    .get(sinceTs, sampleVersion) as {
+      completedRuns: number; mixedRuntimeRuns: number; unattributedRuntimeRuns: number;
+    };
   const promptEvaluationCounts = db.query(`SELECT COUNT(*) AS total,
     COALESCE(SUM(accepted),0) AS accepted FROM telemetry_evaluations WHERE created_ts>=?`)
     .get(sinceTs) as { total: number; accepted: number };
@@ -273,8 +294,10 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     crossSessionNodes: brain.crossSessionReusedNodes,
     observedNodes: brain.crossSessionEligibleNodes,
     ...runtime,
-    coherentRuns: coherence.completedRuns - coherence.mixedRuntimeRuns,
+    coherentRuns: coherence.completedRuns - coherence.mixedRuntimeRuns
+      - coherence.unattributedRuntimeRuns,
     mixedRuntimeRuns: coherence.mixedRuntimeRuns,
+    unattributedRuntimeRuns: coherence.unattributedRuntimeRuns,
     ...skills,
     skillEditRate: percent(skills.editedSkills, skills.selectedSkills),
     skillCorrectionResolutionRate: percent(
@@ -310,7 +333,7 @@ function empty(): QualitySummary {
     crossSessionReuseRate: 0, crossSessionNodes: 0, observedNodes: 0,
     crossSessionEligibleNodes: 0, crossSessionReusedNodes: 0,
     runtimeObservedCalls: 0, runtimeUnknownCalls: 0, runtimeMismatchCalls: 0,
-    coherentRuns: 0, mixedRuntimeRuns: 0,
+    coherentRuns: 0, mixedRuntimeRuns: 0, unattributedRuntimeRuns: 0,
     selectedSkills: 0, editedSkills: 0, skillEditRate: 0,
     skillCorrectionsRequired: 0, skillCorrectionsResolved: 0,
     skillCorrectionBlocks: 0, skillCorrectionResolutionRate: 0, comparisons: [],

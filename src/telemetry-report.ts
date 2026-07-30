@@ -70,7 +70,8 @@ export function printTelemetryReport(days: number, json = false): void {
     `mismatch ${quality.runtimeMismatchCalls}`
   );
   line(`release coherence  comparable runs ${quality.coherentRuns}  ` +
-    `excluded (mixed hook/runtime release) ${quality.mixedRuntimeRuns}`);
+    `excluded (mixed hook/runtime release) ${quality.mixedRuntimeRuns}  ` +
+    `unattributed runtime ${quality.unattributedRuntimeRuns}`);
   line(`skills selected ${quality.selectedSkills}  edited ${quality.editedSkills} ` +
     `(${quality.skillEditRate}%)  visibility failures ${quality.visibilityFailures}`);
   line(`skill corrections required ${quality.skillCorrectionsRequired}  ` +
@@ -88,18 +89,24 @@ export function printTelemetryReport(days: number, json = false): void {
   const deltas = quality.comparisons.filter((item) => item.delta);
   for (const item of deltas) {
     const excluded = item.current.excludedRuns + (item.baseline?.excludedRuns ?? 0);
+    const unattributed = item.current.unattributedRuns + (item.baseline?.unattributedRuns ?? 0);
     line(`${item.host}/${item.model}/${item.workload} release delta  ` +
       `tokens/run ${signed(item.delta!.tokensPerRun)}  ` +
       `completion ${signed(item.delta!.completedRate)}pp  ` +
       `workflow ${signed(item.delta!.workflowRate)}pp  ` +
       `failures ${signed(item.delta!.toolFailureRate)}pp` +
-      (excluded ? `  (${excluded} run(s) excluded for mixed runtime)` : ""));
+      (excluded ? `  (${excluded} run(s) excluded for mixed runtime)` : "") +
+      (unattributed ? `  (${unattributed} run(s) unattributed)` : ""));
   }
   if (!deltas.length) {
     line(c.dim("release delta  collecting baseline (two release fingerprints required)"));
     if (quality.mixedRuntimeRuns) {
       line(c.dim(`release delta  ${quality.mixedRuntimeRuns} completed run(s) are excluded ` +
         "because the hook and runtime releases differed mid-session"));
+    }
+    if (quality.unattributedRuntimeRuns) {
+      line(c.dim(`release delta  ${quality.unattributedRuntimeRuns} completed run(s) report no ` +
+        "runtime release and cannot be attributed"));
     }
   }
 }

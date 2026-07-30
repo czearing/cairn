@@ -147,7 +147,8 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
     runtimeUnknownCalls: 6,
     runtimeMismatchCalls: 1,
     coherentRuns: 0,
-    mixedRuntimeRuns: 2,
+    mixedRuntimeRuns: 1,
+    unattributedRuntimeRuns: 1,
     crossSessionReuseRate: 100,
     crossSessionNodes: 1,
     observedNodes: 1,
@@ -628,6 +629,67 @@ test("mixed-runtime runs are disclosed instead of silently dropped from release 
   expect(comparison?.current.runs).toBe(1);
   expect(comparison?.current.excludedRuns).toBe(1);
   expect(quality.verdict.issues.some((issue) => issue.includes("excluded from release"))).toBe(true);
+});
+
+test("one unattributed call does not discard a run whose other calls confirm the release", () => {
+  qualityDatabase()?.run("DELETE FROM telemetry_events");
+  qualityDatabase()?.run("DELETE FROM telemetry_runs");
+  const run = identity("coherence-partial-attribution");
+  const toolArgs = { query: "coherence" };
+  const toolResult = [{ id: "node-a", text: "answer", score: 0.9 }];
+
+  beginQualityRun({
+    ...run, promptHash: promptFingerprint("shared"), catalogVersion: "catalog", injectedChars: 100,
+  });
+  recordTelemetry({
+    kind: "tool_transport", source: "mcp", toolName: "brain_search",
+    inputChars: jsonChars(toolArgs), outputChars: jsonChars(toolResult), success: true,
+    eventKey: "partial-attributed-transport", releaseFingerprint: "fingerprint",
+    version: releaseVersion,
+  });
+  recordQualityTool({
+    ...run, eventKey: "partial-attributed-tool", toolName: "brain_search",
+    args: toolArgs, result: toolResult, success: true,
+  });
+  // A second call carries no runtime identity at all, which is missing attribution rather than
+  // evidence that the runtime was a different release.
+  recordQualityTool({
+    ...run, eventKey: "partial-unattributed-tool", toolName: "brain_mutate",
+    args: { id: "node-a" }, result: { id: "node-a" }, success: true,
+  });
+  finishQualityRun({
+    ...run, completed: true, workflowPassed: true, skillUsed: true, brainUsed: true, stopNudges: 0,
+  });
+
+  const quality = qualitySummary(7);
+  expect(quality.coherentRuns).toBe(1);
+  expect(quality.mixedRuntimeRuns).toBe(0);
+  expect(quality.unattributedRuntimeRuns).toBe(0);
+  expect(quality.comparisons.at(0)?.current.runs).toBe(1);
+});
+
+test("a run with no attributed Cairn call is reported as unattributed, not as a release mismatch", () => {
+  qualityDatabase()?.run("DELETE FROM telemetry_events");
+  qualityDatabase()?.run("DELETE FROM telemetry_runs");
+  const run = identity("coherence-unattributed");
+
+  beginQualityRun({
+    ...run, promptHash: promptFingerprint("shared"), catalogVersion: "catalog", injectedChars: 100,
+  });
+  recordQualityTool({
+    ...run, eventKey: "unattributed-tool", toolName: "brain_search",
+    args: { query: "coherence" }, result: [{ id: "node-a", text: "answer", score: 0.9 }],
+    success: true,
+  });
+  finishQualityRun({
+    ...run, completed: true, workflowPassed: true, skillUsed: true, brainUsed: true, stopNudges: 0,
+  });
+
+  const quality = qualitySummary(7);
+  expect(quality.mixedRuntimeRuns).toBe(0);
+  expect(quality.unattributedRuntimeRuns).toBe(1);
+  expect(quality.coherentRuns).toBe(0);
+  expect(quality.verdict.issues.some((issue) => issue.includes("no runtime"))).toBe(true);
 });
 
 test("quality verdict reports no receipt compliance issue without samples", () => {

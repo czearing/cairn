@@ -79,11 +79,18 @@ export function telemetryQualityVerdict(
   if (behavior.duplicateSkillReceipts) {
     issues.push(`${behavior.duplicateSkillReceipts} final responses contained duplicate Cairn receipts.`);
   }
+  const coherenceTotal = behavior.coherentRuns + behavior.mixedRuntimeRuns
+    + behavior.unattributedRuntimeRuns;
   if (behavior.mixedRuntimeRuns) {
-    const total = behavior.coherentRuns + behavior.mixedRuntimeRuns;
     issues.push(
-      `${behavior.mixedRuntimeRuns}/${total} completed human runs are excluded from release ` +
+      `${behavior.mixedRuntimeRuns}/${coherenceTotal} completed human runs are excluded from release ` +
       "comparisons because the hook and runtime releases differed mid-session."
+    );
+  }
+  if (behavior.unattributedRuntimeRuns) {
+    issues.push(
+      `${behavior.unattributedRuntimeRuns}/${coherenceTotal} completed human runs report no runtime ` +
+      "release, so they cannot be attributed to a release rather than being known to differ."
     );
   }
   if (!engine.version) issues.push("No infrastructure-health sample is available.");

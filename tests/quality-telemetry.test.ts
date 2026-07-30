@@ -692,6 +692,58 @@ test("a run with no attributed Cairn call is reported as unattributed, not as a 
   expect(quality.verdict.issues.some((issue) => issue.includes("no runtime"))).toBe(true);
 });
 
+test("behavior rates prefer the newest release that has a comparable sample", () => {
+  qualityDatabase()?.run("DELETE FROM telemetry_events");
+  qualityDatabase()?.run("DELETE FROM telemetry_runs");
+  const older = identity("sample-comparable-older");
+  const toolArgs = { query: "sample" };
+  const toolResult = [{ id: "node-a", text: "answer", score: 0.9 }];
+
+  beginQualityRun({
+    ...older, promptHash: promptFingerprint("older"), catalogVersion: "catalog", injectedChars: 100,
+    ts: Date.now() - 60_000,
+  });
+  recordTelemetry({
+    kind: "tool_transport", source: "mcp", toolName: "brain_search",
+    inputChars: jsonChars(toolArgs), outputChars: jsonChars(toolResult), success: true,
+    eventKey: "sample-older-transport", releaseFingerprint: "fingerprint", version: releaseVersion,
+  });
+  recordQualityTool({
+    ...older, eventKey: "sample-older-tool", toolName: "brain_search",
+    args: toolArgs, result: toolResult, success: true,
+  });
+  finishQualityRun({
+    ...older, completed: true, workflowPassed: true, skillUsed: true, brainUsed: true, stopNudges: 0,
+  });
+
+  // A freshly published release whose only run was served by the previous long-lived runtime.
+  qualityDatabase()?.run(
+    `INSERT INTO telemetry_runs (run_id,host,session_hash,turn_seq,release_fingerprint,version,
+      run_class,started_ts,status,completed,workflow_passed,tool_calls)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ["run-mismatched-newer", "copilot", "hash-newer", 1, "fingerprint-newer", "9.9.9+newer",
+      "human", Date.now() + 60_000, "completed", 1, 1, 1],
+  );
+  qualityDatabase()?.run(
+    `INSERT INTO telemetry_events (event_key,run_id,host,session_hash,turn_seq,ts,kind,source,
+      tool_name,entity_type,entity_hash,success,input_tokens,output_tokens,estimated_tokens,
+      duration_ms,item_count,value,release_fingerprint,version,run_class,
+      runtime_release_fingerprint,runtime_version,rank,score_bucket)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ["event-mismatched-newer", "run-mismatched-newer", "copilot", "hash-newer", 1,
+      Date.now() + 60_000, "tool", "host", "brain_search", "", "", 1, 0, 0, 0, 0, 0, 0,
+      "fingerprint-newer", "9.9.9+newer", "human", "stale-fingerprint", "0.0.0+stale", 0, 0],
+  );
+
+  const quality = qualitySummary(7);
+  // The newest release has a completed run, but every one of its runs is release-mismatched, so the
+  // rates must fall back to the newest release that actually has a comparable sample.
+  expect(quality.latestVersion).toBe("9.9.9+newer");
+  expect(quality.sampleVersion).toBe(releaseVersion);
+  expect(quality.coherentRuns).toBe(1);
+  expect(quality.mixedRuntimeRuns).toBe(0);
+});
+
 test("quality verdict reports no receipt compliance issue without samples", () => {
   const empty = telemetryQualityVerdict(
     { ...qualitySummary(7), runs: 0, skillReceiptChecks: 0, skillReceiptComplianceRate: 0,

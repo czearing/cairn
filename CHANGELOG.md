@@ -16,6 +16,12 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and 
   Cairn tool stays comparable because it has no runtime to disagree with. On the live 7-day sample this
   moves coherent runs from 2 to 3 and mixed runs from 4 to 2 without dropping any release comparison.
 
+- Behavior rates picked the newest release with any completed run, even when every one of that
+  release's runs was release-mismatched, so the report showed `comparable runs 0` immediately after
+  each publish while a perfectly usable older sample sat unused. Rates now prefer the newest release
+  that has a comparable sample, falling back to any completed sample so a brand-new release still
+  reports.
+
 - The Copilot submission gate counted only nodes a turn *created*, so a turn that correctly reused an
   existing answered node could never satisfy it. Agents were blocked repeatedly and told they had
   "recorded nothing to the brain", which pushed them into creating duplicate nodes for work the graph

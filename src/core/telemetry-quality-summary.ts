@@ -93,7 +93,15 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   // run's version blanks every rate for the whole window after each rebuild. Report the newest release
   // that actually has a completed sample instead, and surface the gap as an explicit issue.
   const minimumSample = Math.max(1, Number(process.env.CAIRN_TELEMETRY_MIN_SAMPLE || "1"));
-  const sampleVersion = (db.query(`SELECT version FROM telemetry_runs
+  // Prefer the newest release that has a COMPARABLE sample. Selecting on completed runs alone lands
+  // on a release whose only runs are release-mismatched, which reports comparable runs 0 and hides a
+  // usable older sample; fall back to any completed sample so a brand-new release still reports.
+  const comparableSampleVersion = (db.query(`SELECT r.version FROM telemetry_runs r
+    WHERE r.started_ts>=? AND r.run_class='human' AND r.status='completed' AND r.version!=''
+      AND ${comparableRuntimeSql}
+    GROUP BY r.version HAVING COUNT(*)>=? ORDER BY MAX(r.started_ts) DESC LIMIT 1`)
+    .get(sinceTs, minimumSample) as { version?: string } | null)?.version || "";
+  const sampleVersion = comparableSampleVersion || (db.query(`SELECT version FROM telemetry_runs
     WHERE started_ts>=? AND run_class='human' AND status='completed' AND version!=''
     GROUP BY version HAVING COUNT(*)>=? ORDER BY MAX(started_ts) DESC LIMIT 1`)
     .get(sinceTs, minimumSample) as { version?: string } | null)?.version || latestVersion;

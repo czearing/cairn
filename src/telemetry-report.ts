@@ -69,6 +69,8 @@ export function printTelemetryReport(days: number, json = false): void {
     `runtime observed ${quality.runtimeObservedCalls}  unknown ${quality.runtimeUnknownCalls}  ` +
     `mismatch ${quality.runtimeMismatchCalls}`
   );
+  line(`release coherence  comparable runs ${quality.coherentRuns}  ` +
+    `excluded (mixed hook/runtime release) ${quality.mixedRuntimeRuns}`);
   line(`skills selected ${quality.selectedSkills}  edited ${quality.editedSkills} ` +
     `(${quality.skillEditRate}%)  visibility failures ${quality.visibilityFailures}`);
   line(`skill corrections required ${quality.skillCorrectionsRequired}  ` +
@@ -85,14 +87,20 @@ export function printTelemetryReport(days: number, json = false): void {
       : ""));
   const deltas = quality.comparisons.filter((item) => item.delta);
   for (const item of deltas) {
+    const excluded = item.current.excludedRuns + (item.baseline?.excludedRuns ?? 0);
     line(`${item.host}/${item.model}/${item.workload} release delta  ` +
       `tokens/run ${signed(item.delta!.tokensPerRun)}  ` +
       `completion ${signed(item.delta!.completedRate)}pp  ` +
       `workflow ${signed(item.delta!.workflowRate)}pp  ` +
-      `failures ${signed(item.delta!.toolFailureRate)}pp`);
+      `failures ${signed(item.delta!.toolFailureRate)}pp` +
+      (excluded ? `  (${excluded} run(s) excluded for mixed runtime)` : ""));
   }
   if (!deltas.length) {
     line(c.dim("release delta  collecting baseline (two release fingerprints required)"));
+    if (quality.mixedRuntimeRuns) {
+      line(c.dim(`release delta  ${quality.mixedRuntimeRuns} completed run(s) are excluded ` +
+        "because the hook and runtime releases differed mid-session"));
+    }
   }
 }
 

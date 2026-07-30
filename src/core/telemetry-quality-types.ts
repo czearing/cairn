@@ -2,6 +2,8 @@ export interface QualityMetrics {
   release: string;
   workload: "small" | "medium" | "large";
   runs: number;
+  /** Completed runs in this dimension dropped from the comparison for mixed hook/runtime releases. */
+  excludedRuns: number;
   completedRate: number;
   workflowRate: number;
   tokensPerRun: number;

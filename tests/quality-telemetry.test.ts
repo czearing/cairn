@@ -583,6 +583,53 @@ test("behavior rates fall back to the newest release that has a completed sample
   expect(quality.verdict.issues).not.toContain("No completed human behavior samples.");
 });
 
+test("mixed-runtime runs are disclosed instead of silently dropped from release comparisons", () => {
+  qualityDatabase()?.run("DELETE FROM telemetry_events");
+  qualityDatabase()?.run("DELETE FROM telemetry_runs");
+  const coherent = identity("coherence-disclosed-ok");
+  const mixed = identity("coherence-disclosed-mixed");
+  const toolArgs = { query: "coherence" };
+  const toolResult = [{ id: "node-a", text: "answer", score: 0.9 }];
+  const transport = (eventKey: string, version: string) => recordTelemetry({
+    kind: "tool_transport", source: "mcp", toolName: "brain_search",
+    inputChars: jsonChars(toolArgs), outputChars: jsonChars(toolResult), success: true,
+    eventKey, releaseFingerprint: "fingerprint", version,
+  });
+
+  beginQualityRun({
+    ...coherent, promptHash: promptFingerprint("shared"), catalogVersion: "catalog", injectedChars: 100,
+  });
+  transport("disclosed-ok-transport", releaseVersion);
+  recordQualityTool({
+    ...coherent, eventKey: "disclosed-ok-tool", toolName: "brain_search",
+    args: toolArgs, result: toolResult, success: true,
+  });
+  finishQualityRun({
+    ...coherent, completed: true, workflowPassed: true, skillUsed: true, brainUsed: true, stopNudges: 0,
+  });
+
+  // The hook adopted a new release mid-session while the long-lived runtime kept the old build.
+  beginQualityRun({
+    ...mixed, promptHash: promptFingerprint("shared"), catalogVersion: "catalog", injectedChars: 100,
+  });
+  transport("disclosed-mixed-transport", "0.0.0+stale");
+  recordQualityTool({
+    ...mixed, eventKey: "disclosed-mixed-tool", toolName: "brain_search",
+    args: toolArgs, result: toolResult, success: true,
+  });
+  finishQualityRun({
+    ...mixed, completed: true, workflowPassed: true, skillUsed: true, brainUsed: true, stopNudges: 0,
+  });
+
+  const quality = qualitySummary(7);
+  expect(quality.coherentRuns).toBe(1);
+  expect(quality.mixedRuntimeRuns).toBe(1);
+  const comparison = quality.comparisons.at(0);
+  expect(comparison?.current.runs).toBe(1);
+  expect(comparison?.current.excludedRuns).toBe(1);
+  expect(quality.verdict.issues.some((issue) => issue.includes("excluded from release"))).toBe(true);
+});
+
 test("quality verdict reports no receipt compliance issue without samples", () => {
   const empty = telemetryQualityVerdict(
     { ...qualitySummary(7), runs: 0, skillReceiptChecks: 0, skillReceiptComplianceRate: 0,

@@ -8,11 +8,28 @@ const workloadSql = `CASE WHEN tool_calls<=10 THEN 'small'
   WHEN tool_calls<=50 THEN 'medium' ELSE 'large' END`;
 type Workload = QualityMetrics["workload"];
 
+// A run is comparable only when the hook layer and the Cairn runtime that served its calls are the
+// same release. Hooks adopt a release on the next hook event while the MCP server keeps the build it
+// started with, so release-spanning sessions are legitimately excluded — but the exclusion must be
+// counted and reported, not silently dropped.
+const mixedRuntimeSql = `(EXISTS (
+    SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND e.kind='tool'
+      AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
+      AND (e.runtime_version='' OR e.runtime_version!=r.version)
+  ) OR EXISTS (
+    SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND e.kind='tool_transport'
+      AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
+      AND e.version!=r.version
+  ))`;
+
 function releaseMetrics(
   sinceTs: number, release: string, host: string, model: string, workload: Workload
 ): QualityMetrics | null {
   const db = telemetryDatabase();
   if (!db || !release) return null;
+  const dimensionSql = `FROM telemetry_runs r WHERE started_ts>=? AND release_fingerprint=? AND host=?
+      AND run_class='human' AND status='completed'
+      AND COALESCE(NULLIF(model,''),'unknown')=? AND ${workloadSql}=?`;
   const row = db.query(`SELECT COUNT(*) AS runs,
     ROUND(AVG(completed)*100,1) AS completedRate,
     ROUND(AVG(workflow_passed)*100,1) AS workflowRate,
@@ -23,22 +40,13 @@ function releaseMetrics(
       WHERE e.run_id=r.run_id AND e.kind='tool'
         AND e.version=r.version
     ),0)),1) AS tokensPerRun
-    FROM telemetry_runs r WHERE started_ts>=? AND release_fingerprint=? AND host=?
-      AND run_class='human' AND status='completed'
-      AND COALESCE(NULLIF(model,''),'unknown')=? AND ${workloadSql}=?
-      AND NOT EXISTS (
-        SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND e.kind='tool'
-          AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
-          AND (e.runtime_version='' OR e.runtime_version!=r.version)
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM telemetry_events e WHERE e.run_id=r.run_id AND e.kind='tool_transport'
-          AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')
-          AND e.version!=r.version
-      )
-      `)
-    .get(sinceTs, release, host, model, workload) as Omit<QualityMetrics, "release" | "workload"> | null;
-  return row?.runs ? { release, workload, ...row } : null;
+    ${dimensionSql} AND NOT ${mixedRuntimeSql}`)
+    .get(sinceTs, release, host, model, workload) as
+      Omit<QualityMetrics, "release" | "workload" | "excludedRuns"> | null;
+  const excluded = db.query(`SELECT COUNT(*) AS excludedRuns ${dimensionSql} AND ${mixedRuntimeSql}`)
+    .get(sinceTs, release, host, model, workload) as { excludedRuns: number } | null;
+  const excludedRuns = excluded?.excludedRuns ?? 0;
+  return row?.runs ? { release, workload, excludedRuns, ...row } : null;
 }
 
 const delta = (current: QualityMetrics, baseline: QualityMetrics | null) => baseline ? {

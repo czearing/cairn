@@ -79,6 +79,13 @@ export function telemetryQualityVerdict(
   if (behavior.duplicateSkillReceipts) {
     issues.push(`${behavior.duplicateSkillReceipts} final responses contained duplicate Cairn receipts.`);
   }
+  if (behavior.mixedRuntimeRuns) {
+    const total = behavior.coherentRuns + behavior.mixedRuntimeRuns;
+    issues.push(
+      `${behavior.mixedRuntimeRuns}/${total} completed human runs are excluded from release ` +
+      "comparisons because the hook and runtime releases differed mid-session."
+    );
+  }
   if (!engine.version) issues.push("No infrastructure-health sample is available.");
   if (transportFailures) issues.push(`${transportFailures}/${transportCalls} engine transports failed.`);
   if (fallbackCalls) issues.push(`${fallbackCalls}/${transportCalls} engine calls used direct fallback.`);

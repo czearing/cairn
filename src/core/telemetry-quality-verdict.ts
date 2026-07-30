@@ -51,6 +51,11 @@ export function telemetryQualityVerdict(
   const issues: string[] = [];
 
   if (!behavior.runs) issues.push("No completed human behavior samples.");
+  if (behavior.sampleVersion && behavior.latestVersion && behavior.sampleVersion !== behavior.latestVersion) {
+    issues.push(
+      `Behavior rates are from ${behavior.sampleVersion}; current release ${behavior.latestVersion} has no completed runs yet.`
+    );
+  }
   if (behavior.runs && visibilityFailureRate > 0) {
     issues.push(
       `Cairn tools were invisible in ${behavior.visibilityFailures}/${behavior.runs} completed human runs.`
@@ -62,11 +67,11 @@ export function telemetryQualityVerdict(
   if (behavior.stalledActiveRuns) {
     issues.push(`${behavior.stalledActiveRuns}/${behavior.activeRuns} active human runs are stalled.`);
   }
-  if (behavior.skillReceiptChecks < behavior.runs) {
+  if (behavior.runs && behavior.skillReceiptChecks < behavior.runs) {
     issues.push(
       `Skill receipts were verified for ${behavior.skillReceiptChecks}/${behavior.runs} completed human runs.`
     );
-  } else if (behavior.skillReceiptComplianceRate < 100) {
+  } else if (behavior.skillReceiptChecks && behavior.skillReceiptComplianceRate < 100) {
     issues.push(
       `Only ${behavior.skillReceiptComplianceRate}% of checked final responses had complete skill receipts.`
     );

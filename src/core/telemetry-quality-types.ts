@@ -20,6 +20,8 @@ export interface ReleaseComparison {
 
 export interface QualitySummary {
   latestVersion: string;
+  /** Newest release with a completed sample; behavior rates are scoped to it. */
+  sampleVersion: string;
   latestReleaseFingerprint: string;
   runs: number;
   activeRuns: number;

@@ -30,6 +30,7 @@ export interface LifecycleState {
   cairnVisibilityNudged: boolean;
   cairnToolAttempted: boolean;
   cairnToolObserved: boolean;
+  executionToolCalls: number;
 }
 
 const fresh = (): LifecycleState => ({
@@ -54,6 +55,7 @@ const fresh = (): LifecycleState => ({
   cairnVisibilityNudged: false,
   cairnToolAttempted: false,
   cairnToolObserved: false,
+  executionToolCalls: 0,
 });
 
 let connection: Database | null = null;
@@ -86,6 +88,7 @@ function database(): Database {
     cairn_visibility_nudged INTEGER NOT NULL DEFAULT 0,
     cairn_tool_attempted INTEGER NOT NULL DEFAULT 0,
     cairn_tool_observed INTEGER NOT NULL DEFAULT 0,
+    execution_tool_calls INTEGER NOT NULL DEFAULT 0,
     updated_ts INTEGER NOT NULL
   )`);
   const columns = d.query("PRAGMA table_info(lifecycle_turns)").all() as { name: string }[];
@@ -100,6 +103,9 @@ function database(): Database {
   }
   if (!columns.some((column) => column.name === "cairn_tool_observed")) {
     d.run("ALTER TABLE lifecycle_turns ADD COLUMN cairn_tool_observed INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columns.some((column) => column.name === "execution_tool_calls")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN execution_tool_calls INTEGER NOT NULL DEFAULT 0");
   }
   if (!columns.some((column) => column.name === "brain_searched")) {
     d.run("ALTER TABLE lifecycle_turns ADD COLUMN brain_searched INTEGER NOT NULL DEFAULT 0");
@@ -166,6 +172,7 @@ function fromRow(row: Record<string, unknown> | null | undefined): LifecycleStat
     cairnVisibilityNudged: Boolean(row.cairn_visibility_nudged),
     cairnToolAttempted: Boolean(row.cairn_tool_attempted),
     cairnToolObserved: Boolean(row.cairn_tool_observed),
+    executionToolCalls: Number(row.execution_tool_calls || 0),
   };
 }
 
@@ -175,8 +182,8 @@ function save(d: Database, scope: string, state: LifecycleState): void {
     root_node_id, root_synthesized, skill_used, selected_skill_ids, invalidated_skill_ids,
     skill_correction_nudges, pending_review_ids, pending_reviews,
     stop_nudges, review_nudges, stop_blocked, reminded, completion_nudged,
-    cairn_visibility_nudged, cairn_tool_attempted, cairn_tool_observed, updated_ts
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    cairn_visibility_nudged, cairn_tool_attempted, cairn_tool_observed, execution_tool_calls, updated_ts
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(scope) DO UPDATE SET
     turn_seq=excluded.turn_seq, brain_used=excluded.brain_used,
     brain_searched=excluded.brain_searched, brain_created_ids=excluded.brain_created_ids,
@@ -191,7 +198,8 @@ function save(d: Database, scope: string, state: LifecycleState): void {
     completion_nudged=excluded.completion_nudged,
     cairn_visibility_nudged=excluded.cairn_visibility_nudged,
     cairn_tool_attempted=excluded.cairn_tool_attempted,
-    cairn_tool_observed=excluded.cairn_tool_observed, updated_ts=excluded.updated_ts`)
+    cairn_tool_observed=excluded.cairn_tool_observed,
+    execution_tool_calls=excluded.execution_tool_calls, updated_ts=excluded.updated_ts`)
     .run(
       scope, state.turnSeq, Number(state.brainUsed), Number(state.brainSearched),
       JSON.stringify(state.brainCreatedIds), JSON.stringify(state.brainAnsweredIds),
@@ -201,7 +209,8 @@ function save(d: Database, scope: string, state: LifecycleState): void {
       JSON.stringify(state.pendingReviewIds), JSON.stringify(state.pendingReviews),
       state.stopNudges, state.reviewNudges, Number(state.stopBlocked), Number(state.reminded),
       Number(state.completionNudged), Number(state.cairnVisibilityNudged),
-      Number(state.cairnToolAttempted), Number(state.cairnToolObserved), Date.now()
+      Number(state.cairnToolAttempted), Number(state.cairnToolObserved),
+      state.executionToolCalls, Date.now()
     );
 }
 

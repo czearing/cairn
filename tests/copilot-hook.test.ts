@@ -15,6 +15,8 @@ import {
   STOP_CAP,
   shouldStartUserTurn,
   stopDecision,
+  requiredBrainNodes,
+  countsAsExecution,
   workflowActionDecision,
   failedExecutionDisprovesSkill,
 } from "../src/hosts/copilot-cli/hook";
@@ -1280,4 +1282,29 @@ test("subagentStart injects only the delegated protocol, not the full catalog", 
   const output = JSON.parse(run.stdout.toString()) as { additionalContext: string };
   expect(output.additionalContext).toContain("parent owns skill selection and maintenance");
   expect(output.additionalContext).not.toContain("Available skill catalog");
+});
+
+test("brain node floor scales with execution and keeps fail-closed invariants", () => {
+  expect(requiredBrainNodes(0)).toBe(1);
+  expect(requiredBrainNodes(2)).toBe(3);
+  expect(countsAsExecution("view")).toBe(false);
+  expect(countsAsExecution("powershell", { command: "rg pattern src" })).toBe(false);
+  expect(countsAsExecution("powershell", { command: "git commit -m x" })).toBe(true);
+  expect(countsAsExecution("edit")).toBe(true);
+  expect(countsAsExecution("cairn-brain_create")).toBe(false);
+
+  const resolved = {
+    brainUsed: true, brainSearched: true, brainCreatedCount: 2, brainAnsweredCount: 2,
+    rootSynthesized: true, skillUsed: true, stopNudges: 0, strict: true,
+  };
+  // A read-only turn that fully resolved a root plus one child may finish.
+  expect(stopDecision({ ...resolved, minimumBrainNodes: requiredBrainNodes(0) })).toEqual({ file: "" });
+  // The same evidence on a turn that changed something still owes the full decomposition.
+  expect(stopDecision({ ...resolved, minimumBrainNodes: requiredBrainNodes(1) }))
+    .toEqual({ file: "turn-reminder.md" });
+  // Skipping Cairn stays blocked regardless of how cheap the turn was.
+  expect(stopDecision({
+    ...resolved, brainSearched: false, brainCreatedCount: 0, brainAnsweredCount: 0,
+    rootSynthesized: false, minimumBrainNodes: requiredBrainNodes(0),
+  })).toEqual({ file: "turn-reminder.md" });
 });

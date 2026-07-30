@@ -554,3 +554,42 @@ test("release comparisons do not mix workload sizes", () => {
   expect(comparisons.map((item) => item.workload).sort()).toEqual(["large", "small"]);
   expect(comparisons.every((item) => item.baseline === null && item.delta === null)).toBe(true);
 });
+
+test("behavior rates fall back to the newest release that has a completed sample", () => {
+  qualityDatabase()?.run("DELETE FROM telemetry_events");
+  qualityDatabase()?.run("DELETE FROM telemetry_runs");
+  const sampled = identity("quality-sampled-release");
+  beginQualityRun({
+    ...sampled, promptHash: promptFingerprint("sampled"), catalogVersion: "catalog-a",
+    injectedChars: 300,
+  });
+  finishQualityRun({
+    ...sampled, completed: true, workflowPassed: true, skillUsed: true, brainUsed: true, stopNudges: 0,
+  });
+  // A rebuild lands and only has an in-flight run: the previous release must still supply the rates.
+  qualityDatabase()?.run(
+    `INSERT INTO telemetry_runs (run_id,host,session_hash,turn_seq,release_fingerprint,version,
+      run_class,started_ts,status) VALUES (?,?,?,?,?,?,?,?,?)`,
+    ["run-newer", "copilot", "hash-newer", 1, "fingerprint-newer", "9.9.9+newer", "human", Date.now() + 60_000, "active"]
+  );
+
+  const quality = qualitySummary(7);
+  expect(quality.latestVersion).toBe("9.9.9+newer");
+  expect(quality.sampleVersion).toBe(releaseVersion);
+  expect(quality.runs).toBe(1);
+  expect(quality.completedRate).toBe(100);
+  expect(quality.activeRuns).toBe(1);
+  expect(quality.verdict.issues.some((issue) => issue.includes("9.9.9+newer"))).toBe(true);
+  expect(quality.verdict.issues).not.toContain("No completed human behavior samples.");
+});
+
+test("quality verdict reports no receipt compliance issue without samples", () => {
+  const empty = telemetryQualityVerdict(
+    { ...qualitySummary(7), runs: 0, skillReceiptChecks: 0, skillReceiptComplianceRate: 0,
+      latestVersion: "1.0.0", sampleVersion: "1.0.0" },
+    { version: "1.0.0", engineTransports: [], parity: { checks: 0, mismatches: 0 } } as never,
+  );
+  expect(empty.issues.some((issue) => issue.includes("skill receipts"))).toBe(false);
+  expect(empty.issues.some((issue) => issue.includes("complete skill receipts"))).toBe(false);
+  expect(empty.status).toBe("insufficient_data");
+});

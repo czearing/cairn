@@ -56,6 +56,14 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     WHERE started_ts>=? AND run_class='human' ORDER BY started_ts DESC LIMIT 1`)
     .get(sinceTs) as { version?: string; releaseFingerprint?: string } | null) ?? {};
   const latestVersion = latestIdentity.version || "";
+  // Behavior rates are scoped to one release so they stay comparable, but pinning them to the newest
+  // run's version blanks every rate for the whole window after each rebuild. Report the newest release
+  // that actually has a completed sample instead, and surface the gap as an explicit issue.
+  const minimumSample = Math.max(1, Number(process.env.CAIRN_TELEMETRY_MIN_SAMPLE || "1"));
+  const sampleVersion = (db.query(`SELECT version FROM telemetry_runs
+    WHERE started_ts>=? AND run_class='human' AND status='completed' AND version!=''
+    GROUP BY version HAVING COUNT(*)>=? ORDER BY MAX(started_ts) DESC LIMIT 1`)
+    .get(sinceTs, minimumSample) as { version?: string } | null)?.version || latestVersion;
   const staleCutoff = Date.now()
     - Math.max(60_000, Number(process.env.CAIRN_TELEMETRY_STALE_RUN_MS || "1800000"));
   const stalledCutoff = Date.now()
@@ -67,22 +75,25 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   const runs = db.query(`WITH run_activity AS (
     SELECT r.*,COALESCE(MAX(e.ts),r.started_ts) AS lastActivityTs
     FROM telemetry_runs r LEFT JOIN telemetry_events e USING(run_id)
-    WHERE r.started_ts>=? AND r.run_class='human' AND r.version=?
+    WHERE r.started_ts>=? AND r.run_class='human'
     GROUP BY r.run_id
   ) SELECT
-    COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0) AS closed,
+    COALESCE(SUM(CASE WHEN status='completed' AND version=? THEN 1 ELSE 0 END),0) AS closed,
     COALESCE(SUM(CASE WHEN status='active' THEN 1 ELSE 0 END),0) AS active,
     COALESCE(SUM(CASE WHEN status='active' AND lastActivityTs>=? THEN 1 ELSE 0 END),0) AS progressingActive,
     COALESCE(SUM(CASE WHEN status='active' AND lastActivityTs<? THEN 1 ELSE 0 END),0) AS stalledActive,
-    COALESCE(SUM(CASE WHEN status='abandoned' THEN 1 ELSE 0 END),0) AS abandoned,
-    COALESCE(SUM(CASE WHEN status='superseded' THEN 1 ELSE 0 END),0) AS superseded,
-    COALESCE(SUM(CASE WHEN status='completed' THEN completed ELSE 0 END),0) AS completed,
-    COALESCE(SUM(CASE WHEN status='completed' THEN workflow_passed ELSE 0 END),0) AS workflow,
-    COALESCE(SUM(CASE WHEN status='completed' THEN tool_failures ELSE 0 END),0) AS failures,
+    COALESCE(SUM(CASE WHEN status='abandoned' AND version=? THEN 1 ELSE 0 END),0) AS abandoned,
+    COALESCE(SUM(CASE WHEN status='superseded' AND version=? THEN 1 ELSE 0 END),0) AS superseded,
+    COALESCE(SUM(CASE WHEN status='completed' AND version=? THEN completed ELSE 0 END),0) AS completed,
+    COALESCE(SUM(CASE WHEN status='completed' AND version=? THEN workflow_passed ELSE 0 END),0) AS workflow,
+    COALESCE(SUM(CASE WHEN status='completed' AND version=? THEN tool_failures ELSE 0 END),0) AS failures,
     COALESCE(MAX(CASE WHEN status='active' THEN (? - started_ts)/60000 ELSE 0 END),0) AS oldestActiveMinutes,
     COALESCE(MAX(CASE WHEN status='active' THEN (? - lastActivityTs)/60000 ELSE 0 END),0) AS oldestActiveActivityMinutes
     FROM run_activity`)
-    .get(sinceTs, latestVersion, stalledCutoff, stalledCutoff, Date.now(), Date.now()) as {
+    .get(
+      sinceTs, sampleVersion, stalledCutoff, stalledCutoff, sampleVersion, sampleVersion,
+      sampleVersion, sampleVersion, sampleVersion, Date.now(), Date.now()
+    ) as {
       active: number; closed: number; abandoned: number; superseded: number;
       progressingActive: number; stalledActive: number; oldestActiveActivityMinutes: number;
       completed: number; workflow: number; failures: number; oldestActiveMinutes: number;
@@ -138,7 +149,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
           AND u.usedRowId>r.returnedRowId
       ))
         AS crossSessionReusedNodes`)
-    .get(sinceTs, latestVersion, sinceTs, latestVersion) as {
+    .get(sinceTs, sampleVersion, sinceTs, sampleVersion) as {
       returnedNodes: number; usedReturnedNodes: number; rankedUsedReturnedNodes: number;
       top3UsedReturnedNodes: number;
       maxUsedRank: number; minimumUsedScorePercent: number;
@@ -163,7 +174,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
       AS reportedSkillReceiptSteps
     FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
     WHERE e.ts>=? AND r.run_class='human' AND r.status='completed' AND r.version=?`)
-    .get(sinceTs, latestVersion) as {
+    .get(sinceTs, sampleVersion) as {
       selectedSkills: number; editedSkills: number; visibilityFailures: number;
       workflowBlocks: number; completionBlocks: number;
       skillCorrectionsRequired: number; skillCorrectionsResolved: number;
@@ -179,7 +190,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
       THEN 1 ELSE 0 END),0) AS runtimeMismatchCalls
     FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
     WHERE e.ts>=? AND r.version=? AND r.run_class='human' AND r.status='completed' AND e.kind='tool'
-      AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')`).get(sinceTs, latestVersion) as {
+      AND (e.tool_name LIKE 'brain_%' OR e.tool_name LIKE 'skill_%')`).get(sinceTs, sampleVersion) as {
         runtimeObservedCalls: number; runtimeUnknownCalls: number; runtimeMismatchCalls: number;
       };
   const coherence = db.query(`SELECT
@@ -194,7 +205,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     ) THEN 1 ELSE 0 END),0) AS mixedRuntimeRuns
     FROM telemetry_runs r WHERE r.started_ts>=? AND r.version=?
       AND r.run_class='human' AND r.status='completed'`)
-    .get(sinceTs, latestVersion) as { completedRuns: number; mixedRuntimeRuns: number };
+    .get(sinceTs, sampleVersion) as { completedRuns: number; mixedRuntimeRuns: number };
   const promptEvaluationCounts = db.query(`SELECT COUNT(*) AS total,
     COALESCE(SUM(accepted),0) AS accepted FROM telemetry_evaluations WHERE created_ts>=?`)
     .get(sinceTs) as { total: number; accepted: number };
@@ -231,6 +242,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   const latest = comparisons[0];
   return {
     latestVersion,
+    sampleVersion,
     latestReleaseFingerprint: latestIdentity.releaseFingerprint || "",
     runs: runs.closed,
     activeRuns: runs.active,
@@ -280,7 +292,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
 
 function empty(): QualitySummary {
   return {
-    latestVersion: "", latestReleaseFingerprint: "",
+    latestVersion: "", sampleVersion: "", latestReleaseFingerprint: "",
     runs: 0, activeRuns: 0, abandonedRuns: 0, supersededRuns: 0, oldestActiveMinutes: 0,
     progressingActiveRuns: 0, stalledActiveRuns: 0, oldestActiveActivityMinutes: 0,
     completedRate: 0, workflowRate: 0, toolFailures: 0,

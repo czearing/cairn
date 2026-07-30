@@ -181,15 +181,32 @@ const workflowReady = (s: WorkflowEvidence): boolean =>
   && (s.brainAnsweredCount ?? 0) >= (s.brainCreatedCount ?? 0)
   && Boolean(s.rootSynthesized);
 
+// A turn that only read the repository to answer a question is genuinely resolved by a root plus the
+// children its evidence needs, so a flat floor only buys padding nodes and extra stop continuations.
+// Turns that actually changed something keep the full decomposition floor. Every fail-closed invariant
+// (skill selected, brain searched, a root created, all nodes answered, root synthesized last) is
+// unchanged, so a turn that skips Cairn is still blocked.
+export function requiredBrainNodes(executionToolCalls: number): number {
+  const full = Math.max(1, Number(process.env.CAIRN_MIN_BRAIN_NODES || "3"));
+  const readOnly = Math.max(1, Number(process.env.CAIRN_MIN_BRAIN_NODES_READONLY || "1"));
+  return executionToolCalls > 0 ? full : Math.min(readOnly, full);
+}
+
+export function countsAsExecution(toolName: string, args: Record<string, unknown> = {}): boolean {
+  const command = typeof args.command === "string" ? args.command : "";
+  const readOnlyShell = /powershell|bash|shell/i.test(toolName) && !SHELL_MUTATION.test(command);
+  return !isCairnMcpTool(toolName)
+    && !isNativeSkillTool(toolName)
+    && !READ_ONLY_TOOLS.test(toolName)
+    && !readOnlyShell;
+}
+
 export function workflowActionDecision(
   toolName: string,
   state: WorkflowEvidence,
   args: Record<string, unknown> = {},
 ): { deny: boolean; reason?: string } {
-  const command = typeof args.command === "string" ? args.command : "";
-  const readOnlyShell = /powershell|bash|shell/i.test(toolName) && !SHELL_MUTATION.test(command);
-  if (!state.strict || isCairnMcpTool(toolName) || isNativeSkillTool(toolName)
-    || READ_ONLY_TOOLS.test(toolName) || readOnlyShell) {
+  if (!state.strict || !countsAsExecution(toolName, args)) {
     return { deny: false };
   }
   if (workflowReady(state)) return { deny: false };
@@ -457,7 +474,7 @@ export async function runCopilotHook(): Promise<void> {
           brainCreatedCount: state.brainCreatedIds.length,
           brainAnsweredCount: state.brainAnsweredIds.length,
           strict: true,
-          minimumBrainNodes: Number(process.env.CAIRN_MIN_BRAIN_NODES || "3"),
+          minimumBrainNodes: requiredBrainNodes(1),
         }, args);
         if (decision.deny) {
           emit({ permissionDecision: "deny", permissionDecisionReason: decision.reason });
@@ -506,6 +523,7 @@ export async function runCopilotHook(): Promise<void> {
       const resultId = skillResultId(result);
       if (isCairnMcpTool(toolName)) next.cairnToolAttempted = true;
       if (isCairnMcpTool(toolName) && succeeded) next.cairnToolObserved = true;
+      if (countsAsExecution(toolName, args)) next.executionToolCalls += 1;
       if ((isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) && succeeded) next.brainUsed = true;
       if (isTool(toolName, "brain_search") && succeeded) next.brainSearched = true;
       if (isTool(toolName, "brain_create") && succeeded && resultId) {
@@ -643,7 +661,7 @@ export async function runCopilotHook(): Promise<void> {
       skillUsed: st.skillUsed,
       stopNudges: st.stopNudges,
       strict: true,
-      minimumBrainNodes: Number(process.env.CAIRN_MIN_BRAIN_NODES || "3"),
+      minimumBrainNodes: requiredBrainNodes(st.executionToolCalls),
       pendingSkillCorrections: st.invalidatedSkillIds.length,
       skillCorrectionNudges: st.skillCorrectionNudges,
     }).file;
@@ -723,7 +741,7 @@ export async function runCopilotHook(): Promise<void> {
       brainCreatedCount: st.brainCreatedIds.length,
       brainAnsweredCount: st.brainAnsweredIds.length,
       strict: true,
-      minimumBrainNodes: Number(process.env.CAIRN_MIN_BRAIN_NODES || "3"),
+      minimumBrainNodes: requiredBrainNodes(st.executionToolCalls),
     })) {
       const receipt = complianceReceiptPath(sessionId);
       mkdirSync(dirname(receipt), { recursive: true });

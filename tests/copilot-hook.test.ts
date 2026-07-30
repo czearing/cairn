@@ -50,6 +50,51 @@ function lifecycleState(dbPath: string, scope: string): { pendingReviewIds: stri
   }
 }
 
+function telemetryKinds(dbPath: string): string[] {
+  const database = new Database(dbPath);
+  try {
+    return database.query("SELECT kind FROM telemetry_events ORDER BY ts")
+      .all().map((row) => String((row as { kind: string }).kind));
+  } finally {
+    database.close();
+  }
+}
+
+function completeBrainWorkflow(
+  invoke: (mode: string, payload: object) => ReturnType<typeof spawnSync>,
+  sessionId: string,
+): void {
+  const root = `${sessionId}-root`;
+  const child = `${sessionId}-child`;
+  const leaf = `${sessionId}-leaf`;
+  expect(invoke("post-tool", {
+    sessionId,
+    toolName: "cairn-brain_search",
+    toolArgs: { query: sessionId },
+    toolResult: { success: true },
+  }).status).toBe(0);
+  for (const [id, edges] of [
+    [root, []],
+    [child, [root]],
+    [leaf, [child]],
+  ] as const) {
+    expect(invoke("post-tool", {
+      sessionId,
+      toolName: "cairn-brain_create",
+      toolArgs: { text: `How is ${id} resolved?`, edges },
+      toolResult: { success: true, id },
+    }).status).toBe(0);
+  }
+  for (const id of [leaf, child, root]) {
+    expect(invoke("post-tool", {
+      sessionId,
+      toolName: "cairn-brain_mutate",
+      toolArgs: { id, answer: `Resolved ${id}.`, citation: "https://example.com/evidence" },
+      toolResult: { success: true, id },
+    }).status).toBe(0);
+  }
+}
+
 test("Copilot model attribution prefers payload, Harness environment, then profile settings", () => {
   const home = join(tmpdir(), `cairn-copilot-home-${randomUUID()}`);
   mkdirSync(home, { recursive: true });
@@ -88,7 +133,7 @@ test("postToolFiles is empty for unrelated tools", () => {
   expect(postToolFiles("bash", "")).toEqual([]);
 });
 
-// ── stopDecision: the agentStop gate, bounded so it can never loop forever ────────────────────────
+// ── stopDecision: the fail-closed agentStop workflow gate ─────────────────────────────────────────
 
 test("stopDecision requires skill selection before brain use", () => {
   expect(stopDecision({ brainUsed: false, skillUsed: false, stopNudges: 0 })).toEqual({ file: "skill-search-reminder.md" });
@@ -235,8 +280,18 @@ test("Harness preToolUse blocks premature side effects and allows them after roo
   rmSync(copilotHome, { recursive: true, force: true });
 }, 10_000);
 
-test("stopDecision stops nudging once the per-turn cap is reached (no infinite loop)", () => {
-  expect(stopDecision({ brainUsed: false, skillUsed: true, stopNudges: STOP_CAP })).toEqual({ file: "" });
+test("stopDecision never permits submission while the mandatory workflow is incomplete", () => {
+  expect(stopDecision({
+    brainUsed: false,
+    brainSearched: false,
+    brainCreatedCount: 0,
+    brainAnsweredCount: 0,
+    rootSynthesized: false,
+    skillUsed: true,
+    stopNudges: STOP_CAP,
+    strict: true,
+    minimumBrainNodes: 3,
+  })).toEqual({ file: "turn-reminder.md" });
 });
 
 test("Harness defers turn completion only while its durable task is waiting", () => {
@@ -425,6 +480,7 @@ test("a host-native skill invocation satisfies the skill gate without creating a
     toolName: "cairn-brain_search",
     toolArgs: { query: "Harness reliability" },
   }).status).toBe(0);
+  completeBrainWorkflow(invoke, "native-skill");
 
   const stop = invoke("agent-stop", { sessionId: "native-skill" }).stdout.toString();
   expect(stop).toContain("completed every requested task");
@@ -435,7 +491,7 @@ test("a host-native skill invocation satisfies the skill gate without creating a
   expect(lifecycleState(dbPath, "copilot:native-skill").pendingReviewIds).toEqual([]);
 });
 
-test("a stale model tool manifest fails open until a Cairn tool is successfully observed", () => {
+test("a stale model tool manifest blocks submission until a Cairn tool succeeds", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-stale-manifest-${id}.db`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
@@ -450,7 +506,9 @@ test("a stale model tool manifest fails open until a Cairn tool is successfully 
 
   expect(invoke("user-prompt", { sessionId: "stale-manifest", prompt: "Finish the task." }).status).toBe(0);
   const ignored = invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString();
-  expect(ignored).toContain("run `/restart` once");
+  expect(ignored).toContain("recorded no successful host");
+  expect(ignored).not.toContain("run `/restart` once");
+  expect(telemetryKinds(dbPath)).not.toContain("visibility_failure");
   expect(invoke("post-tool", {
     sessionId: "stale-manifest",
     toolName: "cairn-brain_search",
@@ -458,8 +516,11 @@ test("a stale model tool manifest fails open until a Cairn tool is successfully 
     toolResult: { success: false, isError: true },
   }).status).toBe(0);
   const unavailable = invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString();
-  expect(unavailable).toContain("completed every requested task");
+  expect(unavailable).toContain("run `/restart` once");
   expect(unavailable).not.toContain("attempt the injected Cairn");
+  expect(telemetryKinds(dbPath)).toContain("visibility_failure");
+  expect(invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString())
+    .toContain("run `/restart` once");
 
   expect(invoke("user-prompt", { sessionId: "stale-manifest", prompt: "Try again." }).status).toBe(0);
   expect(invoke("post-tool", {
@@ -471,7 +532,7 @@ test("a stale model tool manifest fails open until a Cairn tool is successfully 
   expect(invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString()).toContain("skill_select");
 });
 
-test("an ignored healthy Cairn workflow gets one retry before failing open", () => {
+test("an ignored healthy Cairn workflow remains blocked until Cairn is used", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-ignored-workflow-${id}.db`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
@@ -486,10 +547,12 @@ test("an ignored healthy Cairn workflow gets one retry before failing open", () 
 
   expect(invoke("user-prompt", { sessionId: "ignored-workflow", prompt: "Finish the task." }).status).toBe(0);
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
-    .toContain("run `/restart` once");
+    .toContain("recorded no successful host");
+  expect(telemetryKinds(dbPath)).not.toContain("visibility_failure");
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
-    .toContain("completed every requested task");
-  expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString()).toBe("{}");
+    .toContain("recorded no successful host");
+  expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
+    .not.toBe("{}");
   rmSync(dbPath, { force: true });
 });
 
@@ -928,8 +991,8 @@ test("system reminder prompts preserve the turn and a genuine user prompt resets
     sessionId: "session-cap",
     prompt: "<system_reminder>continue required workflow</system_reminder>",
   }).stdout.toString()).toBe("{}");
-  expect(invoke("agent-stop").stdout.toString()).toContain("completed every requested task");
-  expect(invoke("agent-stop").stdout.toString()).toBe("{}");
+  expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
+  expect(invoke("agent-stop").stdout.toString()).not.toBe("{}");
 
   expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "second" }).status).toBe(0);
   expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
@@ -985,6 +1048,7 @@ test("a queued mid-turn human message does not reset completed skill search", ()
   expect(invoke("user-prompt", { sessionId: "session-queued", prompt: "inspect skills" }).status).toBe(0);
   expect(invoke("post-tool", { sessionId: "session-queued", toolName: "cairn-skill_select", toolArgs: { ids: ["skill-queued"] } }).status).toBe(0);
   expect(invoke("post-tool", { sessionId: "session-queued", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
+  completeBrainWorkflow(invoke, "session-queued");
   expect(invoke("post-tool", { sessionId: "session-queued", timestamp: 30, toolName: "cairn-skill_review", toolArgs: { id: "skill-queued" } }).status).toBe(0);
   expect(invoke("agent-stop", { sessionId: "session-queued", transcriptPath }).stdout.toString())
     .toContain("completed every requested task");
@@ -1147,6 +1211,7 @@ test("agentStop clears selected skill state after the visible deliverable", () =
     toolName: "cairn-brain_search",
     toolArgs: {},
   }).status).toBe(0);
+  completeBrainWorkflow(invoke, "fallback-session");
   const completion = invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString();
   expect(completion).toContain('"decision":"block"');
   expect(completion).toContain("completed every requested task");
@@ -1195,6 +1260,7 @@ test("removed review enqueue never touches the legacy inflight path", () => {
     toolName: "cairn-brain_search",
     toolArgs: {},
   }).status).toBe(0);
+  completeBrainWorkflow(invoke, "auto-failure");
   expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString())
     .toContain("completed every requested task");
   expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString()).toBe("{}");

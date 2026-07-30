@@ -17,6 +17,32 @@ function invoke(path: string, args: string[], payload: object, env: Record<strin
   });
 }
 
+function completeCopilotBrain(
+  post: (toolName: string, toolArgs: object, toolResult: unknown) => ReturnType<typeof spawnSync>,
+  prefix: string,
+): void {
+  const root = `${prefix}-root`;
+  const child = `${prefix}-child`;
+  const leaf = `${prefix}-leaf`;
+  for (const [id, edges] of [
+    [root, []],
+    [child, [root]],
+    [leaf, [child]],
+  ] as const) {
+    expect(post("cairn-brain_create", {
+      text: `How is ${id} resolved?`,
+      edges,
+    }, { success: true, id }).status).toBe(0);
+  }
+  for (const id of [leaf, child, root]) {
+    expect(post("cairn-brain_mutate", {
+      id,
+      answer: `Resolved ${id}.`,
+      citation: "https://example.com/evidence",
+    }, { success: true, id }).status).toBe(0);
+  }
+}
+
 test("Copilot hooks correlate returned brain nodes with later use and completion", () => {
   const dbPath = join(tmpdir(), `cairn-quality-copilot-${randomUUID()}.db`);
   const sessionId = `copilot-quality-${randomUUID()}`;
@@ -43,6 +69,7 @@ test("Copilot hooks correlate returned brain nodes with later use and completion
     content: [{ text: JSON.stringify([{ id: "node-a", text: "answer", score: 0.9 }]) }],
   }).status).toBe(0);
   expect(post("cairn-brain_mutate", { id: "node-a", answer: "done" }, { id: "node-a" }).status).toBe(0);
+  completeCopilotBrain(post, sessionId);
   expect(invoke(hook, ["agent-stop"], { sessionId }, env).status).toBe(0);
 
   const db = new Database(dbPath, { readonly: true });
@@ -75,14 +102,14 @@ test("Copilot can retain the completion continuation as an explicit baseline", (
     CAIRN_FORCE_COMPLETION_CONTINUATION: "1",
   };
   invoke(hook, ["user-prompt"], { sessionId, prompt: "Fix it." }, env);
-  invoke(hook, ["post-tool"], {
-    sessionId, toolCallId: "skill", toolName: "cairn-skill_select",
-    toolArgs: { ids: ["software"] }, toolResult: { ok: true },
-  }, env);
-  invoke(hook, ["post-tool"], {
-    sessionId, toolCallId: "brain", toolName: "cairn-brain_search",
-    toolArgs: { query: "fix" }, toolResult: [],
-  }, env);
+  let toolCall = 0;
+  const post = (toolName: string, toolArgs: object, toolResult: unknown) =>
+    invoke(hook, ["post-tool"], {
+      sessionId, toolCallId: `call-${++toolCall}`, toolName, toolArgs, toolResult,
+    }, env);
+  post("cairn-skill_select", { ids: ["software"] }, { ok: true });
+  post("cairn-brain_search", { query: "fix" }, { success: true, content: [] });
+  completeCopilotBrain(post, sessionId);
   const blocked = invoke(hook, ["agent-stop"], { sessionId }, env);
   expect(JSON.parse(blocked.stdout.toString())).toMatchObject({ decision: "block" });
   invoke(hook, ["agent-stop"], { sessionId }, env);

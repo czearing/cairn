@@ -68,7 +68,7 @@ const COMPLETION_REMINDER = "Ensure you completed every requested task.";
 const SKILL_APPLICATION_REMINDER =
   "End with one compact **Cairn** receipt: `Root — synthesis (URL)`; `Coverage — validation and why nothing remains`; `Recall — improvement`; `Skill application — step N: action/result` for every selected or invoked skill; `Skill update — exact skill_edit change and why`, or `none — steps remained accurate and complete`. Report observable evidence, not hidden reasoning.";
 const CAIRN_VISIBILITY_REMINDER =
-  "Cairn's required brain and skill tools were not visible in this session. The CLI may have cached an earlier MCP startup failure. Do not retry unavailable tools or block the user's task; finish it, clearly report the Cairn quality outage, and tell the user to run `/restart` once to reload MCP tools.";
+  "Cairn's required brain and skill tools failed in this session. The CLI may have cached an earlier MCP startup failure. Final submission remains blocked: tell the user to run `/restart` once, then complete the required Cairn skill and Brain workflow.";
 
 // Read stdin but NEVER block the host indefinitely. `Bun.stdin.text()` only resolves on EOF, so if the
 // CLI invokes a hook without closing its stdin (observed on some Copilot/Claude CLI versions, and for
@@ -129,8 +129,8 @@ export function postToolFiles(toolName: string, answer: string): string[] {
   return postToolPromptFiles(toolName, answer);
 }
 
-// Whether agentStop should force another turn, and with which prompt. Bounded to STOP_CAP nudges per
-// turn so a stubborn agent can never be looped forever (Copilot sends no stop_hook_active flag).
+// Whether agentStop should force another turn, and with which prompt. Final submission stays blocked
+// until the mandatory Cairn workflow succeeds; ordinary tools remain available for recovery.
 export const STOP_CAP = 2;
 export interface WorkflowEvidence {
   brainUsed: boolean;
@@ -149,11 +149,9 @@ export interface WorkflowEvidence {
 export function stopDecision(s: WorkflowEvidence): {
   file: string;
 } {
-  if ((s.pendingSkillCorrections ?? 0) > 0
-    && (s.skillCorrectionNudges ?? 0) < STOP_CAP) {
+  if ((s.pendingSkillCorrections ?? 0) > 0) {
     return { file: "skill-correction-reminder.md" };
   }
-  if (s.stopNudges >= STOP_CAP) return { file: "" };
   if (!s.skillUsed) return { file: "skill-search-reminder.md" };
   if (s.strict && (
     !s.brainSearched
@@ -401,7 +399,16 @@ export async function runCopilotHook(): Promise<void> {
     const stateId = turnScope(sessionId);
     const delegatedIds = claimDelegation(sessionId, stateId);
     if (delegatedIds.length) {
-      const state = resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
+      const delegatedNode = `delegated:${sessionId}`;
+      const state = resetLifecycle(stateId, {
+        brainUsed: true,
+        brainSearched: true,
+        brainCreatedIds: [delegatedNode, `${delegatedNode}:1`, `${delegatedNode}:2`],
+        brainAnsweredIds: [delegatedNode, `${delegatedNode}:1`, `${delegatedNode}:2`],
+        rootNodeId: delegatedNode,
+        rootSynthesized: true,
+        skillUsed: true,
+      });
       beginTelemetryRun({
         host: "copilot", sessionId, turnSeq: state.turnSeq, promptHash: "",
         catalogVersion: catalogVersion(), injectedChars: 0, model,
@@ -606,22 +613,26 @@ export async function runCopilotHook(): Promise<void> {
     }
     const stateId = turnScope(sessionId);
     const st = readLifecycle(stateId);
-    const enforceWorkflow = process.env.CAIRN_ENFORCE_STOP_GATES === "1" || st.cairnToolObserved;
-    if (!enforceWorkflow && !st.cairnToolAttempted && !st.cairnVisibilityNudged) {
-      updateLifecycle(stateId, () => ({
-        ...st,
-        cairnVisibilityNudged: true,
-        stopBlocked: true,
-      }));
-      recordTelemetryState({
-        host: "copilot", sessionId, turnSeq: st.turnSeq,
-        eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:visibility`,
-        kind: "visibility_failure",
+    if (!st.cairnToolObserved && st.cairnToolAttempted) {
+      if (!st.cairnVisibilityNudged) {
+        updateLifecycle(stateId, () => ({
+          ...st,
+          cairnVisibilityNudged: true,
+          stopBlocked: true,
+        }));
+        recordTelemetryState({
+          host: "copilot", sessionId, turnSeq: st.turnSeq,
+          eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:visibility`,
+          kind: "visibility_failure",
+        });
+      }
+      emit({
+        decision: "block",
+        reason: internalContext(CAIRN_VISIBILITY_REMINDER),
       });
-      emit({ decision: "block", reason: internalContext(CAIRN_VISIBILITY_REMINDER) });
       return;
     }
-    const file = enforceWorkflow ? stopDecision({
+    const file = stopDecision({
       brainUsed: st.brainUsed,
       brainSearched: st.brainSearched,
       brainCreatedCount: st.brainCreatedIds.length,
@@ -629,11 +640,11 @@ export async function runCopilotHook(): Promise<void> {
       rootSynthesized: st.rootSynthesized,
       skillUsed: st.skillUsed,
       stopNudges: st.stopNudges,
-      strict: process.env.AGENT_HARNESS === "1",
+      strict: true,
       minimumBrainNodes: Number(process.env.CAIRN_MIN_BRAIN_NODES || "3"),
       pendingSkillCorrections: st.invalidatedSkillIds.length,
       skillCorrectionNudges: st.skillCorrectionNudges,
-    }).file : "";
+    }).file;
     const text = file ? internalContext(await promptText(file)) : "";
     if (text) {
       const skillCorrection = file === "skill-correction-reminder.md";

@@ -9,7 +9,7 @@ import { config } from "./config";
 // the slack is real money. This rewrites the file compactly. It changes NO row data — it is purely a
 // space reclaim — and writes a timestamped backup first.
 
-export interface CompactResult {
+interface CompactResult {
   path: string;
   backupPath: string | null;
   beforeBytes: number;

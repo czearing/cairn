@@ -62,7 +62,7 @@ export type EngineRequest =
       payload: { a: string; b: string };
     };
 
-export type EngineResult =
+type EngineResult =
   | ScoredResult[]
   | { neuron: Neuron; nearDuplicates: DuplicateCandidate[] }
   | Neuron

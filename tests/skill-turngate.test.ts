@@ -120,7 +120,7 @@ test("action tools are the ones that act; searches and reads are not", () => {
   expect(isActionTool("mcp__cairn__skill_select")).toBe(false);
   expect(isSkillSelection("mcp__cairn__skill_select")).toBe(true);
   expect(isSkillSelection("skill_create")).toBe(true);
-  expect(isSkillSelection("skill_search")).toBe(true); // legacy compatibility
+  expect(isSkillSelection("skill_search")).toBe(false); // removed legacy tool
   expect(isSkillSelection("Skill")).toBe(true); // host-native skill loader
   expect(isSkillSelection("brain_search")).toBe(false);
   expect(isCairnTool("mcp__cairn__brain_search")).toBe(true);

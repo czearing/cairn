@@ -175,12 +175,6 @@ async function waitForServer(text: string): Promise<number[] | null> {
   return null;
 }
 
-export function warmEmbedServer(): void {
-  if (config.embed.provider === "local" && process.env.CAIRN_EMBED_NO_SERVER !== "1" && !config.dbPath.startsWith(tmpdir())) {
-    ensureServer();
-  }
-}
-
 // Public embed: prefer the warm sidecar (one shared model load across one-shot hook processes), else embed
 // in-process and start the sidecar for next time. Skipped for the API provider (no local model to warm) and
 // whenever CAIRN_EMBED_NO_SERVER=1 (the sidecar itself, and the test run).

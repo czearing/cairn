@@ -1,6 +1,6 @@
 import { visibleSkill } from "../skill/store";
 
-export interface SkillReceiptEvidence {
+interface SkillReceiptEvidence {
   present: boolean;
   complete: boolean;
   duplicate: boolean;

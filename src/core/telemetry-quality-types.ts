@@ -9,7 +9,7 @@ export interface QualityMetrics {
   averageStopNudges: number;
 }
 
-export interface ReleaseComparison {
+interface ReleaseComparison {
   host: string;
   model: string;
   workload: QualityMetrics["workload"];

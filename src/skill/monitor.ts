@@ -87,7 +87,7 @@ export function ensureMonitor(now: number): boolean {
 }
 
 /** The header shown once at the top of the monitor: what this window is, that it is live, how to read it. */
-export function monitorHeader(): string {
+function monitorHeader(): string {
   return [
     c.bold(c.cyan("✶ cairn skills")) + c.dim("  the background learner, in plain sight"),
     "  " + c.green("● online") + c.dim(", listening for background runs — leave this open (Ctrl-C to close)"),

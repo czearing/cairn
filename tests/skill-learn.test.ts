@@ -15,7 +15,6 @@ import {
   failReviewJob,
   heartbeatReviewJob,
   heartbeatReviewSupervisor,
-  latestCopilotReview,
   listReviewJobs,
   releaseReviewSupervisor,
   reviewSupervisorActive,
@@ -108,23 +107,6 @@ test("a recovered worker cannot overwrite the active retry", () => {
   expect(failReviewJob("fenced", "late failure", 1)).toBe("running");
   expect(listReviewJobs()[0]).toEqual(expect.objectContaining({ status: "running", attempts: 2, error: "" }));
   expect(completeReviewJob("fenced", 2)).toBe(true);
-});
-
-test("a failed skill_review call is not accepted from the transcript", () => {
-  const transcriptPath = join(tmpdir(), `cairn-failed-review-${randomUUID()}.jsonl`);
-  writeFileSync(transcriptPath, [
-    JSON.stringify({
-      type: "tool.execution_start",
-      timestamp: 10,
-      data: { toolCallId: "failed-review", toolName: "cairn-skill_review", arguments: { id: "skill-failed" } },
-    }),
-    JSON.stringify({
-      type: "tool.execution_complete",
-      timestamp: 11,
-      data: { toolCallId: "failed-review", success: false },
-    }),
-  ].join("\n"));
-  expect(latestCopilotReview(transcriptPath, "session-failed")).toBeNull();
 });
 
 test("only one warm review supervisor owns the queue lease", () => {

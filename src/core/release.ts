@@ -41,7 +41,7 @@ export const releaseFingerprint = (
   `${version}\0${promptHash}\0${catalogVersion}`,
 );
 
-export type TelemetryRunClass = "human" | "benchmark" | "worker";
+type TelemetryRunClass = "human" | "benchmark" | "worker";
 
 export const telemetryRunClass = (): TelemetryRunClass => {
   if (process.env.CAIRN_PROMPT_BENCHMARK_SESSION) return "benchmark";

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { skillCatalogDetails, visibleSkill, type SkillCatalogEntry } from "./store";
 
-export interface SkillCatalogSnapshot {
+interface SkillCatalogSnapshot {
   version: string;
   catalog: SkillCatalogEntry[];
 }

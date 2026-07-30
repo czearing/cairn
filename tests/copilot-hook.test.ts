@@ -843,7 +843,7 @@ test("skill_select preserves selected ids for delegation and ignores removed rev
   expect(state.pendingReviews).toHaveLength(0);
 });
 
-test("legacy search without an exact loaded skill creates no review obligation", () => {
+test("a removed legacy skill tool creates no review obligation", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-legacy-reminder-${id}.db`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");

@@ -14,7 +14,7 @@ const PRESETS: Record<string, { baseUrl: string; keyEnv?: string; defaultKey?: s
   openai: { baseUrl: "https://api.openai.com/v1", keyEnv: "OPENAI_API_KEY" },
 };
 
-export function listUpstreams(): string[] {
+function listUpstreams(): string[] {
   return Object.keys(PRESETS);
 }
 

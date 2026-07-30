@@ -97,7 +97,7 @@ const INSERT_IGNORE = `INSERT OR IGNORE INTO neurons (${COLS}) VALUES (?, ?, ?, 
 const FULL_EVERY = Math.max(0, Number(process.env.CAIRN_SYNC_FULL_EVERY || "30"));
 const CHUNK = 400;
 
-export type SyncDecision = "skip" | "fast" | "full";
+type SyncDecision = "skip" | "fast" | "full";
 export interface SyncInputs {
   tick: number;               // 1-based pass counter for this process
   fullEvery: number;

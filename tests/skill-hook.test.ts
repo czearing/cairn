@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { extractRun } from "../src/skill/transcript";
-import { skillsEnabled, skillCreate, skillInject, skillLearn, skillLoad, skillSearch, skillSelect, skillsExist } from "../src/skill/hook";
+import { skillsEnabled, skillCreate, skillLearn, skillLoad, skillSelect, skillsExist } from "../src/skill/hook";
 import { categorize, reindexSkill } from "../src/skill/match";
-import { setMasterPrompt, setSkillMetadata } from "../src/skill/store";
+import { setMasterPrompt, setSkillMetadata, skillCatalog } from "../src/skill/store";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -201,54 +201,7 @@ test("the skill layer is ON by default, and CAIRN_SKILLS env overrides both ways
   if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
 });
 
-test("skill injection debug records catalog routing without semantic matching", async () => {
-  const { skill } = await categorize("commit message", 1);
-  setMasterPrompt(skill.id, "1. imperative subject under 50 chars");
-  setSkillMetadata(skill.id, "commit message", "Use for writing concise commit messages that explain a reusable code change clearly.");
-  const dbg = join(tmpdir(), `cairn-inj-${randomUUID()}.txt`);
-  const prevFile = process.env.CAIRN_SKILL_DEBUG_FILE;
-  process.env.CAIRN_SKILL_DEBUG_FILE = dbg;
-  try {
-    const out = await skillInject("qwerty zxcvbn asdf plugh");
-    expect(out).toBe("");
-    const logged = readFileSync(dbg, "utf8");
-    expect(logged).toContain("catalog routing: 1 learned skill(s)");
-    expect(logged).toContain("semantic routing disabled");
-  } finally {
-    if (prevFile === undefined) delete process.env.CAIRN_SKILL_DEBUG_FILE; else process.env.CAIRN_SKILL_DEBUG_FILE = prevFile;
-    try { rmSync(dbg); } catch { /* ignore */ }
-  }
-});
-
-test("skillInject does not auto-inject a master and can disable its catalog diagnostic", async () => {
-  const master = "1. imperative subject under 50 chars\n2. explain what changed and why";
-  const { skill } = await categorize("commit message", 1);
-  setMasterPrompt(skill.id, master);
-  setSkillMetadata(skill.id, "commit message", "Use for writing concise commit messages that explain a reusable code change clearly.");
-  await reindexSkill(skill.id, "commit message", master);
-  const dbg = join(tmpdir(), `cairn-inj-${randomUUID()}.txt`);
-  const prevDebug = process.env.CAIRN_SKILL_DEBUG, prevFile = process.env.CAIRN_SKILL_DEBUG_FILE;
-  delete process.env.CAIRN_SKILL_DEBUG;                           // default: no env var set at all
-  process.env.CAIRN_SKILL_DEBUG_FILE = dbg;
-  try {
-    const out = await skillInject("how to write a good commit message");
-    expect(out).toBe("");                                          // nothing is auto-injected into the agent now
-    const logged = readFileSync(dbg, "utf8");
-    expect(logged).toContain("catalog routing: 1 learned skill(s)");
-    expect(logged).toContain("semantic routing disabled");
-
-    rmSync(dbg);
-    process.env.CAIRN_SKILL_DEBUG = "0";                          // explicit opt-out: nothing written
-    await skillInject("how to write a good commit message");
-    expect(existsSync(dbg)).toBe(false);
-  } finally {
-    if (prevDebug === undefined) delete process.env.CAIRN_SKILL_DEBUG; else process.env.CAIRN_SKILL_DEBUG = prevDebug;
-    if (prevFile === undefined) delete process.env.CAIRN_SKILL_DEBUG_FILE; else process.env.CAIRN_SKILL_DEBUG_FILE = prevFile;
-    try { rmSync(dbg); } catch { /* ignore */ }
-  }
-});
-
-test("skill_search returns the same compact catalog for every query and skill_load fetches one exact master", async () => {
+test("the catalog exposes only title and description, and skill_load fetches one exact master", async () => {
   const writer = await categorize("short story", 1); setMasterPrompt(writer.skill.id, "1. write a two-paragraph story");
   setSkillMetadata(writer.skill.id, "short story", "Use for writing two-paragraph stories and compact fictional scenes with a complete dramatic arc.");
   await reindexSkill(writer.skill.id, "short story", "1. write a two-paragraph story about a domain");
@@ -256,39 +209,33 @@ test("skill_search returns the same compact catalog for every query and skill_lo
   setSkillMetadata(reviewer.skill.id, "short story review", "Use for reviewing short story drafts and fictional scenes to identify concrete revision priorities.");
   await reindexSkill(reviewer.skill.id, "short story review", "1. score the story and name its weakest tells");
   const prev = process.env.CAIRN_SKILLS; process.env.CAIRN_SKILLS = "1";
-  const writing = skillSearch("write a short story about a lighthouse");
-  const reviewing = skillSearch("review this story");
+  const catalog = skillCatalog();
   if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
-  expect(writing.catalog).toEqual(reviewing.catalog);
-  expect(writing).not.toHaveProperty("catalogVersion");
-  expect(reviewing).not.toHaveProperty("catalogVersion");
-  expect(writing.catalog.map((entry) => entry.title)).toEqual(["short story", "short story review"]);
-  expect(writing.catalog[0]!.description).toContain("two-paragraph stories");
+  expect(catalog.map((entry) => entry.title)).toEqual(["short story", "short story review"]);
+  expect(catalog[0]!.description).toContain("two-paragraph stories");
+  expect(catalog[0]).not.toHaveProperty("masterPrompt");
+  expect(catalog[0]).not.toHaveProperty("alias");
   expect(skillLoad(writer.skill.id)?.steps).toContain("two-paragraph story");
   expect(skillLoad(reviewer.skill.id)?.steps).toContain("score the story");
-  expect(skillSearch(`load:${writer.skill.id}`).loaded?.steps).toContain("two-paragraph story");
-  expect(skillSearch("short story").matches?.[0]?.steps).toContain("two-paragraph story");
 });
 
-test("hidden retired skills cannot be loaded by exact legacy id", async () => {
+test("hidden retired skills cannot be loaded by exact id", async () => {
   const retired = await categorize("retired test skill", 1);
   setMasterPrompt(retired.skill.id, "1. old test workflow");
   setSkillMetadata(retired.skill.id, "retired test skill", "");
   expect(skillLoad(retired.skill.id)).toBeNull();
-  expect(skillSearch(`load:${retired.skill.id}`).loaded).toBeNull();
+  expect(skillSelect([retired.skill.id]).selected).toEqual([]);
 });
 
 test("skill_select accepts exact catalog titles without exposing catalog metadata", async () => {
   const created = await categorize("cli troubleshooting", 1);
   setMasterPrompt(created.skill.id, "1. reproduce the CLI failure\n2. fix the earliest broken boundary");
   setSkillMetadata(created.skill.id, "cli troubleshooting", "Use for debugging CLI errors and local integration boundaries from exact evidence.");
-  const injected = skillSearch("cli troubleshooting");
 
   expect(skillSelect(["cli troubleshooting"]).selected[0]?.id).toBe(created.skill.id);
   expect(skillSelect([created.skill.id]).selected[0]?.id).toBe(created.skill.id);
   expect(skillSelect(["none"])).toEqual({ selected: [], noMatch: true });
-  expect(injected).not.toHaveProperty("catalogVersion");
-  expect(injected.catalog[0]).not.toHaveProperty("alias");
+  expect(skillSelect(["cli troubleshooting"])).not.toHaveProperty("catalogVersion");
 
   setMasterPrompt(created.skill.id, "1. reproduce\n2. trace\n3. verify");
   expect(skillSelect(["cli troubleshooting"]).selected[0]?.steps).toContain("trace");

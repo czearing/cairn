@@ -184,7 +184,7 @@ export interface SkillCatalogEntry {
   description: string;
 }
 
-export interface SkillCatalogDetail extends SkillCatalogEntry {
+interface SkillCatalogDetail extends SkillCatalogEntry {
   masterPrompt: string;
 }
 

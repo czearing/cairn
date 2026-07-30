@@ -1,11 +1,11 @@
 /** A single Claude Code hook command. */
-export interface HookEntry {
+interface HookEntry {
   type: "command";
   command: string;
 }
 
 /** A group of hooks, optionally gated by a tool-name matcher. */
-export interface HookGroup {
+interface HookGroup {
   matcher?: string;
   hooks: HookEntry[];
 }

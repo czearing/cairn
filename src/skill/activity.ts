@@ -14,7 +14,7 @@ export type Phase = "start" | "learned" | "skipped" | "failed";
 /** One background-learning event. `start` opens a run, then exactly one of: `learned` (a skill was graded
  *  and its master rewritten), `skipped` (the turn was genuinely not a reusable task), or `failed` (the
  *  learner CLI call errored, distinct from a deliberate skip) closes it. */
-export interface Activity {
+interface Activity {
   ts: number;
   phase: Phase;
   request?: string;

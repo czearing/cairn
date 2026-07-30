@@ -1,12 +1,12 @@
 import { telemetryDatabase } from "./telemetry-schema";
 
-export interface ToolSchemaMetric {
+interface ToolSchemaMetric {
   toolName: string;
   chars: number;
   estimatedTokens: number;
 }
 
-export interface SearchStageMetric {
+interface SearchStageMetric {
   stage: string;
   events: number;
   totalDurationMs: number;
@@ -14,7 +14,7 @@ export interface SearchStageMetric {
   maximumDurationMs: number;
 }
 
-export interface EngineTransportMetric {
+interface EngineTransportMetric {
   source: string;
   operation: string;
   calls: number;

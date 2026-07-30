@@ -1,7 +1,7 @@
 import type { EngineSummary } from "./telemetry-engine-summary";
 import type { QualitySummary } from "./telemetry-quality-types";
 
-export interface QualityVerdict {
+interface QualityVerdict {
   status: "healthy" | "degraded" | "outage" | "insufficient_data";
   releaseCoherent: boolean;
   issues: string[];

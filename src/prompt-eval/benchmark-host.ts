@@ -6,7 +6,7 @@ import { runCopilot } from "../skill/copilot";
 import type { Assertion } from "./assertions";
 import type { PromptHost } from "./types";
 
-export interface BenchmarkCase {
+interface BenchmarkCase {
   id: string;
   task: string;
   assertions: Assertion[];

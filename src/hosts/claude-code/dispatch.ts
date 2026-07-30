@@ -18,7 +18,7 @@ process.env.CAIRN_READONLY = "1";
 
 const isBrainCreate = (t: string) => t === "brain_create" || t.endsWith("__brain_create");
 
-// Fired once per turn (PreToolUse) if the agent reaches for an action tool without having called skill_search.
+// Fired once per turn (PreToolUse) if the agent reaches for an action tool without having selected a skill.
 const SKILL_REMINDER =
   "Before acting, read the injected catalog and call skill_select with every skill id you will use, or skill_create with a broad description and initial numbered plan. You will not be reminded again this turn.";
 const COMPLETION_REMINDER =
@@ -114,7 +114,7 @@ async function main(): Promise<void> {
   // Subagent prompt injection. A subagent does NOT inherit the cairn prompt (SessionStart does not fire for
   // subagents, tested 2026-06-29). The ONE channel that reaches a subagent's own context is its Task prompt, so
   // when the parent spawns a Task we rewrite the prompt (PreToolUse updatedInput) to prepend the cairn protocol,
-  // giving every subagent the skill_search + brain behavior. The orchestrate.md reminder still rides
+  // giving every subagent the skill_select + brain behavior. The orchestrate.md reminder still rides
   // back to the parent as additionalContext. Best-effort: on any failure, fall through to normal handling.
   if (event.kind === "tool_pending" && (event.tool === "Task" || event.tool === "Agent")) {
     try {
@@ -207,25 +207,22 @@ async function main(): Promise<void> {
   } catch { /* quality telemetry never blocks the host */ }
 
   // Skill layer, ON by default (turn off with "skills": false in ~/.cairn/config.json or CAIRN_SKILLS=0). The
-  // agent retrieves skills ITSELF via the skill_search tool (taught in the base prompt) rather than via a
-  // cosine auto-injection that mispicks near-duplicates. We enforce that with one per-turn reminder: record
-  // when the agent calls skill_search, and remind ONCE if it reaches for an action tool first. The latch is
+  // agent selects skills ITSELF from the injected catalog via skill_select rather than via a cosine
+  // auto-injection that mispicks near-duplicates. We enforce that with one per-turn reminder: record
+  // when the agent selects, and remind ONCE if it reaches for an action tool first. The latch is
   // cleared at BOTH turn boundaries — the user_message that starts a normal turn AND the turn_finished that
   // ends any turn — so the next turn starts clean even when it is a resume after compaction, which fires no
   // user_message (that gap left a stale searched=true latch and silently suppressed the reminder all session).
   // On turn end, clear the turn state after all reminders have been satisfied.
   if ((await import("../../core/config")).skillsEnabled()) {
     try {
-      const { skillInject, skillsExist } = await import("../../skill/hook");
+      const { skillsExist } = await import("../../skill/hook");
       const {
         noteCairnToolObserved, noteFailedSkillExecution, noteSkillCorrectionNudge,
         noteSkillEdit, noteSkillSelection, skillTurnState, claimSkillReminder,
         isActionTool, isCairnTool, isSkillEdit, isSkillSelection,
       } = await import("../../skill/turngate");
-      if (event.kind === "user_message") {
-        await skillInject(event.text, session);
-      }
-      else if (event.kind === "tool_completed") {
+      if (event.kind === "tool_completed") {
         const succeeded = (await import("../../core/telemetry")).telemetryResultSucceeded(event.output);
         if (isCairnTool(event.tool)) noteCairnToolObserved(session);
         if (isSkillSelection(event.tool)) {

@@ -3,12 +3,12 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "../core/config";
 
-export interface ReviewDeclaration {
+interface ReviewDeclaration {
   skillId: string;
   eventId: string;
 }
 
-export interface LifecycleState {
+interface LifecycleState {
   turnSeq: number;
   brainUsed: boolean;
   brainSearched: boolean;
@@ -309,7 +309,7 @@ export function claimDelegation(toolCallId: string, childScope: string): string[
   }
 }
 
-export function clearLifecycleForTests(): void {
+function clearLifecycleForTests(): void {
   const d = database();
   d.run("DELETE FROM lifecycle_turns");
   d.run("DELETE FROM lifecycle_delegations");

@@ -8,7 +8,7 @@ export type Assertion =
   | { type: "jsonEquals"; path: string; expected: unknown }
   | { type: "commandExit"; argv: string[]; expected?: number };
 
-export interface AssertionResult {
+interface AssertionResult {
   assertionSet: string;
   passed: number;
   total: number;

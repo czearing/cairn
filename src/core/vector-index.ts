@@ -8,7 +8,7 @@ interface VecRow {
   distance: number;
 }
 
-export interface IndexedScore {
+interface IndexedScore {
   id: string;
   score: number;
 }

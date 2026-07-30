@@ -22,7 +22,7 @@ import type { ClaudeOpts, ClaudeResult } from "./types";
 // silently truncates the flags that come after it (the MCP config, tool allowlist), breaking the run. The
 // shim just does `node …/npm-loader.js %*`, so we spawn that Node loader directly (Bun → CreateProcess, ~32k
 // limit). CAIRN_COPILOT_BIN overrides everything (tests / non-standard installs). Falls back to the shim.
-export function copilotInvocation(): string[] {
+function copilotInvocation(): string[] {
   if (process.env.CAIRN_COPILOT_BIN) return [process.env.CAIRN_COPILOT_BIN];
   const resolved = Bun.which("copilot");
   if (resolved && /\.(cmd|ps1)$/i.test(resolved)) {

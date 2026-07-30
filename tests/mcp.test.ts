@@ -44,7 +44,7 @@ const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.t
 
 test("exposes only the agent-owned brain and skill tools", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_edit", "skill_search", "skill_select"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "skill_create", "skill_edit", "skill_select"]);
 });
 
 test("tool results expose content-free MCP runtime identity", async () => {
@@ -104,7 +104,7 @@ test("MCP calls record local size and latency telemetry", async () => {
   expect(event.version).toBe(releaseVersion);
   expect(event.run_class).toBe("human");
   expect(columns.map((column) => column.name)).not.toContain("content");
-  expect(schemas.tools).toBe(8);
+  expect(schemas.tools).toBe(7);
   expect(schemas.chars).toBeGreaterThan(0);
   expect(schemas.tokens).toBeGreaterThan(0);
 });
@@ -304,7 +304,6 @@ test("skill_edit rewrites a skill's master directly (agent-driven fix, no grader
   expect(ok).toMatchObject({ ok: true, id: created.id, task: "flash edit" });
   const bad = await call("skill_edit", { id: "no-such-id", master: "1. x" });
   expect(bad.isError).toBe(true); // unknown id rejected
-  const catalog = parse(await call("skill_search", { task: "flash edit" }));
   const selected = parse(await call("skill_select", { ids: ["flash edit"] }));
   expect(selected).toEqual({
     selected: [{ id: created.id, steps: expect.stringContaining("do the thing better") }],

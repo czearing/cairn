@@ -28,7 +28,7 @@ const bunExe = () => Bun.which("bun") ?? "bun";
 
 export const copilotMcpPath = () =>
   process.env.CAIRN_COPILOT_MCP_PATH || join(homedir(), ".copilot", "mcp-config.json");
-export const copilotHookPath = () =>
+const copilotHookPath = () =>
   process.env.CAIRN_COPILOT_HOOK_PATH || join(homedir(), ".copilot", "hooks", "cairn.json");
 
 // Only touch ~/.copilot when the user actually uses Copilot CLI: it's on PATH, a config dir already

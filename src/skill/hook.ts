@@ -1,6 +1,3 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { writeFileSync, mkdirSync } from "node:fs";
 import { skillsEnabled } from "../core/config";
 import { learnFromTranscript } from "./learn";
 import { getSkill, skillCatalog, visibleSkill } from "./store";
@@ -11,50 +8,6 @@ import { skillCatalogSnapshot } from "./catalog";
 // best-effort and never throw, and do no work when disabled or when the skill store is empty.
 
 export { skillsEnabled };
-
-// Debug aid: every turn, dump exactly what was injected (the raw text plus each matched skill and its score)
-// to a file so you can inspect it after talking to Claude. ON by default (it is one tiny best-effort write
-// per user turn); set CAIRN_SKILL_DEBUG=0 to turn it off. Override the path with CAIRN_SKILL_DEBUG_FILE.
-const debugFile = (): string => process.env.CAIRN_SKILL_DEBUG_FILE || join(homedir(), ".cairn", "last-injection.txt");
-function writeInjectionDebug(text: string, count: number): void {
-  if (process.env.CAIRN_SKILL_DEBUG === "0") return;
-  try {
-    const path = debugFile();
-    mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(path, `catalog routing: ${count} learned skill(s)\n\n----- raw injected prompt -----\n${text || "(empty)"}\n`);
-  } catch { /* best-effort */ }
-}
-
-// No semantic routing runs on user messages. Record only that explicit catalog selection is active.
-export async function skillInject(text: string, _sessionId?: string): Promise<string> {
-  if (!skillsEnabled() || !text.trim()) return "";
-  try { writeInjectionDebug("(semantic routing disabled; agent selects from skill_search catalog)", skillCatalog().length); }
-  catch { /* best-effort */ }
-  return "";
-}
-
-// Agent-facing routing is deliberately non-semantic. Return the same compact title/description catalog.
-export function skillSearch(query: string): {
-  task: string;
-  catalog: ReturnType<typeof skillCatalog>;
-  loaded?: ReturnType<typeof skillLoad>;
-  matches?: { id: string; task: string; steps: string }[];
-} {
-  const task = query.trim();
-  if (!skillsEnabled() || !task) return { task, catalog: [] };
-  const snapshot = skillCatalogSnapshot();
-  const loadId = task.match(/^load:([0-9a-f-]+)$/i)?.[1];
-  if (loadId) return { task, catalog: [], loaded: skillLoad(loadId) };
-  try {
-    const catalog = snapshot.catalog;
-    const exact = snapshot.catalog.find((skill) => skill.title.toLowerCase() === task.toLowerCase());
-    const loaded = exact ? skillLoad(exact.id) : null;
-    return loaded
-      ? { task, catalog, loaded, matches: [{ id: loaded.id, task: loaded.title, steps: loaded.steps }] }
-      : { task, catalog };
-  }
-  catch { return { task, catalog: [] }; }
-}
 
 export function skillLoad(id: string): { id: string; title: string; description: string; steps: string } | null {
   if (!skillsEnabled() || !id.trim()) return null;
@@ -158,7 +111,7 @@ export function skillsExist(): boolean {
 }
 
 // Fire the background learner over a finished turn's transcript, for the skill the agent DECLARED via
-// skill_review. `skillId` is the id of that skill (from skill_search or skill_create). Returns whether it fired.
+// skill_review. `skillId` is the id of that skill (from skill_select or skill_create). Returns whether it fired.
 export function skillLearn(
   transcriptPath: string | undefined,
   skillId: string,

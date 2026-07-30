@@ -28,8 +28,6 @@ export function noteSkillSelection(session: string, tool: string, input: Record<
     }
   } else if (baseName(tool) === "skill_create") {
     ids = [skillResultId(output) || "__created__"];
-  } else if (baseName(tool) === "skill_search") {
-    ids = ["__legacy__"];
   }
   updateLifecycle(scope(session), (state) => ({
     ...state,
@@ -85,19 +83,8 @@ export function noteSkillReviewed(session: string, id: string): void {
   updateLifecycle(scope(session), (state) => ({
     ...state,
     pendingReviewIds: state.pendingReviewIds.filter((pendingId) =>
-      pendingId !== id && pendingId !== "__created__" && pendingId !== "__legacy__"
+      pendingId !== id && pendingId !== "__created__"
     ),
-  }));
-}
-
-export function noteLegacySkillReview(session: string, id: string): void {
-  updateLifecycle(scope(session), (state) => ({
-    ...state,
-    skillUsed: true,
-    pendingReviewIds: [...new Set([
-      ...state.pendingReviewIds.filter((pendingId) => pendingId !== "__created__" && pendingId !== "__legacy__"),
-      id,
-    ])],
   }));
 }
 
@@ -121,9 +108,8 @@ const ACTION_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "Bas
 const baseName = (tool: string) => (tool.includes("__") ? tool.slice(tool.lastIndexOf("__") + 2) : tool);
 export function isActionTool(tool: string): boolean { return ACTION_TOOLS.has(baseName(tool)); }
 export function isSkillSelection(tool: string): boolean {
-  return ["skill", "skill_select", "skill_create", "skill_search"].includes(baseName(tool).toLowerCase());
+  return ["skill", "skill_select", "skill_create"].includes(baseName(tool).toLowerCase());
 }
-export function isSkillReview(tool: string): boolean { return baseName(tool) === "skill_review"; }
 export function isSkillEdit(tool: string): boolean { return baseName(tool) === "skill_edit"; }
 export function isCairnTool(tool: string): boolean {
   const name = baseName(tool).toLowerCase();

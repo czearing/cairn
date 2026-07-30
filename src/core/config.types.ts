@@ -2,7 +2,7 @@
 export type EmbedProvider = "local" | "openai";
 
 /** Embedding configuration, sourced from the `CAIRN_EMBED_*` environment variables. */
-export interface EmbedConfig {
+interface EmbedConfig {
   /** `local` runs a model in-process; `openai` calls an HTTP embeddings API. */
   provider: EmbedProvider;
   /** Model id. Blank falls back to the provider's default. */
@@ -17,7 +17,7 @@ export interface EmbedConfig {
  * and `token` are both set, the brain runs as a libSQL embedded replica: a local file for fast reads
  * plus write-through to a Turso cloud primary, so the same brain syncs across devices. Blank `url`
  * keeps the default local-only `bun:sqlite` brain. */
-export interface LibsqlConfig {
+interface LibsqlConfig {
   /** `libsql://…` URL of the Turso primary. Blank disables cloud sync. */
   url: string;
   /** Auth token for the primary. */

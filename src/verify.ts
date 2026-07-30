@@ -7,7 +7,7 @@ import { join } from "node:path";
 // so it never touches ~/.cairn/cairn.db, and it executes in a child process (see verify()) so the
 // parent installer never imports core with the wrong DB path bound.
 
-export interface VerifyResult {
+interface VerifyResult {
   ok: boolean;
   recalled: boolean;
   warmMs: number;

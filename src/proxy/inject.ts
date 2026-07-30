@@ -7,7 +7,7 @@ export interface ChatMessage {
   [k: string]: unknown;
 }
 
-export interface Recalled {
+interface Recalled {
   text: string;
   answer: string;
 }

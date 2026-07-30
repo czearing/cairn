@@ -1,7 +1,7 @@
 import { releaseVersion } from "./release";
 import { telemetryDatabase } from "./telemetry-schema";
 
-export interface TelemetryGroup {
+interface TelemetryGroup {
   eventKind: string; source: string; host: string; toolName: string;
   events: number; estimatedTokens: number; minimumTokens: number;
   maximumTokens: number; inputChars: number; outputChars: number;
@@ -9,7 +9,7 @@ export interface TelemetryGroup {
   releaseFingerprint: string; version: string; runClass: string;
 }
 
-export interface TelemetryImpact {
+interface TelemetryImpact {
   prompts: number; sessions: number; currentPromptTokens: number;
   measuredTokensPerPrompt: number; contextTokens: number; toolTokens: number;
   contextPercent: number; toolPercent: number; firstEventTs: number;

@@ -1,6 +1,6 @@
 import { db } from "./db";
 
-export interface EdgeRow {
+interface EdgeRow {
   sourceId: string;
   targetId: string;
   relationType: string;
@@ -77,7 +77,7 @@ export function addEdge(
   syncLegacy(sourceId);
 }
 
-export function removeEdge(sourceId: string, targetId: string, relationType = "related"): void {
+function removeEdge(sourceId: string, targetId: string, relationType = "related"): void {
   db().query("DELETE FROM neuron_edges WHERE source_id = ? AND target_id = ? AND relation_type = ?")
     .run(sourceId, targetId, relationType);
   syncLegacy(sourceId);

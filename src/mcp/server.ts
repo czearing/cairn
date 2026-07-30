@@ -303,16 +303,6 @@ registerTool(
 );
 
 registerTool(
-  "skill_search",
-  "Legacy compatibility bridge. Current agents receive the catalog automatically and should call skill_select. Returns the catalog, or loads an exact id when task is `load:<id>`.",
-  { task: z.string() },
-  async ({ task }) => measured("skill_search", { task }, async () => {
-    const { skillSearch } = await import("../skill/hook");
-    return json(skillSearch(task));
-  })
-);
-
-registerTool(
   "skill_create",
   "Create a reusable capability not covered by the current catalog.",
   {

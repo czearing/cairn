@@ -62,7 +62,7 @@ const emit = (obj: object) => {
   process.stdout.write(JSON.stringify(obj));
 };
 export const internalContext = (text: string): string => text ? `<cairn-internal>\n${text}\n</cairn-internal>` : "";
-export const complianceReceiptPath = (sessionId: string): string =>
+const complianceReceiptPath = (sessionId: string): string =>
   join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, "cairn-compliance.json");
 const COMPLETION_REMINDER = "Ensure you completed every requested task.";
 const SKILL_APPLICATION_REMINDER =
@@ -117,7 +117,7 @@ const isNativeSkillTool = (name: string): boolean => {
 };
 const isCairnMcpTool = (name: string): boolean => [
   "brain_search", "brain_create", "brain_mutate", "brain_delete",
-  "skill_select", "skill_create", "skill_search", "skill_load", "skill_edit",
+  "skill_select", "skill_create", "skill_edit",
 ].some((tool) => isTool(name, tool));
 const isTask = (name: string): boolean => /^(task|agent)$/i.test(name) || name === "Task" || name === "Agent";
 
@@ -132,7 +132,7 @@ export function postToolFiles(toolName: string, answer: string): string[] {
 // Whether agentStop should force another turn, and with which prompt. Final submission stays blocked
 // until the mandatory Cairn workflow succeeds; ordinary tools remain available for recovery.
 export const STOP_CAP = 2;
-export interface WorkflowEvidence {
+interface WorkflowEvidence {
   brainUsed: boolean;
   brainSearched?: boolean;
   brainCreatedCount?: number;
@@ -581,21 +581,6 @@ export async function runCopilotHook(): Promise<void> {
         next.skillUsed = true;
         if (id) next.selectedSkillIds = [...new Set([...next.selectedSkillIds, id])];
         next.pendingReviewIds = [...new Set([...next.pendingReviewIds, id || "__created__"])];
-      }
-      if (isTool(toolName, "skill_search") && succeeded) {
-        const id = skillResultId(result);
-        if (id) {
-          next.skillUsed = true;
-          next.pendingReviewIds = [...new Set([...next.pendingReviewIds, id])];
-        }
-      }
-      if (isTool(toolName, "skill_load") && succeeded) {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (id) {
-          next.skillUsed = true;
-          next.selectedSkillIds = [...new Set([...next.selectedSkillIds, id])];
-          next.pendingReviewIds = [...new Set([...next.pendingReviewIds, id])];
-        }
       }
       if (failedExecutionDisprovesSkill(toolName, succeeded) && next.selectedSkillIds.length) {
         const invalidated = [...new Set([...next.invalidatedSkillIds, ...next.selectedSkillIds])];

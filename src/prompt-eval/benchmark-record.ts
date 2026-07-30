@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { writeFileSync } from "node:fs";
 import { estimatedTokens } from "../core/telemetry";
 
-export interface BenchmarkRunStart {
+interface BenchmarkRunStart {
   sessionId: string;
   host: "copilot" | "claude";
   caseId: string;

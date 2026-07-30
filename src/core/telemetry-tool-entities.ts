@@ -1,4 +1,4 @@
-export interface ToolEntityObservation {
+interface ToolEntityObservation {
   kind: string;
   entityType: "brain" | "skill";
   entityId: string;

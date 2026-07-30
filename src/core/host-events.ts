@@ -5,9 +5,9 @@ import { dirname } from "node:path";
 import { config } from "./config";
 import { db, type Db } from "./db";
 
-export type HostName = "copilot" | "claude";
+type HostName = "copilot" | "claude";
 
-export interface HostEventRow {
+interface HostEventRow {
   eventKey: string;
   host: HostName;
   hookType: string;

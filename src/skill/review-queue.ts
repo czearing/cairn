@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "../core/config";
 
-export type ReviewJobStatus = "pending" | "running" | "completed" | "failed";
+type ReviewJobStatus = "pending" | "running" | "completed" | "failed";
 
 export interface ReviewJob {
   id: string;
@@ -18,7 +18,7 @@ export interface ReviewJob {
   updatedTs: number;
 }
 
-export interface EnqueueReview {
+interface EnqueueReview {
   id: string;
   sessionId?: string;
   skillId: string;
@@ -27,7 +27,7 @@ export interface EnqueueReview {
   now?: number;
 }
 
-export interface ReviewSupervisor {
+interface ReviewSupervisor {
   owner: string;
   pid: number;
   heartbeatTs: number;
@@ -281,64 +281,6 @@ export function transcriptReviewKey(transcriptPath: string, skillId: string, ses
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 const isReviewTool = (name: string): boolean => name.endsWith("skill_review") || name.includes("skill_review");
-
-export function latestCopilotReview(
-  transcriptPath: string,
-  sessionId: string,
-  options: { skillId?: string; agentId?: string; agentName?: string; subagentOnly?: boolean } = {}
-): { id: string; skillId: string } | null {
-  return copilotReviews(transcriptPath, sessionId, options)[0] ?? null;
-}
-
-export function copilotReviews(
-  transcriptPath: string,
-  sessionId: string,
-  options: { skillId?: string; agentId?: string; agentName?: string; subagentOnly?: boolean } = {}
-): { id: string; skillId: string }[] {
-  let lines: string[];
-  try { lines = readFileSync(transcriptPath, "utf8").split("\n").filter(Boolean); } catch { return []; }
-  const agentNames = new Map<string, string>();
-  for (const line of lines) {
-    try {
-      const event = JSON.parse(line) as { type?: unknown; agentId?: unknown; data?: { agentName?: unknown } };
-      const agentId = str(event.agentId);
-      const agentName = str(event.data?.agentName);
-      if (event.type === "subagent.started" && agentId && agentName) agentNames.set(agentId, agentName);
-    } catch { /* skip malformed transcript rows */ }
-  }
-  const completed = new Set<string>();
-  const reviews: { id: string; skillId: string }[] = [];
-  for (let i = lines.length - 1; i >= 0; i--) {
-    let event: {
-      type?: unknown;
-      agentId?: unknown;
-      timestamp?: unknown;
-      data?: { toolCallId?: unknown; toolName?: unknown; arguments?: unknown; success?: unknown };
-    };
-    try { event = JSON.parse(lines[i]!); } catch { continue; }
-    const toolCallId = str(event.data?.toolCallId);
-    if (event.type === "tool.execution_complete") {
-      if (toolCallId && event.data?.success === true) completed.add(toolCallId);
-      continue;
-    }
-    if (event.type !== "tool.execution_start" || !isReviewTool(str(event.data?.toolName))) continue;
-    if (!toolCallId || !completed.has(toolCallId)) continue;
-    const agentId = str(event.agentId);
-    if (options.agentId && agentId !== options.agentId) continue;
-    if (options.agentName && agentNames.get(agentId) !== options.agentName) continue;
-    if (options.subagentOnly && !agentId) continue;
-    let args: { id?: unknown } = {};
-    try {
-      const raw = event.data?.arguments;
-      args = typeof raw === "string" ? JSON.parse(raw) : (raw ?? {}) as { id?: unknown };
-    } catch { continue; }
-    const skillId = str(args.id);
-    if (!skillId || (options.skillId && skillId !== options.skillId)) continue;
-    const eventId = typeof event.timestamp === "number" ? event.timestamp : i;
-    reviews.push({ id: `${sessionId}:${agentId || "main"}:${eventId}:${i}:${skillId}`, skillId });
-  }
-  return reviews;
-}
 
 export function latestCopilotAgentId(transcriptPath: string, agentName: string): string {
   if (!transcriptPath || !agentName.trim()) return "";

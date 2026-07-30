@@ -1,10 +1,10 @@
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-export const cairnRoot = resolve(import.meta.dir, "..", "..");
-export const mcpSource = join(cairnRoot, "src", "mcp", "server.ts");
+const cairnRoot = resolve(import.meta.dir, "..", "..");
+const mcpSource = join(cairnRoot, "src", "mcp", "server.ts");
 export const mcpBundle = join(cairnRoot, "dist", "mcp-server.js");
-export const engineServerSource = join(cairnRoot, "src", "core", "engine-server.ts");
+const engineServerSource = join(cairnRoot, "src", "core", "engine-server.ts");
 let built = false;
 
 export async function buildMcpBundle(): Promise<string> {

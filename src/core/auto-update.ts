@@ -17,23 +17,23 @@ const ROOT = resolve(import.meta.dir, "..", "..");
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
 const LOCK_STALE_MS = 15 * 60 * 1000;
 
-export type AutoUpdateStatus = "updated" | "current" | "skipped" | "failed";
+type AutoUpdateStatus = "updated" | "current" | "skipped" | "failed";
 
-export interface AutoUpdateState {
+interface AutoUpdateState {
   lastCheckTs: number;
   lastRevision: string;
   lastStatus: AutoUpdateStatus | "";
   lastReason: string;
 }
 
-export interface AutoUpdateResult {
+interface AutoUpdateResult {
   status: AutoUpdateStatus;
   from: string;
   to: string;
   reason: string;
 }
 
-export interface FastForwardInputs {
+interface FastForwardInputs {
   gitCheckout: boolean;
   dirty: boolean;
   localHead: string;
@@ -45,7 +45,7 @@ const stateDirectory = (): string =>
   process.env.CAIRN_AUTO_UPDATE_DIR || join(homedir(), ".cairn");
 export const autoUpdateStatePath = (): string => join(stateDirectory(), "auto-update.json");
 const lockPath = (): string => join(stateDirectory(), "auto-update.lock");
-export const autoUpdateLogPath = (): string => join(stateDirectory(), "auto-update.log");
+const autoUpdateLogPath = (): string => join(stateDirectory(), "auto-update.log");
 
 export const autoUpdateIntervalMs = (): number => {
   const configured = Number(process.env.CAIRN_AUTO_UPDATE_INTERVAL_MS || "");

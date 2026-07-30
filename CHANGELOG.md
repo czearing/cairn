@@ -5,6 +5,16 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and 
 
 ## [Unreleased]
 
+### Fixed
+
+- The Copilot submission gate counted only nodes a turn *created*, so a turn that correctly reused an
+  existing answered node could never satisfy it. Agents were blocked repeatedly and told they had
+  "recorded nothing to the brain", which pushed them into creating duplicate nodes for work the graph
+  already held — the opposite of the instruction to reuse prior work. A turn now completes either by
+  creating and resolving its decomposition or by adopting existing nodes, proven by mutating a node its
+  own search returned, and reused nodes count toward the decomposition minimum. The reminder names the
+  real state instead of claiming nothing was recorded.
+
 ### Added
 
 - Automatic updates. Every install now fast-forwards itself to the published release in a detached

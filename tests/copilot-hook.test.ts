@@ -196,8 +196,50 @@ test("strict stopDecision requires ordered decomposition and root synthesis", ()
   })).toEqual({ file: "" });
 });
 
-test("Harness side effects are denied until the strict workflow is complete", () => {
-  const incomplete = {
+test("reusing prior work completes the turn instead of forcing duplicate nodes", () => {
+  const reuse = {
+    brainUsed: true,
+    brainSearched: true,
+    brainCreatedCount: 0,
+    brainAnsweredCount: 0,
+    skillUsed: true,
+    stopNudges: 0,
+    strict: true,
+    minimumBrainNodes: 3,
+  };
+  // A search that found nothing recorded yet must name that state, NOT claim the turn recorded
+  // nothing at all — the false claim is what pushed agents into re-creating existing work.
+  expect(stopDecision(reuse)).toEqual({ file: "brain-reuse-reminder.md" });
+  // Adopting one existing node discharges the obligation: the graph already holds the decomposition,
+  // so demanding three fresh nodes would only duplicate it.
+  expect(stopDecision({ ...reuse, brainReusedCount: 1 })).toEqual({ file: "" });
+  // Never searching is a different failure and keeps the original instruction.
+  expect(stopDecision({ ...reuse, brainSearched: false, brainReusedCount: 1 }))
+    .toEqual({ file: "turn-reminder.md" });
+});
+
+test("reused nodes count toward the decomposition minimum for a partially covered task", () => {
+  const partial = {
+    brainUsed: true,
+    brainSearched: true,
+    brainCreatedCount: 1,
+    brainAnsweredCount: 1,
+    rootSynthesized: true,
+    skillUsed: true,
+    stopNudges: 0,
+    strict: true,
+    minimumBrainNodes: 3,
+  };
+  expect(stopDecision(partial)).toEqual({ file: "turn-reminder.md" });
+  expect(stopDecision({ ...partial, brainReusedCount: 2 })).toEqual({ file: "" });
+  // Creating nodes still requires answering all of them and synthesizing the root last.
+  expect(stopDecision({ ...partial, brainReusedCount: 2, brainAnsweredCount: 0 }))
+    .toEqual({ file: "turn-reminder.md" });
+  expect(stopDecision({ ...partial, brainReusedCount: 2, rootSynthesized: false }))
+    .toEqual({ file: "turn-reminder.md" });
+});
+
+test("Harness side effects are denied until the strict workflow is complete", () => {  const incomplete = {
     brainUsed: true,
     brainSearched: true,
     brainCreatedCount: 3,
@@ -558,8 +600,59 @@ test("an ignored healthy Cairn workflow remains blocked until Cairn is used", ()
   rmSync(dbPath, { force: true });
 });
 
-// ── gateDecision: the preToolUse brain_create gate (pure; deps injected) ──────────────────────────
+test("adopting a searched node ends the turn, but an unsearched id cannot fake reuse", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-brain-reuse-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_ENFORCE_STOP_GATES: "1", CAIRN_SKILLS: "1" };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const session = "brain-reuse";
+  const existing = "11111111-2222-3333-4444-555555555555";
+  const unsearched = "99999999-8888-7777-6666-555555555555";
 
+  expect(invoke("user-prompt", { sessionId: session, prompt: "Resolve the task." }).status).toBe(0);
+  expect(invoke("post-tool", {
+    sessionId: session,
+    toolName: "cairn-skill_select",
+    toolArgs: { ids: ["software implementation"] },
+    toolResult: { success: true, selected: [{ id: "skill-1" }] },
+  }).status).toBe(0);
+  expect(invoke("post-tool", {
+    sessionId: session,
+    toolName: "cairn-brain_search",
+    toolArgs: { query: "the task" },
+    toolResult: { success: true, textResultForLlm: JSON.stringify([{ id: existing, text: "How was it resolved?" }]) },
+  }).status).toBe(0);
+
+  // Searching alone must not release the turn, and must ask for reuse rather than claim nothing was recorded.
+  const searched = invoke("agent-stop", { sessionId: session }).stdout.toString();
+  expect(searched).toContain("Do NOT");
+  expect(searched).not.toContain("without recording anything");
+
+  // Mutating an id this turn never saw is not evidence of reuse.
+  expect(invoke("post-tool", {
+    sessionId: session,
+    toolName: "cairn-brain_mutate",
+    toolArgs: { id: unsearched, edges: ["x"] },
+    toolResult: { success: true, id: unsearched },
+  }).status).toBe(0);
+  expect(invoke("agent-stop", { sessionId: session }).stdout.toString()).not.toBe("{}");
+
+  // Adopting the node the search actually returned completes the turn without a single duplicate node.
+  expect(invoke("post-tool", {
+    sessionId: session,
+    toolName: "cairn-brain_mutate",
+    toolArgs: { id: existing, edges: ["prior-evidence"] },
+    toolResult: { success: true, id: existing },
+  }).status).toBe(0);
+  const released = invoke("agent-stop", { sessionId: session }).stdout.toString();
+  expect(released).not.toContain("Do NOT");
+  expect(invoke("agent-stop", { sessionId: session }).stdout.toString()).toBe("{}");
+  rmSync(dbPath, { force: true });
+}, 60_000);
+
+// ── gateDecision: the preToolUse brain_create gate (pure; deps injected) ──────────────────────────
 test("gateDecision denies a node linked only to the root while open branches remain", () => {
   const d = gateDecision("cairn-brain_create", { text: "How does X work?", edges: ["r"] }, { rootId: "r", openBranch: true });
   expect(d.deny).toBe(true);

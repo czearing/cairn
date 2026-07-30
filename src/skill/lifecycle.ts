@@ -14,6 +14,10 @@ export interface LifecycleState {
   brainSearched: boolean;
   brainCreatedIds: string[];
   brainAnsweredIds: string[];
+  /** Ids brain_search returned this turn: the pool of prior work the turn is allowed to reuse. */
+  brainSearchIds: string[];
+  /** Existing nodes the turn adopted instead of duplicating, proven by a mutate on a searched id. */
+  brainReusedIds: string[];
   rootNodeId: string;
   rootSynthesized: boolean;
   skillUsed: boolean;
@@ -39,6 +43,8 @@ const fresh = (): LifecycleState => ({
   brainSearched: false,
   brainCreatedIds: [],
   brainAnsweredIds: [],
+  brainSearchIds: [],
+  brainReusedIds: [],
   rootNodeId: "",
   rootSynthesized: false,
   skillUsed: false,
@@ -72,6 +78,8 @@ function database(): Database {
     brain_searched INTEGER NOT NULL DEFAULT 0,
     brain_created_ids TEXT NOT NULL DEFAULT '[]',
     brain_answered_ids TEXT NOT NULL DEFAULT '[]',
+    brain_search_ids TEXT NOT NULL DEFAULT '[]',
+    brain_reused_ids TEXT NOT NULL DEFAULT '[]',
     root_node_id TEXT NOT NULL DEFAULT '',
     root_synthesized INTEGER NOT NULL DEFAULT 0,
     skill_used INTEGER NOT NULL DEFAULT 0,
@@ -116,6 +124,12 @@ function database(): Database {
   if (!columns.some((column) => column.name === "brain_answered_ids")) {
     d.run("ALTER TABLE lifecycle_turns ADD COLUMN brain_answered_ids TEXT NOT NULL DEFAULT '[]'");
   }
+  if (!columns.some((column) => column.name === "brain_search_ids")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN brain_search_ids TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!columns.some((column) => column.name === "brain_reused_ids")) {
+    d.run("ALTER TABLE lifecycle_turns ADD COLUMN brain_reused_ids TEXT NOT NULL DEFAULT '[]'");
+  }
   if (!columns.some((column) => column.name === "root_node_id")) {
     d.run("ALTER TABLE lifecycle_turns ADD COLUMN root_node_id TEXT NOT NULL DEFAULT ''");
   }
@@ -156,6 +170,8 @@ function fromRow(row: Record<string, unknown> | null | undefined): LifecycleStat
     brainSearched: Boolean(row.brain_searched),
     brainCreatedIds: parse(row.brain_created_ids, []),
     brainAnsweredIds: parse(row.brain_answered_ids, []),
+    brainSearchIds: parse(row.brain_search_ids, []),
+    brainReusedIds: parse(row.brain_reused_ids, []),
     rootNodeId: String(row.root_node_id || ""),
     rootSynthesized: Boolean(row.root_synthesized),
     skillUsed: Boolean(row.skill_used),
@@ -179,15 +195,18 @@ function fromRow(row: Record<string, unknown> | null | undefined): LifecycleStat
 function save(d: Database, scope: string, state: LifecycleState): void {
   d.query(`INSERT INTO lifecycle_turns (
     scope, turn_seq, brain_used, brain_searched, brain_created_ids, brain_answered_ids,
+    brain_search_ids, brain_reused_ids,
     root_node_id, root_synthesized, skill_used, selected_skill_ids, invalidated_skill_ids,
     skill_correction_nudges, pending_review_ids, pending_reviews,
     stop_nudges, review_nudges, stop_blocked, reminded, completion_nudged,
     cairn_visibility_nudged, cairn_tool_attempted, cairn_tool_observed, execution_tool_calls, updated_ts
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(scope) DO UPDATE SET
     turn_seq=excluded.turn_seq, brain_used=excluded.brain_used,
     brain_searched=excluded.brain_searched, brain_created_ids=excluded.brain_created_ids,
-    brain_answered_ids=excluded.brain_answered_ids, root_node_id=excluded.root_node_id,
+    brain_answered_ids=excluded.brain_answered_ids,
+    brain_search_ids=excluded.brain_search_ids, brain_reused_ids=excluded.brain_reused_ids,
+    root_node_id=excluded.root_node_id,
     root_synthesized=excluded.root_synthesized, skill_used=excluded.skill_used,
     selected_skill_ids=excluded.selected_skill_ids,
     invalidated_skill_ids=excluded.invalidated_skill_ids,
@@ -203,6 +222,7 @@ function save(d: Database, scope: string, state: LifecycleState): void {
     .run(
       scope, state.turnSeq, Number(state.brainUsed), Number(state.brainSearched),
       JSON.stringify(state.brainCreatedIds), JSON.stringify(state.brainAnsweredIds),
+      JSON.stringify(state.brainSearchIds), JSON.stringify(state.brainReusedIds),
       state.rootNodeId, Number(state.rootSynthesized), Number(state.skillUsed),
       JSON.stringify(state.selectedSkillIds), JSON.stringify(state.invalidatedSkillIds),
       state.skillCorrectionNudges,

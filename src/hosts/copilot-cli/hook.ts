@@ -137,6 +137,7 @@ export interface WorkflowEvidence {
   brainSearched?: boolean;
   brainCreatedCount?: number;
   brainAnsweredCount?: number;
+  brainReusedCount?: number;
   rootSynthesized?: boolean;
   skillUsed: boolean;
   pendingReviewCount?: number;
@@ -153,14 +154,34 @@ export function stopDecision(s: WorkflowEvidence): {
     return { file: "skill-correction-reminder.md" };
   }
   if (!s.skillUsed) return { file: "skill-search-reminder.md" };
-  if (s.strict && (
-    !s.brainSearched
-    || (s.brainCreatedCount ?? 0) < (s.minimumBrainNodes ?? 1)
-    || (s.brainAnsweredCount ?? 0) < (s.brainCreatedCount ?? 0)
-    || !s.rootSynthesized
-  )) return { file: "turn-reminder.md" };
+  if (s.strict && !brainWorkComplete(s)) {
+    // Searching and finding nothing to reuse is a different failure from never searching, and from
+    // finding prior work. Naming the actual state is what stops the agent from "fixing" a reuse turn
+    // by inventing duplicate nodes.
+    return { file: (s.brainSearched && (s.brainCreatedCount ?? 0) === 0)
+      ? "brain-reuse-reminder.md"
+      : "turn-reminder.md" };
+  }
   if (!s.brainUsed) return { file: "turn-reminder.md" };
   return { file: "" };
+}
+
+// A turn discharges its Brain obligation one of two ways, and BOTH are complete work:
+//   • It researched something new: it created the decomposition, answered every node it created, and
+//     synthesized the root last.
+//   • Prior work already answered the task: it adopted those existing nodes instead of duplicating
+//     them. Requiring fresh nodes here is what forced agents to re-create work the graph already held,
+//     which corrupts recall with duplicates and is the exact opposite of the instruction to reuse.
+// Reuse must still be recorded, not merely claimed: a bare search proves nothing, so the turn has to
+// mutate a node that its own search actually returned.
+export function brainWorkComplete(s: WorkflowEvidence): boolean {
+  if (!s.brainSearched) return false;
+  const created = s.brainCreatedCount ?? 0;
+  const reused = s.brainReusedCount ?? 0;
+  if (created === 0) return reused > 0;
+  return created + reused >= (s.minimumBrainNodes ?? 1)
+    && (s.brainAnsweredCount ?? 0) >= created
+    && Boolean(s.rootSynthesized);
 }
 
 const NON_EXECUTION_TOOLS =
@@ -174,12 +195,7 @@ export function failedExecutionDisprovesSkill(toolName: string, succeeded: boole
 
 const READ_ONLY_TOOLS = /^(read|view|glob|grep|rg|search|web_fetch|web_search|fetch_copilot_cli_documentation|list_|get_)/i;
 const SHELL_MUTATION = /(?:^|[;&|]\s*)(?:set-content|add-content|out-file|remove-item|move-item|copy-item|rename-item|new-item|stop-process|start-process)\b|\bgit\s+(?:add|commit|push|checkout|switch|reset|clean|merge|rebase|tag)\b|\baz\s+repos\s+pr\s+(?:create|update)\b|\baz\s+devops\s+invoke\b[\s\S]*?--http-method\s+(?:post|put|patch|delete)\b|(?:^|[^<])>{1,2}(?![>&])/i;
-const workflowReady = (s: WorkflowEvidence): boolean =>
-  s.skillUsed
-  && Boolean(s.brainSearched)
-  && (s.brainCreatedCount ?? 0) >= (s.minimumBrainNodes ?? 1)
-  && (s.brainAnsweredCount ?? 0) >= (s.brainCreatedCount ?? 0)
-  && Boolean(s.rootSynthesized);
+const workflowReady = (s: WorkflowEvidence): boolean => s.skillUsed && brainWorkComplete(s);
 
 // A turn that only read the repository to answer a question is genuinely resolved by a root plus the
 // children its evidence needs, so a flat floor only buys padding nodes and extra stop continuations.
@@ -473,6 +489,7 @@ export async function runCopilotHook(): Promise<void> {
           ...state,
           brainCreatedCount: state.brainCreatedIds.length,
           brainAnsweredCount: state.brainAnsweredIds.length,
+          brainReusedCount: state.brainReusedIds.length,
           strict: true,
           minimumBrainNodes: requiredBrainNodes(1),
         }, args);
@@ -525,15 +542,25 @@ export async function runCopilotHook(): Promise<void> {
       if (isCairnMcpTool(toolName) && succeeded) next.cairnToolObserved = true;
       if (countsAsExecution(toolName, args)) next.executionToolCalls += 1;
       if ((isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) && succeeded) next.brainUsed = true;
-      if (isTool(toolName, "brain_search") && succeeded) next.brainSearched = true;
+      if (isTool(toolName, "brain_search") && succeeded) {
+        next.brainSearched = true;
+        next.brainSearchIds = [...new Set([...next.brainSearchIds, ...skillResultIds(result)])];
+      }
       if (isTool(toolName, "brain_create") && succeeded && resultId) {
         next.brainCreatedIds = [...new Set([...next.brainCreatedIds, resultId])];
         if (!next.rootNodeId) next.rootNodeId = resultId;
       }
-      if (isTool(toolName, "brain_mutate") && succeeded && typeof args.answer === "string" && args.answer.trim()) {
+      if (isTool(toolName, "brain_mutate") && succeeded) {
         const id = typeof args.id === "string" ? args.id : "";
-        if (id) next.brainAnsweredIds = [...new Set([...next.brainAnsweredIds, id])];
-        if (id && id === next.rootNodeId) next.rootSynthesized = true;
+        // Mutating a node this turn found but did not create is the recorded proof of reuse: the turn
+        // extended prior work instead of duplicating it.
+        if (id && !next.brainCreatedIds.includes(id) && next.brainSearchIds.includes(id)) {
+          next.brainReusedIds = [...new Set([...next.brainReusedIds, id])];
+        }
+        if (typeof args.answer === "string" && args.answer.trim()) {
+          if (id) next.brainAnsweredIds = [...new Set([...next.brainAnsweredIds, id])];
+          if (id && id === next.rootNodeId) next.rootSynthesized = true;
+        }
       }
       if (isNativeSkillTool(toolName) && toolResultSucceeded(result)) next.skillUsed = true;
       if (isTool(toolName, "skill_select") && succeeded) {
@@ -657,6 +684,7 @@ export async function runCopilotHook(): Promise<void> {
       brainSearched: st.brainSearched,
       brainCreatedCount: st.brainCreatedIds.length,
       brainAnsweredCount: st.brainAnsweredIds.length,
+      brainReusedCount: st.brainReusedIds.length,
       rootSynthesized: st.rootSynthesized,
       skillUsed: st.skillUsed,
       stopNudges: st.stopNudges,
@@ -740,6 +768,7 @@ export async function runCopilotHook(): Promise<void> {
       ...st,
       brainCreatedCount: st.brainCreatedIds.length,
       brainAnsweredCount: st.brainAnsweredIds.length,
+      brainReusedCount: st.brainReusedIds.length,
       strict: true,
       minimumBrainNodes: requiredBrainNodes(st.executionToolCalls),
     })) {

@@ -14,6 +14,7 @@ function fileConfig(): {
   libsql?: { url?: string; token?: string; localPath?: string; syncPeriod?: number };
   skills?: boolean;
   usageTelemetry?: boolean;
+  autoUpdate?: boolean;
 } {
   try {
     if (!existsSync(configFilePath)) return {};
@@ -55,6 +56,10 @@ export const config: CairnConfig = {
   skills: parsedFile.skills !== false,
   usageTelemetry: parsedFile.usageTelemetry === true,
 
+  // Cairn updates itself by default so a published fix reaches every install without a manual command.
+  // Turn it off per machine with "autoUpdate": false in ~/.cairn/config.json (or CAIRN_AUTO_UPDATE=0).
+  autoUpdate: parsedFile.autoUpdate !== false,
+
   uiPort,
   uiUrl: process.env.CAIRN_UI_URL || `http://localhost:${uiPort}`,
 };
@@ -71,3 +76,10 @@ export const usageTelemetryEnabled = (): boolean =>
   process.env.CAIRN_USAGE === "1"
     ? true
     : process.env.CAIRN_USAGE === "0" ? false : config.usageTelemetry;
+
+/** Does this install pull and apply published releases on its own? ON by default; CAIRN_AUTO_UPDATE
+ *  env wins (1 on / 0 off), else the per-machine `autoUpdate` flag in ~/.cairn/config.json. */
+export const autoUpdateEnabled = (): boolean =>
+  process.env.CAIRN_AUTO_UPDATE === "1"
+    ? true
+    : process.env.CAIRN_AUTO_UPDATE === "0" ? false : config.autoUpdate;

@@ -60,6 +60,10 @@ export interface CairnConfig {
   skills: boolean;
   /** Whether privacy-safe local usage telemetry is active. OFF by default and never uploaded. */
   usageTelemetry: boolean;
+  /** Whether the install fast-forwards itself to published releases in the background. ON by default;
+   * turn it OFF per machine with `"autoUpdate": false` in ~/.cairn/config.json or `CAIRN_AUTO_UPDATE=0`.
+   * A dirty or diverged checkout is never touched automatically. */
+  autoUpdate: boolean;
   /** Port the optional viewer serves on. */
   uiPort: number;
   /** Base URL of the viewer, used to build deep links (`/node/<id>`) to neurons. */

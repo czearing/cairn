@@ -430,6 +430,8 @@ export async function runCopilotHook(): Promise<void> {
     }
     if (!shouldStartUserTurn(prompt)) return void emit({});
     rmSync(complianceReceiptPath(sessionId), { force: true });
+    try { (await import("../../core/auto-update")).maybeAutoUpdate(); }
+    catch { /* self-update is background work and never blocks a turn */ }
     const state = resetLifecycle(stateId);
     if (emittedUsage) emittedUsage.turnSeq = state.turnSeq;
     const wf = await workflowPrompt();

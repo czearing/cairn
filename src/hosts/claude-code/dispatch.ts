@@ -182,6 +182,8 @@ async function main(): Promise<void> {
     const turngate = await import("../../skill/turngate");
     if (event.kind === "user_message") {
       turngate.resetSkillTurn(session);
+      try { (await import("../../core/auto-update")).maybeAutoUpdate(); }
+      catch { /* self-update is background work and never blocks a turn */ }
       let catalogVersion = "";
       try {
         catalogVersion = (await import("../../skill/catalog")).skillCatalogSnapshot().version;

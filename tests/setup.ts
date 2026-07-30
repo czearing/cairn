@@ -33,3 +33,10 @@ process.env.CAIRN_USAGE = "1";
 
 // Queue behavior is tested synchronously; never leave detached learner supervisors behind from hook fixtures.
 process.env.CAIRN_MAX_LEARNERS = "0";
+
+// Cairn updates itself in production, but a test run must never fast-forward or reinstall the
+// developer's checkout. Hook fixtures spawn real hook subprocesses, which inherit this env var, so
+// the kill switch has to live here rather than in an in-process argv check.
+// tests/auto-update.test.ts exercises the updater directly against throwaway repos instead.
+process.env.CAIRN_AUTO_UPDATE = "0";
+

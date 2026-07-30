@@ -3,6 +3,8 @@ import { access, constants } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { c, sym, line, step } from "./term";
+import { readAutoUpdateState } from "./core/auto-update";
+import { autoUpdateEnabled } from "./core/config";
 
 // Preflight, flutter-doctor style: check every dependency the install needs UP FRONT and, for
 // each failure, print the exact command that fixes it. A masterwork installer never reports a
@@ -84,6 +86,19 @@ export async function checks(): Promise<Check[]> {
     required: true,
     detail: w ? sp.replace(/\\/g, "/") : `cannot write ${sp.replace(/\\/g, "/")}`,
     fix: `Make sure you own ${dirname(sp).replace(/\\/g, "/")} and it is writable, then re-run.`,
+  });
+
+  const auto = autoUpdateEnabled();
+  const stamp = readAutoUpdateState();
+  const seen = stamp.lastCheckTs
+    ? `last check ${new Date(stamp.lastCheckTs).toISOString()}${stamp.lastStatus ? ` (${stamp.lastStatus}${stamp.lastReason ? `: ${stamp.lastReason}` : ""})` : ""}`
+    : "no check recorded yet; the next turn will run one";
+  out.push({
+    name: "Auto-update",
+    ok: auto,
+    required: false,
+    detail: auto ? seen : "disabled; this install will not receive published fixes on its own",
+    fix: 'Re-enable with CAIRN_AUTO_UPDATE=1 or remove "autoUpdate": false from ~/.cairn/config.json.',
   });
 
   return out;

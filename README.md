@@ -28,7 +28,11 @@ Code afterward to load the tools.
 
 From a clone, run `bun install && bun run install:claude`.
 
-To update later, run `cairn update`. It pulls the latest code, reinstalls, and reapplies the config.
+Cairn keeps itself up to date. Once an hour, at the start of a turn, it fast-forwards your checkout
+to the published release in the background and reapplies the config, so a fix reaches you without
+you running anything. It never touches a checkout with uncommitted or diverged work — that stays
+manual. Run `cairn update` to update right now, `cairn doctor` to see the last automatic check, and
+set `CAIRN_AUTO_UPDATE=0` (or `"autoUpdate": false` in `~/.cairn/config.json`) to turn it off.
 
 ## Commands
 
@@ -36,7 +40,7 @@ To update later, run `cairn update`. It pulls the latest code, reinstalls, and r
 |---|---|
 | `cairn doctor` | Checks your environment and prints how to fix anything missing. |
 | `cairn verify` | Creates and recalls a memory in a throwaway database to confirm it works. |
-| `cairn update` | Updates to the latest version and reapplies the config. |
+| `cairn update` | Updates to the latest version and reapplies the config (also runs automatically). |
 | `cairn uninstall` | Removes the hooks and MCP registration. Your saved memories stay. |
 | `cairn install --dry-run` | Shows what install would change, without writing anything. |
 | `cairn --version` | Prints the installed version. |

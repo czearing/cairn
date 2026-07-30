@@ -152,6 +152,7 @@ function writeSyncConfig(dryRun: boolean): "written" | "would-write" | "none" {
   if (env.CAIRN_LIBSQL_SYNC_PERIOD) libsql.syncPeriod = Number(env.CAIRN_LIBSQL_SYNC_PERIOD);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify({ libsql }, null, 2)}\n`, "utf8");
+  chmodSync(path, 0o600);
   return "written";
 }
 

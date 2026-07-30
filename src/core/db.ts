@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { getLoadablePath } from "sqlite-vec";
 import { config } from "./config";
 import { ensureEngineSchema } from "./schema";
+import { configureSqliteLibrary } from "./sqlite";
 import { startBackgroundSync } from "./sync";
 
 // The brain is opened in one of two modes, decided at open time:
@@ -176,6 +177,7 @@ function ensureSchema(query: (sql: string) => Stmt, exec: (sql: string) => void)
 function openBun(): Db {
   assertNotRealBrainInTests(config.dbPath);
   mkdirSync(dirname(config.dbPath), { recursive: true });
+  configureSqliteLibrary();
   const d = new BunDatabase(config.dbPath);
   d.loadExtension(getLoadablePath());
   configureConnection(d, true);
@@ -206,6 +208,7 @@ function openReader(): Db {
     const empty: Stmt = { all: () => [], get: () => undefined, run: () => ({ changes: 0 }) };
     return { query: () => empty, run: () => {}, transaction: (fn) => fn(), loadExtension: () => {} };
   }
+  configureSqliteLibrary();
   const d = new BunDatabase(path, { readonly: true });
   d.loadExtension(getLoadablePath());
   try { configureConnection(d, false); } catch { /* a readonly handle may reject a tuning pragma */ }

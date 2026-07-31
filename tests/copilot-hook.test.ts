@@ -28,16 +28,6 @@ afterAll(() => {
   else process.env.CAIRN_FORCE_COMPLETION_CONTINUATION = priorCompletionContinuation;
 });
 
-function reviewJobs(dbPath: string): { skill_id: string; status?: string }[] {
-  const database = new Database(dbPath);
-  try {
-    const table = database.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'review_jobs'").get();
-    return table ? database.query("SELECT skill_id, status FROM review_jobs").all() as { skill_id: string; status: string }[] : [];
-  } finally {
-    database.close();
-  }
-}
-
 function lifecycleState(dbPath: string, scope: string): { pendingReviewIds: string[]; pendingReviews: unknown[] } {
   const database = new Database(dbPath);
   try {
@@ -440,7 +430,6 @@ test("Harness completes without queueing a review after a durable wait resolves"
   expect(searchBrain().status).toBe(0);
   completeBrain();
   expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString()).toBe("{}");
-  expect(reviewJobs(cairnDb)).toEqual([]);
 
   expect(invoke("user-prompt", { sessionId: "harness-session", prompt: "Complete the retried task." }).status).toBe(0);
   expect(select().status).toBe(0);
@@ -458,7 +447,6 @@ test("Harness completes without queueing a review after a durable wait resolves"
   expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString())
     .toContain("completed every requested task");
   expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString()).toBe("{}");
-  expect(reviewJobs(cairnDb)).toEqual([]);
   rmSync(cairnDb, { force: true });
   rmSync(harnessDb, { force: true });
   rmSync(transcriptPath, { force: true });
@@ -712,7 +700,6 @@ test("subagentStop clears its lifecycle without queueing skill reviews", () => {
   expect(invoke("post-tool", { sessionId: "session-1", agentId: "agent-1", timestamp: 14, toolName: "cairn-skill_review", toolArgs: { id: "skill-2" } }).status).toBe(0);
   const run = invoke("subagent-stop", { sessionId: "session-1", agentName: "code-review", transcriptPath });
   expect(run.status).toBe(0);
-  expect(reviewJobs(dbPath)).toEqual([]);
   const parentState = lifecycleState(dbPath, "copilot:session-1");
   expect(parentState.pendingReviewIds).toEqual(["parent-skill"]);
   expect(invoke("agent-stop", { sessionId: "session-1" }).stdout.toString()).toContain('"decision":"block"');
@@ -743,7 +730,6 @@ test("subagentStop never queues a reviewer for same-name agents", () => {
     env,
   });
   expect(run.status).toBe(0);
-  expect(reviewJobs(dbPath)).toEqual([]);
 });
 
 test("preToolUse prepends the Cairn protocol for general-purpose agents", () => {
@@ -879,113 +865,6 @@ test("postToolUse records the exact created skill id from the tool result", () =
   expect(state.pendingReviewIds).toEqual(["created-skill"]);
 });
 
-test.skip("removed skill_review declarations are not lifecycle events", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-review-stop-${id}.db`);
-  const home = join(tmpdir(), `cairn-review-home-${id}`);
-  const transcriptPath = join(home, ".copilot", "session-state", "session-2", "events.jsonl");
-  mkdirSync(join(home, ".copilot", "session-state", "session-2"), { recursive: true });
-  writeFileSync(transcriptPath, [
-    JSON.stringify({ type: "user.message", id: "user-1", timestamp: 10, data: { content: "Fix the lifecycle." } }),
-    JSON.stringify({ type: "assistant.message", timestamp: 15, data: { content: "I am checking it." } }),
-    JSON.stringify({
-      type: "tool.execution_start",
-      timestamp: 20,
-      data: { toolCallId: "review-2", toolName: "cairn-skill_review", arguments: { id: "skill-2" } },
-    }),
-  ].join("\n"));
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_MAX_LEARNERS: "0", CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-
-  expect(invoke("post-tool", { sessionId: "session-2", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
-  const reviewPayload = {
-    sessionId: "session-2",
-    timestamp: 21,
-    toolName: "cairn-skill_review",
-    toolArgs: { id: "skill-2" },
-  };
-  expect(invoke("post-tool", reviewPayload).status).toBe(0);
-  expect(invoke("post-tool", reviewPayload).status).toBe(0);
-  expect(reviewJobs(dbPath)).toEqual([]);
-  writeFileSync(transcriptPath, [
-    JSON.stringify({ type: "user.message", id: "user-1", timestamp: 10, data: { content: "Fix the lifecycle." } }),
-    JSON.stringify({ type: "assistant.message", timestamp: 15, data: { content: "I am checking it." } }),
-    JSON.stringify({
-      type: "tool.execution_start",
-      timestamp: 20,
-      data: { toolCallId: "review-2", toolName: "cairn-skill_review", arguments: { id: "skill-2" } },
-    }),
-    JSON.stringify({ type: "tool.execution_complete", timestamp: 22, data: { toolCallId: "review-2", success: true } }),
-    JSON.stringify({ type: "assistant.message", timestamp: 25, data: { content: "The lifecycle is fixed." } }),
-  ].join("\n"));
-  const stop = invoke("agent-stop", { sessionId: "session-2" });
-  expect(stop.status).toBe(0);
-  expect(stop.stdout.toString()).toContain("completed every requested task");
-  expect(reviewJobs(dbPath)).toEqual([]);
-  expect(invoke("agent-stop", { sessionId: "session-2" }).stdout.toString()).toBe("{}");
-  expect(reviewJobs(dbPath)).toEqual([{ skill_id: "skill-2", status: "pending" }]);
-});
-
-test.skip("removed skill_review declarations do not gate deliverables", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-premature-review-${id}.db`);
-  const home = join(tmpdir(), `cairn-premature-review-home-${id}`);
-  const transcriptPath = join(home, ".copilot", "session-state", "premature", "events.jsonl");
-  mkdirSync(join(home, ".copilot", "session-state", "premature"), { recursive: true });
-  const reviewEvents = [
-    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Complete the assigned task." } }),
-    JSON.stringify({ type: "tool.execution_start", timestamp: 2, data: {
-      toolCallId: "premature-review",
-      toolName: "cairn-skill_review",
-      arguments: { id: "skill-premature" },
-    } }),
-    JSON.stringify({ type: "tool.execution_complete", timestamp: 3, data: {
-      toolCallId: "premature-review",
-      success: true,
-    } }),
-  ];
-  writeFileSync(transcriptPath, reviewEvents.join("\n"));
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = {
-    ...process.env,
-    USERPROFILE: home,
-    HOME: home,
-    CAIRN_DB_PATH: dbPath,
-    CAIRN_MAX_LEARNERS: "0",
-    CAIRN_SKILLS: "1",
-  };
-  const invoke = (mode: string, payload: object) =>
-    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  expect(invoke("post-tool", {
-    sessionId: "premature",
-    toolName: "cairn-brain_search",
-    toolArgs: {},
-  }).status).toBe(0);
-  expect(invoke("post-tool", {
-    sessionId: "premature",
-    toolName: "cairn-skill_select",
-    toolArgs: { ids: ["skill-premature"] },
-  }).status).toBe(0);
-  expect(invoke("post-tool", {
-    sessionId: "premature",
-    timestamp: 2,
-    toolName: "cairn-skill_review",
-    toolArgs: { id: "skill-premature" },
-  }).status).toBe(0);
-  expect(invoke("agent-stop", { sessionId: "premature", transcriptPath }).stdout.toString())
-    .toContain("completed every requested task");
-  expect(invoke("agent-stop", { sessionId: "premature", transcriptPath }).stdout.toString())
-    .toContain("before a visible deliverable existed");
-  expect(reviewJobs(dbPath)).toEqual([]);
-  writeFileSync(transcriptPath, [
-    ...reviewEvents,
-    JSON.stringify({ type: "assistant.message", timestamp: 4, data: { content: "Finished result." } }),
-  ].join("\n"));
-  expect(invoke("agent-stop", { sessionId: "premature", transcriptPath }).stdout.toString()).toBe("{}");
-  expect(reviewJobs(dbPath)).toEqual([{ skill_id: "skill-premature", status: "pending" }]);
-});
-
 test("a failed skill_review does not clear the pending lifecycle obligation", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-failed-review-state-${id}.db`);
@@ -1006,65 +885,6 @@ test("a failed skill_review does not clear the pending lifecycle obligation", ()
     toolResult: { resultType: "failure" },
   }).status).toBe(0);
   expect(lifecycleState(dbPath, "copilot:failed-review-state").pendingReviewIds).toEqual(["skill-failed"]);
-});
-
-test.skip("removed automatic learning does not run after stop gates", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-review-deferred-${id}.db`);
-  const home = join(tmpdir(), `cairn-review-deferred-home-${id}`);
-  const transcriptPath = join(home, ".copilot", "session-state", "session-3", "events.jsonl");
-  mkdirSync(join(home, ".copilot", "session-state", "session-3"), { recursive: true });
-  writeFileSync(transcriptPath, [
-    JSON.stringify({ type: "user.message", id: "user-1", timestamp: 10, data: { content: "Audit Cairn." } }),
-    JSON.stringify({ type: "tool.execution_start", timestamp: 20, data: { toolCallId: "review-3", toolName: "cairn-skill_review", arguments: { id: "skill-3" } } }),
-    JSON.stringify({ type: "tool.execution_complete", timestamp: 21, data: { toolCallId: "review-3", success: true } }),
-  ].join("\n"));
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_MAX_LEARNERS: "0", CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-
-  expect(invoke("post-tool", { sessionId: "session-3", timestamp: 20, toolName: "cairn-skill_review", toolArgs: { id: "skill-3" } }).status).toBe(0);
-  expect(invoke("agent-stop", { sessionId: "session-3", transcriptPath }).stdout.toString()).toContain('"decision":"block"');
-  expect(reviewJobs(dbPath)).toEqual([]);
-
-  expect(invoke("post-tool", { sessionId: "session-3", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
-  writeFileSync(transcriptPath, [
-    JSON.stringify({ type: "user.message", id: "user-1", timestamp: 10, data: { content: "Audit Cairn." } }),
-    JSON.stringify({ type: "tool.execution_start", timestamp: 20, data: { toolCallId: "review-3", toolName: "cairn-skill_review", arguments: { id: "skill-3" } } }),
-    JSON.stringify({ type: "tool.execution_complete", timestamp: 21, data: { toolCallId: "review-3", success: true } }),
-    JSON.stringify({ type: "assistant.message", timestamp: 30, data: { content: "Audit complete." } }),
-  ].join("\n"));
-  expect(invoke("agent-stop", { sessionId: "session-3", transcriptPath }).stdout.toString())
-    .toContain("completed every requested task");
-  expect(invoke("agent-stop", { sessionId: "session-3", transcriptPath }).stdout.toString()).toBe("{}");
-  expect(reviewJobs(dbPath)).toEqual([{ skill_id: "skill-3", status: "pending" }]);
-});
-
-test.skip("removed review enqueue cannot block stop", () => {
-  const id = randomUUID();
-  const home = join(tmpdir(), `cairn-review-failure-home-${id}`);
-  const dbPath = join(tmpdir(), `cairn-review-failure-${id}.db`);
-  const transcriptPath = join(home, ".copilot", "session-state", "session-4", "events.jsonl");
-  mkdirSync(join(home, ".copilot", "session-state", "session-4"), { recursive: true });
-  writeFileSync(transcriptPath, JSON.stringify({
-    type: "user.message",
-    id: "user-1",
-    timestamp: 10,
-    data: { content: "Audit Cairn." },
-  }));
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-
-  expect(invoke("agent-stop", { sessionId: "session-4", transcriptPath }).stdout.toString()).toContain("skill_select");
-  expect(invoke("post-tool", { sessionId: "session-4", timestamp: 19, toolName: "cairn-skill_select", toolArgs: { ids: ["skill-4"] } }).status).toBe(0);
-  expect(invoke("agent-stop", { sessionId: "session-4", transcriptPath }).stdout.toString()).toContain("brain_search");
-  expect(invoke("post-tool", { sessionId: "session-4", timestamp: 20, toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
-  expect(invoke("post-tool", { sessionId: "session-4", timestamp: 21, toolName: "cairn-skill_review", toolArgs: { id: "skill-4" } }).status).toBe(0);
-  expect(invoke("agent-stop", { sessionId: "session-4", transcriptPath: home }).stdout.toString()).toContain('"decision":"block"');
-  expect(invoke("agent-stop", { sessionId: "session-4", transcriptPath: home }).stdout.toString()).toContain('"decision":"block"');
-  expect(invoke("agent-stop", { sessionId: "session-4", transcriptPath: home }).stdout.toString()).toContain('"decision":"block"');
-  expect(invoke("agent-stop", { sessionId: "session-4", transcriptPath: home }).stdout.toString()).toBe("{}");
 });
 
 test("system reminder prompts preserve the turn and a genuine user prompt resets it", () => {
@@ -1198,8 +1018,6 @@ test("a transcriptless tool-call subagent leaves skill maintenance to its parent
   expect(invoke("agent-stop", { sessionId, transcriptPath: "" }).stdout.toString()).toBe("{}");
 
   const database = new Database(dbPath);
-  const missedTable = database.query("SELECT 1 present FROM sqlite_master WHERE type='table' AND name='missed_skill_reviews'").get();
-  expect(missedTable ? database.query("SELECT COUNT(*) count FROM missed_skill_reviews").get() : { count: 0 }).toEqual({ count: 0 });
   const state = database.query("SELECT pending_review_ids pendingIds, pending_reviews pending FROM lifecycle_turns WHERE scope=?")
     .get(`copilot:${sessionId}`) as { pendingIds: string; pending: string };
   expect(JSON.parse(state.pendingIds)).toEqual([]);
@@ -1310,9 +1128,7 @@ test("agentStop clears selected skill state after the visible deliverable", () =
   const completion = invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString();
   expect(completion).toContain('"decision":"block"');
   expect(completion).toContain("completed every requested task");
-  expect(reviewJobs(dbPath)).toEqual([]);
   expect(invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString()).toBe("{}");
-  expect(reviewJobs(dbPath)).toEqual([]);
   const database = new Database(dbPath);
   const state = database.query("SELECT pending_review_ids AS pending FROM lifecycle_turns WHERE scope = ?")
     .get("copilot:fallback-session") as { pending: string };
@@ -1359,7 +1175,6 @@ test("removed review enqueue never touches the legacy inflight path", () => {
   expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString())
     .toContain("completed every requested task");
   expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString()).toBe("{}");
-  expect(reviewJobs(dbPath)).toEqual([]);
   rmSync(blockedInflight, { force: true });
 });
 

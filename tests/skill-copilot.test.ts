@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildArgs, capPrompt, writeLearnMcpConfig, runCopilot } from "../src/skill/copilot";
-import { learnerBackend, runLearner } from "../src/skill/runner";
 import { extractRunCopilot } from "../src/skill/transcript-copilot";
 
 const after = (a: string[], flag: string) => a[a.indexOf(flag) + 1];
@@ -70,34 +69,6 @@ test("writeLearnMcpConfig bakes the capture env into a cairnlearn server", () =>
 
 // ── learnerBackend: explicit env wins; runLearner dispatches ──────────────────────────────────────
 
-test("learnerBackend honors CAIRN_LEARN_BACKEND, and defaults to copilot when unset", () => {
-  const prev = process.env.CAIRN_LEARN_BACKEND;
-  try {
-    process.env.CAIRN_LEARN_BACKEND = "copilot";
-    expect(learnerBackend()).toBe("copilot");
-    process.env.CAIRN_LEARN_BACKEND = "claude";
-    expect(learnerBackend()).toBe("claude");
-    delete process.env.CAIRN_LEARN_BACKEND; // unset -> auto-probe prefers copilot (this machine has it)
-    expect(learnerBackend()).toBe("copilot");
-  } finally {
-    if (prev === undefined) delete process.env.CAIRN_LEARN_BACKEND; else process.env.CAIRN_LEARN_BACKEND = prev;
-  }
-});
-
-test("runLearner routes to copilot and surfaces the real failure reason", async () => {
-  const prevB = process.env.CAIRN_LEARN_BACKEND, prevBin = process.env.CAIRN_COPILOT_BIN;
-  process.env.CAIRN_LEARN_BACKEND = "copilot";
-  process.env.CAIRN_COPILOT_BIN = "cairn-no-such-copilot-xyz"; // cannot spawn
-  try {
-    const r = await runLearner("hello");
-    expect(r.ok).toBe(false);
-    expect(r.error).toBeTruthy();              // the reason is reported, not swallowed
-  } finally {
-    if (prevB === undefined) delete process.env.CAIRN_LEARN_BACKEND; else process.env.CAIRN_LEARN_BACKEND = prevB;
-    if (prevBin === undefined) delete process.env.CAIRN_COPILOT_BIN; else process.env.CAIRN_COPILOT_BIN = prevBin;
-  }
-});
-
 test("runCopilot surfaces a spawn failure instead of throwing", async () => {
   const prev = process.env.CAIRN_COPILOT_BIN;
   process.env.CAIRN_COPILOT_BIN = "cairn-no-such-copilot-xyz";
@@ -139,42 +110,29 @@ test("extractRunCopilot pulls request, output, and tool sequence for the cycle",
   expect(run?.transcript).toContain("[TOOL] brain_search");        // tool inline, cairn- prefix stripped
 });
 
-test("extractRunCopilot scopes the transcript to the current cycle (since the last skill_review)", () => {
+test("extractRunCopilot scopes the transcript to the latest human turn", () => {
   const p = events([
     userMsg("first task"),
     asstMsg("first answer"),
-    { type: "tool.execution_start", data: { toolName: "cairn-skill_review", arguments: '{"label":"a"}' } }, // cycle 1 closed
     userMsg("second task"),
     asstMsg("second answer"),
-    { type: "tool.execution_start", data: { toolName: "cairn-skill_review", arguments: '{"label":"b"}' } }, // cycle 2 = current
   ]);
   const run = extractRunCopilot(p);
-  expect(run?.request).toBe("second task");                 // the CURRENT cycle only
+  expect(run?.request).toBe("second task");                 // the CURRENT turn only
   expect(run?.output).toBe("second answer");
   expect(run?.transcript).toContain("[USER] second task");
-  expect(run?.transcript).not.toContain("first task");      // the earlier cycle is excluded entirely
-});
-
-test("extractRunCopilot gives every back-to-back selected skill the same deliverable cycle", () => {
-  const p = events([
-    userMsg("audit and test the lifecycle"),
-    asstMsg("FINAL DELIVERABLE"),
-    { type: "tool.execution_start", data: { toolName: "cairn-skill_review", arguments: { id: "skill-a" } } },
-    { type: "tool.execution_start", data: { toolName: "cairn-skill_review", arguments: { id: "skill-b" } } },
-  ]);
-  expect(extractRunCopilot(p, "skill-a")?.output).toContain("FINAL DELIVERABLE");
-  expect(extractRunCopilot(p, "skill-b")?.output).toContain("FINAL DELIVERABLE");
+  expect(run?.transcript).not.toContain("first task");      // the earlier turn is excluded entirely
 });
 
 test("extractRunCopilot shows tool calls inline with their skill hint (no separate section)", () => {
   const p = events([
     userMsg("fix this PR description"),
-    { type: "tool.execution_start", data: { toolName: "cairn-skill_search", arguments: '{"task":"pr description"}' } },
+    { type: "tool.execution_start", data: { toolName: "cairn-skill_select", arguments: '{"ids":["pr description"]}' } },
     { type: "tool.execution_start", data: { toolName: "cairn-skill_create", arguments: '{"label":"pr description"}' } },
     asstMsg("Rewrote the description."),
   ]);
   const run = extractRunCopilot(p);
-  expect(run?.transcript).toContain('[TOOL] skill_search "pr description"');
+  expect(run?.transcript).toContain("[TOOL] skill_select");
   expect(run?.transcript).toContain('[TOOL] skill_create "pr description"');
 });
 
@@ -276,7 +234,7 @@ test("extractRunCopilot tags a subagent's tool calls distinctly from the main ag
   expect(run!.output).toContain("REVIEW: 3 real issues");          // subagent's critique is captured as output
 });
 
-test("extractRunCopilot can capture the latest turn without a skill_review marker", () => {
+test("extractRunCopilot captures the latest turn, ignoring earlier ones", () => {
   const path = join(tmpdir(), `cairn-copilot-fallback-${randomUUID()}.jsonl`);
   writeFileSync(path, [
     JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Earlier task" } }),
@@ -286,7 +244,7 @@ test("extractRunCopilot can capture the latest turn without a skill_review marke
     JSON.stringify({ type: "user.message", timestamp: 5, data: { content: "<cairn-internal>reminder</cairn-internal>" } }),
     JSON.stringify({ type: "assistant.message", timestamp: 6, data: { content: "Reminder response that is not the deliverable" } }),
   ].join("\n"));
-  const run = extractRunCopilot(path, "", { latestTurn: true })!;
+  const run = extractRunCopilot(path)!;
   expect(run.request).toBe("Current task");
   expect(run.output).toContain("Current deliverable");
   expect(run.output).toContain("Reminder response");
@@ -302,7 +260,7 @@ test("extractRunCopilot keeps a final deliverable written after a system continu
     JSON.stringify({ type: "user.message", timestamp: 3, data: { content: "<system_notification>Shell completed.</system_notification>" } }),
     JSON.stringify({ type: "assistant.message", timestamp: 4, data: { content: "Both fixes are complete and live." } }),
   ].join("\n"));
-  const run = extractRunCopilot(path, "", { latestTurn: true })!;
+  const run = extractRunCopilot(path)!;
   expect(run.request).toBe("Complete both fixes.");
   expect(run.output).toContain("Both fixes are complete and live.");
   expect(run.transcript).not.toContain("system_notification");
@@ -323,7 +281,7 @@ test("extractRunCopilot grades durable file content instead of only the final st
     JSON.stringify({ type: "assistant.message", timestamp: 3, data: { content: "Created `AUDIT.md`." } }),
   ].join("\n"));
 
-  const run = extractRunCopilot(path, "", { latestTurn: true })!;
+  const run = extractRunCopilot(path)!;
 
   expect(run.output).toContain("Created `AUDIT.md`.");
   expect(run.output).toContain("DURABLE ARTIFACT WRITES");
@@ -347,7 +305,7 @@ test("extractRunCopilot grades a durable Harness task result instead of only its
     JSON.stringify({ type: "assistant.message", timestamp: 3, data: { content: "Completed deliverable." } }),
   ].join("\n"));
 
-  const run = extractRunCopilot(path, "", { latestTurn: true })!;
+  const run = extractRunCopilot(path)!;
 
   expect(run.output).toContain("Completed deliverable.");
   expect(run.output).toContain("Harness task completion result");
@@ -360,18 +318,10 @@ test("extractRunCopilot uses host-owned review context instead of injected user 
     JSON.stringify({ type: "user.message", timestamp: "2026-07-18T18:00:00.000Z", data: { content: "Earlier coding task" } }),
     JSON.stringify({ type: "assistant.message", timestamp: "2026-07-18T18:00:01.000Z", data: { content: "Earlier answer" } }),
     JSON.stringify({ type: "user.message", timestamp: "2026-07-18T18:08:31.000Z", data: { content: "Clean up errored tasks" } }),
-    JSON.stringify({ type: "assistant.message", timestamp: "2026-07-18T18:08:32.000Z", data: { content: "Cleaning through the API." } }),
-    JSON.stringify({ type: "user.message", timestamp: "2026-07-18T18:09:02.000Z", data: { content: "Injected unrelated benchmark task" } }),
     JSON.stringify({ type: "assistant.message", timestamp: "2026-07-18T18:10:00.000Z", data: { content: "Cleanup result." } }),
-    JSON.stringify({
-      type: "cairn.review_context",
-      timestamp: "2026-07-18T18:10:01.000Z",
-      data: { requests: ["Clean up errored tasks"], startTs: Date.parse("2026-07-18T18:08:30.000Z") },
-    }),
   ].join("\n"));
-  const run = extractRunCopilot(path, "", { latestTurn: true })!;
+  const run = extractRunCopilot(path)!;
   expect(run.request).toBe("Clean up errored tasks");
   expect(run.output).toContain("Cleanup result.");
   expect(run.transcript).not.toContain("Earlier coding task");
-  expect(run.transcript).not.toContain("Injected unrelated benchmark task");
 });

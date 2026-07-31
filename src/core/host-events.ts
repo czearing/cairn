@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "./config";
 import { db, type Db } from "./db";
+import { HOST_EVENTS_SCHEMA } from "./host-events.schema";
 
 type HostName = "copilot" | "claude";
 
@@ -31,22 +32,7 @@ export function localEventsDatabase(): Database | Db {
   d.run("PRAGMA journal_mode = WAL");
   d.run("PRAGMA busy_timeout = 5000");
   d.run("PRAGMA synchronous = NORMAL");
-  d.run(`CREATE TABLE IF NOT EXISTS host_events (
-    event_key TEXT PRIMARY KEY,
-    host TEXT NOT NULL,
-    hook_type TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT '',
-    turn_id TEXT NOT NULL DEFAULT '',
-    agent_id TEXT NOT NULL DEFAULT '',
-    tool_call_id TEXT NOT NULL DEFAULT '',
-    tool_name TEXT NOT NULL DEFAULT '',
-    event_timestamp TEXT NOT NULL DEFAULT '',
-    raw_json TEXT NOT NULL,
-    recorded_ts INTEGER NOT NULL
-  )`);
-  d.run("CREATE INDEX IF NOT EXISTS host_events_session_recorded ON host_events(host,session_id,recorded_ts,event_key)");
-  d.run("CREATE INDEX IF NOT EXISTS host_events_tool_call ON host_events(host,tool_call_id,hook_type)");
-  d.run("CREATE INDEX IF NOT EXISTS host_events_agent ON host_events(host,session_id,agent_id,recorded_ts)");
+  for (const sql of HOST_EVENTS_SCHEMA) d.run(sql);
   connection = d;
   return d;
 }

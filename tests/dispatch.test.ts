@@ -194,8 +194,7 @@ test("Claude fails open when a resumed model manifest exposes no Cairn tools", a
   rmSync(transcriptPath, { force: true });
 });
 
-test("Claude Stop clears selected skill state without queuing a reviewer", async () => {
-  const { listReviewJobs } = await import("../src/skill/review-queue");
+test("Claude Stop clears selected skill state", async () => {
   const skillId = randomUUID();
   const sessionId = `claude-auto-review-${randomUUID()}`;
   const transcriptPath = join(tmpdir(), `${sessionId}.jsonl`);
@@ -224,7 +223,6 @@ test("Claude Stop clears selected skill state without queuing a reviewer", async
   expect(blocked.reason).toContain("one compact **Cairn** receipt");
   expect(blocked.reason).toContain("step N: action/result");
   expect(blocked.reason).toContain("none — steps remained accurate and complete");
-  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
 
   await fire({
     hook_event_name: "PostToolUse",
@@ -239,6 +237,5 @@ test("Claude Stop clears selected skill state without queuing a reviewer", async
     transcript_path: transcriptPath,
     stop_hook_active: true,
   })).toBe("");
-  expect(listReviewJobs().filter((job) => job.sessionId === sessionId)).toHaveLength(0);
   rmSync(transcriptPath, { force: true });
 });

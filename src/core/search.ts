@@ -1,5 +1,5 @@
 import { db, searchChangeToken } from "./db";
-import { config } from "./config";
+import { config, searchOptionsFromConfig } from "./config";
 import { embed, embedModel, cosine } from "./embed";
 import { edgesForSources } from "./graph";
 import { toNeuron, vecText, SELECT } from "./neurons";
@@ -302,11 +302,5 @@ export async function search(
 }
 
 function configuredSearchOptions(): SearchOptions {
-  return {
-    relevanceThreshold: config.relevanceThreshold,
-    relativeFloor: config.relativeFloor,
-    searchGraphBoost: config.searchGraphBoost,
-    expandSubtree: config.expandSubtree,
-    vectorIndexThreshold: config.vectorIndexThreshold,
-  };
+  return searchOptionsFromConfig();
 }

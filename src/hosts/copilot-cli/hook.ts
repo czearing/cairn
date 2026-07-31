@@ -47,7 +47,7 @@ import {
   resetLifecycle,
   updateLifecycle,
 } from "../../skill/lifecycle";
-import { skillResultId, skillResultIds, skillResultNoMatch } from "../../skill/tool-result";
+import { skillResultId, skillResultIds, selectedSkillIds } from "../../skill/tool-result";
 import { postToolPromptFiles } from "../../inject/post-tool";
 import { completionContinuationEnabled } from "./completion-gate";
 
@@ -409,7 +409,7 @@ export async function runCopilotHook(): Promise<void> {
   }
 
   if (mode === "subagent-stop") {
-    const { latestCopilotAgentId } = await import("../../skill/review-queue");
+    const { latestCopilotAgentId } = await import("../../skill/transcript-copilot");
     const stoppingAgentId = agentId || latestCopilotAgentId(transcriptPath, agentName);
     const stateId = turnScope(sessionId, stoppingAgentId);
     resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
@@ -564,12 +564,7 @@ export async function runCopilotHook(): Promise<void> {
       }
       if (isNativeSkillTool(toolName) && toolResultSucceeded(result)) next.skillUsed = true;
       if (isTool(toolName, "skill_select") && succeeded) {
-        const requested = Array.isArray(args.ids)
-          ? args.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
-          : [];
-        const noMatch = skillResultNoMatch(result)
-          || (requested.length === 1 && requested[0]!.toLowerCase() === "none");
-        const ids = noMatch ? [] : skillResultIds(result).length ? skillResultIds(result) : requested;
+        const { ids, noMatch } = selectedSkillIds(args.ids, result);
         if (ids.length || noMatch) {
           next.skillUsed = true;
           next.selectedSkillIds = [...new Set([...next.selectedSkillIds, ...ids])];
@@ -730,7 +725,7 @@ export async function runCopilotHook(): Promise<void> {
       try {
         const { extractRunCopilot } = await import("../../skill/transcript-copilot");
         const { analyzeSkillReceipt, expectedSkillSteps } = await import("../../core/skill-receipt");
-        const output = extractRunCopilot(transcriptPath, "", { latestTurn: true })?.output;
+        const output = extractRunCopilot(transcriptPath)?.output;
         if (output) {
           const receipt = analyzeSkillReceipt(output, expectedSkillSteps(st.selectedSkillIds));
           const receiptKey = `${hostEventKey || `${sessionId}:${st.turnSeq}`}:skill-receipt`;

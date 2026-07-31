@@ -30,7 +30,6 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@github/copilot-sdk": "^1.0.6",
     "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "libsql": "^0.5.29",

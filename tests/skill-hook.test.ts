@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { extractRun } from "../src/skill/transcript";
-import { skillsEnabled, skillCreate, skillLearn, skillLoad, skillSelect, skillsExist } from "../src/skill/hook";
+import { skillsEnabled, skillCreate, skillLoad, skillSelect, skillsExist } from "../src/skill/hook";
 import { categorize, reindexSkill } from "../src/skill/match";
 import { setMasterPrompt, setSkillMetadata, skillCatalog } from "../src/skill/store";
 import { db } from "../src/core/db";
@@ -14,49 +14,34 @@ beforeEach(() => {
   try { db().run("DELETE FROM skill_runs"); } catch { /* not created */ }
 });
 
-test("extractRun scopes the DETAIL to the current cycle (since the last skill_review)", () => {
+test("extractRun scopes the DETAIL to the latest human turn", () => {
   const p = join(tmpdir(), `cairn-tx-${process.pid}.jsonl`);
   writeFileSync(p, [
     JSON.stringify({ type: "user", message: { content: "write me a haiku about frost" } }),
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "first frost on the gate" }] } }),
-    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "skill_review", input: { label: "haiku" } }] } }), // cycle 1 closed
     JSON.stringify({ type: "user", message: { content: "make it sharper" } }),
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "the whole field holds still" }] } }),
-    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "skill_review", input: { label: "haiku" } }] } }), // cycle 2 = current
   ].join("\n"));
   const run = extractRun(p);
   rmSync(p, { force: true });
-  expect(run!.request).toBe("make it sharper");                       // the CURRENT cycle's prompt
+  expect(run!.request).toBe("make it sharper");                       // the CURRENT turn's prompt
   expect(run!.output).toBe("the whole field holds still");
   expect(run!.transcript).toContain("[USER] make it sharper");
-  expect(run!.transcript).not.toContain("write me a haiku about frost"); // earlier cycle excluded entirely
+  expect(run!.transcript).not.toContain("write me a haiku about frost"); // earlier turn excluded entirely
   expect(run!.transcript).toContain("TRANSCRIPT (oldest first):");
-});
-
-test("extractRun gives every back-to-back selected skill the same deliverable cycle", () => {
-  const p = join(tmpdir(), `cairn-multi-review-${process.pid}.jsonl`);
-  writeFileSync(p, [
-    JSON.stringify({ type: "user", message: { content: "audit and test the lifecycle" } }),
-    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "FINAL DELIVERABLE" }] } }),
-    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "skill_review", input: { id: "skill-a" } }] } }),
-    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "skill_review", input: { id: "skill-b" } }] } }),
-  ].join("\n"));
-  expect(extractRun(p, "skill-a")?.output).toContain("FINAL DELIVERABLE");
-  expect(extractRun(p, "skill-b")?.output).toContain("FINAL DELIVERABLE");
-  rmSync(p, { force: true });
 });
 
 test("extractRun shows tool calls inline with their skill hint, timestamped (one transcript)", () => {
   const p = join(tmpdir(), `cairn-tx2-${process.pid}.jsonl`);
   writeFileSync(p, [
     JSON.stringify({ type: "user", timestamp: "2026-07-01T09:30:00.000Z", message: { content: "fix this PR description" } }),
-    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T09:30:05.000Z", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_search", input: { task: "pr description" } }] } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T09:30:05.000Z", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_select", input: { task: "pr description" } }] } }),
     JSON.stringify({ type: "assistant", timestamp: "2026-07-01T09:30:06.000Z", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_create", input: { label: "pr description" } }] } }),
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Rewrote the description." }] } }),
   ].join("\n"));
   const run = extractRun(p);
   rmSync(p, { force: true });
-  expect(run!.transcript).toContain('[TOOL] skill_search "pr description"');
+  expect(run!.transcript).toContain('[TOOL] skill_select "pr description"');
   expect(run!.transcript).toContain('[TOOL] skill_create "pr description"');
   expect(run!.transcript).toContain("[09:30:00] [USER] fix this PR description"); // timestamped user line
 });
@@ -120,13 +105,13 @@ test("extractRun records timestamps and tool calls in the process transcript", (
   const p = join(tmpdir(), `cairn-ts-${process.pid}.jsonl`);
   writeFileSync(p, [
     JSON.stringify({ type: "user", timestamp: "2026-06-29T14:03:09.000Z", message: { content: "write me a haiku" } }),
-    JSON.stringify({ type: "assistant", timestamp: "2026-06-29T14:03:12.500Z", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_search", input: { task: "haiku" } }] } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-06-29T14:03:12.500Z", message: { content: [{ type: "tool_use", name: "mcp__cairn__skill_select", input: { task: "haiku" } }] } }),
     JSON.stringify({ type: "assistant", timestamp: "2026-06-29T14:03:40.000Z", message: { content: [{ type: "text", text: "first frost on the gate" }] } }),
   ].join("\n"));
   const run = extractRun(p);
   rmSync(p, { force: true });
   expect(run!.transcript).toContain("14:03:09");                     // message timestamps are captured (HH:MM:SS)
-  expect(run!.transcript).toContain("skill_search");                 // tool calls are captured, not stripped
+  expect(run!.transcript).toContain("skill_select");                 // tool calls are captured, not stripped
   expect(run!.output).toBe("first frost on the gate");               // tool-only frame has no text, so output is the story
 });
 
@@ -169,7 +154,7 @@ test("extractRun latestTurn keeps a final deliverable after a system continuatio
     JSON.stringify({ type: "user", message: { content: "<system_notification>Shell completed.</system_notification>" } }),
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Both fixes are complete and live." }] } }),
   ].join("\n"));
-  const run = extractRun(p, "", { latestTurn: true })!;
+  const run = extractRun(p)!;
   rmSync(p, { force: true });
   expect(run.request).toBe("Complete both fixes.");
   expect(run.output).toContain("Both fixes are complete and live.");
@@ -197,7 +182,7 @@ test("the skill layer is ON by default, and CAIRN_SKILLS env overrides both ways
   expect(skillsEnabled()).toBe(true);                       // explicit opt-in
   process.env.CAIRN_SKILLS = "0";
   expect(skillsEnabled()).toBe(false);                      // explicit opt-out wins
-  expect(() => skillLearn("/some/path.jsonl", "haiku")).not.toThrow(); // disabled -> no-op, never throws
+  expect(skillLoad("any-id")).toBeNull();                   // disabled -> no-op, never throws
   if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
 });
 

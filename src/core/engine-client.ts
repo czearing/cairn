@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { config } from "./config";
+import { config, searchOptionsFromConfig } from "./config";
 import { embedModel } from "./embed";
 import {
   ENGINE_PROTOCOL_VERSION,
@@ -27,13 +27,7 @@ const identity = (): EngineIdentity => ({
   dbPath: config.dbPath,
   model: embedModel(),
 });
-const searchOptions = () => ({
-  relevanceThreshold: config.relevanceThreshold,
-  relativeFloor: config.relativeFloor,
-  searchGraphBoost: config.searchGraphBoost,
-  expandSubtree: config.expandSubtree,
-  vectorIndexThreshold: config.vectorIndexThreshold,
-});
+const searchOptions = searchOptionsFromConfig;
 const fingerprint = (): string => engineFingerprint(identity());
 const lockfile = (): string => engineLockfile(fingerprint());
 const startfile = (): string => engineStartfile(fingerprint());

@@ -1,4 +1,5 @@
 import type { Stmt } from "./db";
+import { HOST_EVENTS_SCHEMA } from "./host-events.schema";
 
 type Query = (sql: string) => Stmt;
 type Exec = (sql: string) => void;
@@ -27,25 +28,7 @@ const ENGINE_TABLES = [
     table_name TEXT NOT NULL,
     source_seq INTEGER NOT NULL
   )`,
-  `CREATE TABLE IF NOT EXISTS host_events (
-    event_key TEXT PRIMARY KEY,
-    host TEXT NOT NULL,
-    hook_type TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT '',
-    turn_id TEXT NOT NULL DEFAULT '',
-    agent_id TEXT NOT NULL DEFAULT '',
-    tool_call_id TEXT NOT NULL DEFAULT '',
-    tool_name TEXT NOT NULL DEFAULT '',
-    event_timestamp TEXT NOT NULL DEFAULT '',
-    raw_json TEXT NOT NULL,
-    recorded_ts INTEGER NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS host_events_session_recorded
-    ON host_events(host, session_id, recorded_ts, event_key)`,
-  `CREATE INDEX IF NOT EXISTS host_events_tool_call
-    ON host_events(host, tool_call_id, hook_type)`,
-  `CREATE INDEX IF NOT EXISTS host_events_agent
-    ON host_events(host, session_id, agent_id, recorded_ts)`,
+  ...HOST_EVENTS_SCHEMA,
 ];
 
 const TRIGGERS = [

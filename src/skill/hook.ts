@@ -1,5 +1,4 @@
 import { skillsEnabled } from "../core/config";
-import { learnFromTranscript } from "./learn";
 import { getSkill, skillCatalog, visibleSkill } from "./store";
 import { skillCatalogSnapshot } from "./catalog";
 
@@ -108,16 +107,4 @@ export async function skillEdit(id: string, master: string, explanation?: string
 export function skillsExist(): boolean {
   if (!skillsEnabled()) return false;
   try { return skillCatalog().length > 0; } catch { return false; }
-}
-
-// Fire the background learner over a finished turn's transcript, for the skill the agent DECLARED via
-// skill_review. `skillId` is the id of that skill (from skill_select or skill_create). Returns whether it fired.
-export function skillLearn(
-  transcriptPath: string | undefined,
-  skillId: string,
-  backend = "claude",
-  sessionId = ""
-): boolean {
-  if (!skillsEnabled() || !transcriptPath || !skillId.trim()) return false;
-  try { return learnFromTranscript(transcriptPath, skillId, { backend, sessionId }); } catch { return false; }
 }

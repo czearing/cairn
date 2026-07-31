@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import type { CairnConfig, EmbedProvider } from "./config.types";
+import type { SearchOptions } from "./search.types";
 
 const uiPort = Number(process.env.CAIRN_UI_PORT || "3737");
 
@@ -63,6 +64,17 @@ export const config: CairnConfig = {
   uiPort,
   uiUrl: process.env.CAIRN_UI_URL || `http://localhost:${uiPort}`,
 };
+
+/** The search tuning knobs as currently configured. Read live (not captured once) so an env or config
+ *  change takes effect immediately, and shared by every caller so the in-process and engine-backed
+ *  search paths can never be tuned differently. */
+export const searchOptionsFromConfig = (): SearchOptions => ({
+  relevanceThreshold: config.relevanceThreshold,
+  relativeFloor: config.relativeFloor,
+  searchGraphBoost: config.searchGraphBoost,
+  expandSubtree: config.expandSubtree,
+  vectorIndexThreshold: config.vectorIndexThreshold,
+});
 
 /** Is the skill-learning layer active? ON by default; CAIRN_SKILLS env wins (1 on / 0 off), else the
  *  per-machine `skills` flag in ~/.cairn/config.json (on unless explicitly set to false). Evaluated live

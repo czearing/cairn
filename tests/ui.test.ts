@@ -34,15 +34,6 @@ test("serves the app.js asset", async () => {
   expect(res.headers.get("content-type")).toContain("javascript");
 });
 
-test("/api/review-jobs exposes queue status", async () => {
-  const { clearReviewJobs, enqueueReview } = await import("../src/skill/review-queue");
-  clearReviewJobs();
-  enqueueReview({ id: "ui-job", skillId: "ui-skill", transcriptPath: "C:\\ui.jsonl", backend: "copilot", now: 123 });
-  const res = await fetch(`http://localhost:${server.port}/api/review-jobs`);
-  const data = (await res.json()) as { jobs: { id: string; status: string }[] };
-  expect(data.jobs).toContainEqual(expect.objectContaining({ id: "ui-job", status: "pending" }));
-});
-
 test("/api/skills hides pending skills", async () => {
   const { deleteSkill, putSkill, setSkillMetadata } = await import("../src/skill/store");
   putSkill({ id: "ui-learned", task: "learned", masterPrompt: "1. do the work", ts: 1 }, [1, 0]);

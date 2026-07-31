@@ -298,10 +298,10 @@ async function main(): Promise<void> {
         if (transcriptPath) {
           try {
             const { extractRun } = await import("../../skill/transcript");
-            const { analyzeSkillReceipt, expectedSkillSteps } = await import("../../core/skill-receipt");
+            const { analyzeSkillReceipt, requiredStepCitations } = await import("../../core/skill-receipt");
             const output = extractRun(transcriptPath)?.output;
             if (output) {
-              const receipt = analyzeSkillReceipt(output, expectedSkillSteps(state.pendingReviewIds));
+              const receipt = analyzeSkillReceipt(output, requiredStepCitations(state.pendingReviewIds));
               const receiptKey = `${qualityEventKey}:skill-receipt`;
               telemetry.recordTelemetryState({
                 host: "claude", sessionId: session, turnSeq: state.turnSeq,

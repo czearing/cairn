@@ -49,7 +49,9 @@ export function printTelemetryReport(days: number, json = false): void {
   }
   line();
   line(c.bold("Quality & reuse"));
-  line(`completed runs ${quality.runs}  active ${quality.activeRuns}` +
+  line(`completed runs ${quality.runs}` +
+    `${quality.populationRuns > quality.runs ? ` of ${quality.populationRuns} in window` : ""}` +
+    `  active ${quality.activeRuns}` +
     `${quality.oldestActiveMinutes ? ` (oldest ${quality.oldestActiveMinutes}m)` : ""}  ` +
     `progressing ${quality.progressingActiveRuns}  stalled ${quality.stalledActiveRuns}  ` +
     `abandoned ${quality.abandonedRuns}  superseded ${quality.supersededRuns}`);

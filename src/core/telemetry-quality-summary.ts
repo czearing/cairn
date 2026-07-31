@@ -89,10 +89,12 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     WHERE started_ts>=? AND run_class='human' ORDER BY started_ts DESC LIMIT 1`)
     .get(sinceTs) as { version?: string; releaseFingerprint?: string } | null) ?? {};
   const latestVersion = latestIdentity.version || "";
-  // Behavior rates are scoped to one release so they stay comparable, but pinning them to the newest
-  // run's version blanks every rate for the whole window after each rebuild. Report the newest release
-  // that actually has a completed sample instead, and surface the gap as an explicit issue.
-  const minimumSample = Math.max(1, Number(process.env.CAIRN_TELEMETRY_MIN_SAMPLE || "1"));
+  // Behavior rates stay scoped to ONE release: that is what lets a fixed outage stop degrading the
+  // verdict, and widening the scope would let an old release's failures re-degrade a healthy one.
+  // The defect was the sample SIZE, not the scoping — a default minimum of 1 pinned rates to whichever
+  // release happened to be newest, so with a release per commit the verdict spoke for a handful of runs
+  // while the window held hundreds. Require a release to carry a real sample before it can speak.
+  const minimumSample = Math.max(1, Number(process.env.CAIRN_TELEMETRY_MIN_SAMPLE || "20"));
   // Prefer the newest release that has a COMPARABLE sample. Selecting on completed runs alone lands
   // on a release whose only runs are release-mismatched, which reports comparable runs 0 and hides a
   // usable older sample; fall back to any completed sample so a brand-new release still reports.
@@ -104,7 +106,22 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   const sampleVersion = comparableSampleVersion || (db.query(`SELECT version FROM telemetry_runs
     WHERE started_ts>=? AND run_class='human' AND status='completed' AND version!=''
     GROUP BY version HAVING COUNT(*)>=? ORDER BY MAX(started_ts) DESC LIMIT 1`)
-    .get(sinceTs, minimumSample) as { version?: string } | null)?.version || latestVersion;
+    .get(sinceTs, minimumSample) as { version?: string } | null)?.version
+    || (db.query(`SELECT r.version FROM telemetry_runs r
+      WHERE r.started_ts>=? AND r.run_class='human' AND r.status='completed' AND r.version!=''
+        AND ${comparableRuntimeSql}
+      GROUP BY r.version ORDER BY COUNT(*) DESC, MAX(r.started_ts) DESC LIMIT 1`)
+      .get(sinceTs) as { version?: string } | null)?.version
+    || (db.query(`SELECT version FROM telemetry_runs
+      WHERE started_ts>=? AND run_class='human' AND status='completed' AND version!=''
+      GROUP BY version ORDER BY COUNT(*) DESC, MAX(started_ts) DESC LIMIT 1`)
+      .get(sinceTs) as { version?: string } | null)?.version
+    || latestVersion;
+  // A scope is only trustworthy next to the population it was drawn from. Report both so a sample of
+  // six can never again read as if it were the whole window.
+  const populationRuns = (db.query(`SELECT COUNT(*) AS runs FROM telemetry_runs
+    WHERE started_ts>=? AND run_class='human' AND status='completed'`)
+    .get(sinceTs) as { runs: number }).runs;
   const staleCutoff = Date.now()
     - Math.max(60_000, Number(process.env.CAIRN_TELEMETRY_STALE_RUN_MS || "1800000"));
   const stalledCutoff = Date.now()
@@ -280,6 +297,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   return {
     latestVersion,
     sampleVersion,
+    populationRuns,
     latestReleaseFingerprint: latestIdentity.releaseFingerprint || "",
     runs: runs.closed,
     activeRuns: runs.active,
@@ -331,7 +349,7 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
 
 function empty(): QualitySummary {
   return {
-    latestVersion: "", sampleVersion: "", latestReleaseFingerprint: "",
+    latestVersion: "", sampleVersion: "", populationRuns: 0, latestReleaseFingerprint: "",
     runs: 0, activeRuns: 0, abandonedRuns: 0, supersededRuns: 0, oldestActiveMinutes: 0,
     progressingActiveRuns: 0, stalledActiveRuns: 0, oldestActiveActivityMinutes: 0,
     completedRate: 0, workflowRate: 0, toolFailures: 0,

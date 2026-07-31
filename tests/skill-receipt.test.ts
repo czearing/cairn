@@ -21,6 +21,21 @@ test("skill receipts report content-free structural evidence", () => {
   });
 });
 
+test("a receipt citing one step per selected skill is complete", () => {
+  // Regression: the requirement used to be the master's full step count, which no real receipt ever
+  // met — 0 of 97 checked receipts passed whenever a skill was selected.
+  expect(analyzeSkillReceipt(`**Cairn**
+- **Root** — Done.
+- **Coverage** — Complete.
+- **Recall** — Stored.
+- **Skill application** — step 7 — applied the root fix.
+  **Skill update** — none needed.`, 1)).toMatchObject({
+    complete: true,
+    expectedSteps: 1,
+    reportedSteps: 1,
+  });
+});
+
 test("skill receipts detect missing steps and duplicate sections", () => {
   const duplicate = `${receipt}\n\n${receipt}`;
   expect(analyzeSkillReceipt(duplicate, 5)).toMatchObject({

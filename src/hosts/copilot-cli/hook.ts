@@ -418,6 +418,13 @@ export async function runCopilotHook(): Promise<void> {
   }
 
   if (mode === "user-prompt") {
+    // A source checkout drifts past the install-time hook label on every commit, so telemetry stamps
+    // stale releases and hook/runtime attribution diverges mid-session. Heal it once per turn.
+    try {
+      const { healReleaseLabel } = await import("../../core/runtime-identity");
+      const { releaseVersion } = await import("../../core/release");
+      healReleaseLabel(releaseVersion);
+    } catch { /* a stale release label must never block a turn */ }
     // TURN-START injection, exactly like Claude Code's UserPromptSubmit: emit the full workflow so it is
     // in front of the model BEFORE it acts, on EVERY prompt — this is what keeps it from decaying or being
     // dropped on compaction. Empirically verified on Copilot CLI v1.0.66: userPromptSubmitted additionalContext
@@ -724,10 +731,10 @@ export async function runCopilotHook(): Promise<void> {
     if (transcriptPath) {
       try {
         const { extractRunCopilot } = await import("../../skill/transcript-copilot");
-        const { analyzeSkillReceipt, expectedSkillSteps } = await import("../../core/skill-receipt");
+        const { analyzeSkillReceipt, requiredStepCitations } = await import("../../core/skill-receipt");
         const output = extractRunCopilot(transcriptPath)?.output;
         if (output) {
-          const receipt = analyzeSkillReceipt(output, expectedSkillSteps(st.selectedSkillIds));
+          const receipt = analyzeSkillReceipt(output, requiredStepCitations(st.selectedSkillIds));
           const receiptKey = `${hostEventKey || `${sessionId}:${st.turnSeq}`}:skill-receipt`;
           recordTelemetryState({
             host: "copilot", sessionId, turnSeq: st.turnSeq,

@@ -23,8 +23,10 @@ interface ReleaseComparison {
 
 export interface QualitySummary {
   latestVersion: string;
-  /** Newest release with a completed sample; behavior rates are scoped to it. */
+  /** Newest release with a completed sample; it labels the behavior scope. */
   sampleVersion: string;
+  /** Completed human runs in the window, regardless of release; the population `runs` is drawn from. */
+  populationRuns: number;
   latestReleaseFingerprint: string;
   runs: number;
   activeRuns: number;

@@ -55,6 +55,10 @@ export function telemetryQualityVerdict(
     issues.push(
       `Behavior rates are from ${behavior.sampleVersion}; current release ${behavior.latestVersion} has no completed runs yet.`
     );
+  } else if (behavior.populationRuns > behavior.runs * 4 && behavior.runs) {
+    issues.push(
+      `Behavior rates cover ${behavior.runs} of ${behavior.populationRuns} completed runs in the window; releases are too fragmented to sample.`
+    );
   }
   if (behavior.runs && visibilityFailureRate > 0) {
     issues.push(

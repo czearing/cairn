@@ -31,6 +31,9 @@ export const releaseVersion = sourceRevision
   ? `${packageVersion}+${sourceRevision.slice(0, 7)}`
   : packageVersion;
 
+/** True when the release was derived from a live git checkout rather than a frozen install label. */
+export const sourceRevisionAvailable = Boolean(sourceRevision);
+
 export const promptFingerprint = (value: string): string => hash(value);
 
 export const releaseFingerprint = (

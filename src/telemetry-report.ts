@@ -21,7 +21,7 @@ export function printTelemetryReport(days: number, json = false): void {
   );
   line(`${report.impact.prompts} prompts  ${report.totals.events} events  ` +
     `${report.impact.sessions} sessions  ${report.totals.failures} failures`);
-  line(`MCP ${report.engine.version || "runtime"} schemas  ` +
+  line(`MCP ${report.engine.toolSchemas.version || report.engine.version || "runtime"} schemas  ` +
     `${tokens(report.engine.toolSchemas.estimatedTokens)} tokens  ` +
     `${tokens(report.engine.toolSchemas.chars)} chars  ${report.engine.toolSchemas.tools} tools`);
   for (const stage of report.engine.searchStages) {

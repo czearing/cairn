@@ -30,6 +30,7 @@ export interface EngineSummary {
     tools: number;
     chars: number;
     estimatedTokens: number;
+    version: string;
     definitions: ToolSchemaMetric[];
   };
   searchStages: SearchStageMetric[];
@@ -41,7 +42,7 @@ export function telemetryEngineSummary(days: number): EngineSummary {
   const empty = {
     releaseFingerprint: "",
     version: "",
-    toolSchemas: { tools: 0, chars: 0, estimatedTokens: 0, definitions: [] },
+    toolSchemas: { tools: 0, chars: 0, estimatedTokens: 0, version: "", definitions: [] },
     searchStages: [],
     engineTransports: [],
     parity: { checks: 0, mismatches: 0 },
@@ -57,15 +58,30 @@ export function telemetryEngineSummary(days: number): EngineSummary {
       version: string;
     } | null;
   if (!latest?.releaseFingerprint) return empty;
-  const definitions = db.query(`WITH ranked AS (
-      SELECT tool_name AS toolName,context_chars AS chars,
-        estimated_tokens AS estimatedTokens,
-        ROW_NUMBER() OVER (PARTITION BY tool_name ORDER BY ts DESC) AS position
-      FROM telemetry_events
-      WHERE kind='tool_schema' AND release_fingerprint=? AND ts>=?
-    )
-    SELECT toolName,chars,estimatedTokens FROM ranked WHERE position=1
-    ORDER BY estimatedTokens DESC,toolName`).all(latest.releaseFingerprint, sinceTs) as ToolSchemaMetric[];
+  // Tool schemas are emitted once per MCP server start, so their release fingerprint lags the newest
+  // engine activity whenever the server has not restarted. Anchoring them on the shared fingerprint
+  // silently reported zero tools; give them their own anchor and disclose the release they describe.
+  const schemaAnchor = db.query(`SELECT release_fingerprint AS releaseFingerprint,version
+    FROM telemetry_events
+    WHERE kind='tool_schema' AND ts>=?
+    ORDER BY ts DESC LIMIT 1`).get(sinceTs) as {
+      releaseFingerprint: string;
+      version: string;
+    } | null;
+  const definitions = schemaAnchor?.releaseFingerprint
+    ? db.query(`WITH ranked AS (
+        SELECT tool_name AS toolName,context_chars AS chars,
+          estimated_tokens AS estimatedTokens,
+          ROW_NUMBER() OVER (PARTITION BY tool_name ORDER BY ts DESC) AS position
+        FROM telemetry_events
+        WHERE kind='tool_schema' AND release_fingerprint=? AND ts>=?
+      )
+      SELECT toolName,chars,estimatedTokens FROM ranked WHERE position=1
+      ORDER BY estimatedTokens DESC,toolName`).all(
+        schemaAnchor.releaseFingerprint,
+        sinceTs,
+      ) as ToolSchemaMetric[]
+    : [];
   const searchStages = db.query(`SELECT source AS stage,COUNT(*) AS events,
       COALESCE(SUM(duration_ms),0) AS totalDurationMs,
       ROUND(COALESCE(AVG(duration_ms),0),1) AS averageDurationMs,
@@ -99,6 +115,7 @@ export function telemetryEngineSummary(days: number): EngineSummary {
       tools: definitions.length,
       chars: definitions.reduce((total, item) => total + item.chars, 0),
       estimatedTokens: definitions.reduce((total, item) => total + item.estimatedTokens, 0),
+      version: schemaAnchor?.version || "",
       definitions,
     },
     searchStages,

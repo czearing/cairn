@@ -348,3 +348,38 @@ test("usage CLI prints decision metrics directly", () => {
   expect(output).toContain("Quality & reuse");
   expect(output).toContain("cross-session reuse");
 });
+
+test("tool schemas survive a newer engine event from a different release", async () => {
+  const { recordTelemetry } = await import("../src/core/telemetry");
+  const { telemetryEngineSummary } = await import("../src/core/telemetry-engine-summary");
+  const marker = randomUUID();
+  expect(recordTelemetry({
+    kind: "tool_schema",
+    source: "mcp",
+    toolName: `cairn-probe-${marker}`,
+    contextChars: 400,
+    itemCount: 1,
+    eventKey: `schema-${marker}`,
+    releaseFingerprint: "schema-fingerprint",
+    version: "schema-release",
+    runClass: "human",
+    ts: Date.now(),
+  })).toBe(true);
+  expect(recordTelemetry({
+    kind: "engine_transport",
+    source: "daemon",
+    toolName: "search",
+    durationMs: 5,
+    eventKey: `transport-${marker}`,
+    releaseFingerprint: "newer-fingerprint",
+    version: "newer-release",
+    runClass: "human",
+    ts: Date.now() + 5_000,
+  })).toBe(true);
+
+  const engine = telemetryEngineSummary(1);
+  expect(engine.releaseFingerprint).toBe("newer-fingerprint");
+  expect(engine.toolSchemas.version).toBe("schema-release");
+  expect(engine.toolSchemas.tools).toBeGreaterThan(0);
+  expect(engine.toolSchemas.chars).toBeGreaterThan(0);
+});

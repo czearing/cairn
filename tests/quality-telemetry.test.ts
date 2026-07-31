@@ -179,7 +179,7 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
   }, {
     releaseFingerprint: "engine-release",
     version: "engine-release",
-    toolSchemas: { tools: 0, chars: 0, estimatedTokens: 0, definitions: [] },
+    toolSchemas: { tools: 0, chars: 0, estimatedTokens: 0, version: "", definitions: [] },
     searchStages: [],
     engineTransports: [{
       source: "daemon",

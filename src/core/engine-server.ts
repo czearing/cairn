@@ -15,6 +15,7 @@ import {
   type EngineResponse,
 } from "./engine-protocol";
 import { warmSearchEngine, search } from "./search";
+import { createRequestDeduper } from "./request-dedupe";
 import {
   createWithDuplicateCandidates,
   link,
@@ -51,60 +52,46 @@ async function equivalentServerAlive(): Promise<boolean> {
 if (await equivalentServerAlive()) process.exit(0);
 
 const token = randomBytes(32).toString("hex");
-const responses = new Map<string, EngineResponse>();
-const MAX_RESPONSES = 1000;
-const remember = (requestId: string, response: EngineResponse): EngineResponse => {
-  responses.set(requestId, response);
-  if (responses.size > MAX_RESPONSES) responses.delete(responses.keys().next().value!);
-  return response;
-};
+// Keyed by requestId so a client retry rejoins its original request instead of racing it.
+const responses = createRequestDeduper<EngineResponse>(1000);
 
-async function execute(request: EngineRequest): Promise<EngineResponse> {
-  const prior = responses.get(request.requestId);
-  if (prior) return prior;
-  try {
-    switch (request.operation) {
-      case "search":
-        return remember(request.requestId, {
-          ok: true,
-          result: await search(
-            request.payload.query,
-            request.telemetry ?? null,
-            request.payload.options,
-          ),
-        });
-      case "create":
-        return remember(request.requestId, {
-          ok: true,
-          result: await createWithDuplicateCandidates(
-            request.payload.text,
-            request.payload.edges,
-            request.payload.id,
-          ),
-        });
-      case "mutate":
-        return remember(request.requestId, {
-          ok: true,
-          result: await mutate(request.payload.id, request.payload.patch),
-        });
-      case "delete":
-        return remember(request.requestId, {
-          ok: true,
-          result: remove(request.payload.id),
-        });
-      case "link":
-        link(request.payload.a, request.payload.b);
-        return remember(request.requestId, { ok: true, result: true });
-      case "unlink":
-        unlink(request.payload.a, request.payload.b);
-        return remember(request.requestId, { ok: true, result: true });
+function execute(request: EngineRequest): Promise<EngineResponse> {
+  return responses.run(request.requestId, async (): Promise<EngineResponse> => {
+    try {
+      switch (request.operation) {
+        case "search":
+          return {
+            ok: true,
+            result: await search(
+              request.payload.query,
+              request.telemetry ?? null,
+              request.payload.options,
+            ),
+          };
+        case "create":
+          return {
+            ok: true,
+            result: await createWithDuplicateCandidates(
+              request.payload.text,
+              request.payload.edges,
+              request.payload.id,
+            ),
+          };
+        case "mutate":
+          return { ok: true, result: await mutate(request.payload.id, request.payload.patch) };
+        case "delete":
+          return { ok: true, result: remove(request.payload.id) };
+        case "link":
+          link(request.payload.a, request.payload.b);
+          return { ok: true, result: true };
+        case "unlink":
+          unlink(request.payload.a, request.payload.b);
+          return { ok: true, result: true };
+      }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
-  } catch (error) {
-    return remember(request.requestId, {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  });
 }
 
 let idle: ReturnType<typeof setTimeout> | undefined;

@@ -7,6 +7,19 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and 
 
 ### Fixed
 
+- `brain_create` failed with `UNIQUE constraint failed: neurons.id` and lost the thought. The engine
+  client mints the node id before it sends the request and retries every non-search operation when its
+  2s request timeout expires, so a slow embed left the original attempt still running when its own
+  retry arrived. Both layers guarding against that were check-then-act with an `await` in the gap: the
+  daemon remembered only *settled* responses, so an in-flight request looked absent, and `neurons`
+  checked `get(id)` before the embed and inserted after it. Two copies of one create therefore cleared
+  both checks and raced to the same primary key. Creation now claims the id atomically with
+  `ON CONFLICT(id) DO NOTHING` and the loser reads back the winner's row, so a duplicate delivery
+  yields the one node both callers asked for instead of an error — this also covers the cross-process
+  race between the daemon and a client that fell back to in-process work, which no cache can see. The
+  request cache now stores the in-flight promise, so a retry joins its original rather than re-running
+  it, and a rejected request is evicted so one transient failure is not cached permanently.
+
 - Quality rates spoke for a release that had been superseded for days, and its long-repaired outage
   held the banner at OUTAGE. A minimum sample of 20 runs was used to *select* which release supplied
   the rates, so when no release met it — and under a release per commit none does, since recent

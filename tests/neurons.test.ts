@@ -149,3 +149,33 @@ test("create/mutate: strip control and null bytes from text fields", async () =>
   const k = await N.create("line1" + NL + "line2" + TAB + "end" + CR);
   expect(k.text).toBe("line1" + NL + "line2" + TAB + "end" + CR);
 });
+
+// A retry that carries the id the client already minted is a duplicate DELIVERY of one create, not a
+// second thought. The existence check is separated from the write by the embed await, so both calls
+// clear it; the write itself must be the thing that claims the id.
+test("a concurrent create with the same id yields one node instead of a constraint error", async () => {
+  const id = crypto.randomUUID();
+  const settled = await Promise.allSettled([
+    N.createWithDuplicateCandidates("Which reverb tail needs a parametric generator?", ["a"], id),
+    N.createWithDuplicateCandidates("Which reverb tail needs a parametric generator?", ["a"], id),
+  ]);
+  expect(settled.map((entry) => entry.status)).toEqual(["fulfilled", "fulfilled"]);
+  for (const entry of settled) {
+    expect((entry as PromiseFulfilledResult<{ neuron: { id: string } }>).value.neuron.id).toBe(id);
+  }
+  const rows = DB.db().query("SELECT id FROM neurons WHERE id=?").all(id) as unknown[];
+  expect(rows.length).toBe(1);
+  // The winner's content must survive; the loser must not blank the edges it also asked for.
+  expect(N.get(id)?.edges).toEqual(["a"]);
+});
+
+test("a repeated create with the same id returns the stored node without a second row", async () => {
+  const id = crypto.randomUUID();
+  const first = await N.createWithDuplicateCandidates("How does a room decay differ from a drum tail?", [], id);
+  await N.mutate(id, { answer: "Source decay is onset-synchronous.", citation: "probe" });
+  const again = await N.createWithDuplicateCandidates("How does a room decay differ from a drum tail?", [], id);
+  expect(again.neuron.id).toBe(first.neuron.id);
+  // Replaying the create must not erase an answer recorded between the original and the retry.
+  expect(again.neuron.answer).toBe("Source decay is onset-synchronous.");
+  expect((DB.db().query("SELECT id FROM neurons WHERE id=?").all(id) as unknown[]).length).toBe(1);
+});

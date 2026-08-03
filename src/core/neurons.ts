@@ -140,14 +140,29 @@ async function createResult(
       // Candidate lookup is advisory; creation remains available if the index cannot be inspected.
     }
   }
-  db().transaction(() => {
+  // The existence check above cannot make creation idempotent on its own: it is separated from the
+  // write by the embed await, which is the slowest step here. The client mints the id before the
+  // request and retries non-search operations on timeout, so a slow embed puts two calls carrying the
+  // same id past the check concurrently. Claim the id atomically instead and let the loser read back
+  // the winner's row, which also covers the cross-process race the daemon's cache cannot see.
+  const inserted = db().transaction(() => {
     prepareVectorIndex(model, vec.byteLength / 4);
-    db().query("INSERT INTO neurons (id, text, answer, citation, edges, embedding, embedding_model) VALUES (?, ?, '', '', '[]', ?, ?)")
-      .run(id, safeText, vec, model);
+    const claim = db().query(
+      `INSERT INTO neurons (id, text, answer, citation, edges, embedding, embedding_model)
+       VALUES (?, ?, '', '', '[]', ?, ?) ON CONFLICT(id) DO NOTHING`,
+    ).run(id, safeText, vec, model);
+    if (!claim.changes) return false;
     replaceEdges(id, clean);
     for (const target of clean) addEdge(target, id);
     writeNeuronVector(id, model, vec);
+    return true;
   });
+  if (!inserted) {
+    // Losing the race is a duplicate delivery of one create, not a second thought. Return the stored
+    // row so both callers observe the same node rather than surfacing a constraint error to the agent.
+    const winner = get(id);
+    if (winner) return { neuron: winner, nearDuplicates: [] };
+  }
   return {
     neuron: { id, text: safeText, answer: "", citation: "", edges: clean },
     nearDuplicates,

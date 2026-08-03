@@ -122,6 +122,13 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   const populationRuns = (db.query(`SELECT COUNT(*) AS runs FROM telemetry_runs
     WHERE started_ts>=? AND run_class='human' AND status='completed'`)
     .get(sinceTs) as { runs: number }).runs;
+  // The sample can fall back to an older release for two very different reasons: the current release
+  // has produced nothing yet, or it has produced runs but fewer than the minimum. Report which.
+  const latestVersionRuns = latestVersion
+    ? (db.query(`SELECT COUNT(*) AS runs FROM telemetry_runs
+        WHERE started_ts>=? AND run_class='human' AND status='completed' AND version=?`)
+        .get(sinceTs, latestVersion) as { runs: number }).runs
+    : 0;
   const staleCutoff = Date.now()
     - Math.max(60_000, Number(process.env.CAIRN_TELEMETRY_STALE_RUN_MS || "1800000"));
   const stalledCutoff = Date.now()
@@ -298,6 +305,8 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     latestVersion,
     sampleVersion,
     populationRuns,
+    latestVersionRuns,
+    minimumSample,
     latestReleaseFingerprint: latestIdentity.releaseFingerprint || "",
     runs: runs.closed,
     activeRuns: runs.active,
@@ -349,7 +358,8 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
 
 function empty(): QualitySummary {
   return {
-    latestVersion: "", sampleVersion: "", populationRuns: 0, latestReleaseFingerprint: "",
+    latestVersion: "", sampleVersion: "", populationRuns: 0, latestVersionRuns: 0,
+    minimumSample: 0, latestReleaseFingerprint: "",
     runs: 0, activeRuns: 0, abandonedRuns: 0, supersededRuns: 0, oldestActiveMinutes: 0,
     progressingActiveRuns: 0, stalledActiveRuns: 0, oldestActiveActivityMinutes: 0,
     completedRate: 0, workflowRate: 0, toolFailures: 0,

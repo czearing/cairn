@@ -744,6 +744,24 @@ test("behavior rates prefer the newest release that has a comparable sample", ()
   expect(quality.mixedRuntimeRuns).toBe(0);
 });
 
+test("the sample-fallback issue distinguishes no runs from too few runs", () => {
+  const base = { ...qualitySummary(7), sampleVersion: "1.0.0+old", latestVersion: "1.0.0+new" };
+  const engine = { version: "1.0.0+new", engineTransports: [], parity: { checks: 0, mismatches: 0 } };
+
+  const noRuns = telemetryQualityVerdict(
+    { ...base, latestVersionRuns: 0, minimumSample: 20 } as never, engine as never,
+  );
+  expect(noRuns.issues.some((issue) => issue.includes("has no completed runs yet"))).toBe(true);
+
+  // The release HAS runs; claiming it has none was a hardcoded cause the code never verified.
+  const tooFew = telemetryQualityVerdict(
+    { ...base, latestVersionRuns: 4, minimumSample: 20 } as never, engine as never,
+  );
+  expect(tooFew.issues.some((issue) => issue.includes("has no completed runs yet"))).toBe(false);
+  expect(tooFew.issues.some((issue) =>
+    issue.includes("only 4 completed run(s), below the 20 needed to report"))).toBe(true);
+});
+
 test("quality verdict reports no receipt compliance issue without samples", () => {
   const empty = telemetryQualityVerdict(
     { ...qualitySummary(7), runs: 0, skillReceiptChecks: 0, skillReceiptComplianceRate: 0,

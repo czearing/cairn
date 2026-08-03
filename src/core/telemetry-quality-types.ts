@@ -27,6 +27,10 @@ export interface QualitySummary {
   sampleVersion: string;
   /** Completed human runs in the window, regardless of release; the population `runs` is drawn from. */
   populationRuns: number;
+  /** Completed human runs on `latestVersion`; distinguishes "no runs yet" from "too few to qualify". */
+  latestVersionRuns: number;
+  /** Completed runs a release must carry before its rates may speak for the window. */
+  minimumSample: number;
   latestReleaseFingerprint: string;
   runs: number;
   activeRuns: number;

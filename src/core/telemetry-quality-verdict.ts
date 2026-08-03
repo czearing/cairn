@@ -53,7 +53,9 @@ export function telemetryQualityVerdict(
   if (!behavior.runs) issues.push("No completed human behavior samples.");
   if (behavior.sampleVersion && behavior.latestVersion && behavior.sampleVersion !== behavior.latestVersion) {
     issues.push(
-      `Behavior rates are from ${behavior.sampleVersion}; current release ${behavior.latestVersion} has no completed runs yet.`
+      behavior.latestVersionRuns
+        ? `Behavior rates are from ${behavior.sampleVersion}; current release ${behavior.latestVersion} has only ${behavior.latestVersionRuns} completed run(s), below the ${behavior.minimumSample} needed to report.`
+        : `Behavior rates are from ${behavior.sampleVersion}; current release ${behavior.latestVersion} has no completed runs yet.`
     );
   } else if (behavior.populationRuns > behavior.runs * 4 && behavior.runs) {
     issues.push(

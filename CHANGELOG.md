@@ -7,6 +7,19 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and 
 
 ### Fixed
 
+- Quality rates spoke for a release that had been superseded for days, and its long-repaired outage
+  held the banner at OUTAGE. A minimum sample of 20 runs was used to *select* which release supplied
+  the rates, so when no release met it — and under a release per commit none does, since recent
+  releases get 3 to 4 runs each — selection fell through to `ORDER BY COUNT(*) DESC` and pinned to the
+  largest sample, which is always the oldest. The stale release's visibility failures then combined
+  with an absolute `visibilityFailures > 0` outage trigger to make the verdict unfixable by shipping a
+  fix: no amount of healthy new runs could displace it. Sample size is now a disclosure rather than a
+  gate — the newest release with comparable completed runs supplies the rates, and a thin sample is
+  reported as `N completed run(s) of M in the window` with an explicit issue — and the outage trigger
+  is a rate (`CAIRN_OUTAGE_VISIBILITY_RATE`, default 25%) so one stray failure degrades a release
+  instead of declaring a total outage. Per-release scoping is unchanged, so a repaired release still
+  cannot be dragged down by an older one's faults.
+
 - A read-only investigation was classified as a code-changing turn by its own scratch file, tripling
   the brain-node floor it had to clear. Reading data a native tool cannot reach — querying the
   telemetry SQLite database, for example — requires writing a probe script, running it, and deleting

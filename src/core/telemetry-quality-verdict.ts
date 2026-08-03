@@ -54,12 +54,15 @@ export function telemetryQualityVerdict(
   if (behavior.sampleVersion && behavior.latestVersion && behavior.sampleVersion !== behavior.latestVersion) {
     issues.push(
       behavior.latestVersionRuns
-        ? `Behavior rates are from ${behavior.sampleVersion}; current release ${behavior.latestVersion} has only ${behavior.latestVersionRuns} completed run(s), below the ${behavior.minimumSample} needed to report.`
+        ? `Behavior rates are from ${behavior.sampleVersion}; current release ${behavior.latestVersion} has ${behavior.latestVersionRuns} completed run(s), none with comparable release attribution.`
         : `Behavior rates are from ${behavior.sampleVersion}; current release ${behavior.latestVersion} has no completed runs yet.`
     );
-  } else if (behavior.populationRuns > behavior.runs * 4 && behavior.runs) {
+  }
+  // A thin sample is a confidence caveat, not a reason to report someone else's release. Say so.
+  if (behavior.runs && behavior.runs < behavior.minimumSample) {
     issues.push(
-      `Behavior rates cover ${behavior.runs} of ${behavior.populationRuns} completed runs in the window; releases are too fragmented to sample.`
+      `Behavior rates cover ${behavior.runs} completed run(s) of ${behavior.populationRuns} in the ` +
+      `window, below the ${behavior.minimumSample} wanted for a stable rate.`
     );
   }
   if (behavior.runs && visibilityFailureRate > 0) {
@@ -114,8 +117,15 @@ export function telemetryQualityVerdict(
   let status: QualityVerdict["status"] = "healthy";
   if (!behavior.runs || !engine.version) status = "insufficient_data";
   if (issues.length && status === "healthy") status = "degraded";
+  // Rates are already scoped to the newest release, so a fixed fault stops counting as soon as the next
+  // release produces runs. Within that scope the trigger is a RATE: a single stray visibility failure in
+  // an otherwise healthy sample is a degradation, not a total outage, and an absolute count let one
+  // transient glitch hold the banner at OUTAGE for as long as that release kept supplying the sample.
+  const outageVisibilityRate = Math.max(
+    1, Number(process.env.CAIRN_OUTAGE_VISIBILITY_RATE || "25")
+  );
   if (
-    behavior.visibilityFailures > 0
+    (behavior.runs && visibilityFailureRate >= outageVisibilityRate)
     || (behavior.runs >= 3 && behavior.workflowRate === 0)
   ) {
     status = "outage";

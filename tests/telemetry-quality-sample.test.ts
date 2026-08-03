@@ -2,9 +2,10 @@ import { expect, test } from "bun:test";
 import { telemetryDatabase } from "../src/core/telemetry-schema";
 import { telemetryQualitySummary } from "../src/core/telemetry-quality-summary";
 
-// Behavior rates stay scoped to one release so a fixed outage stops degrading the verdict. The defect
-// was the sample SIZE: a minimum of one run pinned rates to whichever release was newest, so with a
-// release per commit the verdict spoke for a handful of runs while the window held hundreds.
+// Behavior rates stay scoped to one release so a fixed outage stops degrading the verdict. Sample SIZE
+// was then made a selection gate, which reintroduced staleness: with a release per commit, "the largest
+// sample" is always the oldest one, so a months-old release spoke for the current one indefinitely and
+// its long-fixed outage held the banner. Size is now a DISCLOSURE, not a gate.
 function seedRuns(releases: { version: string; runs: number }[]): void {
   const db = telemetryDatabase();
   if (!db) throw new Error("telemetry disabled");
@@ -23,27 +24,29 @@ function seedRuns(releases: { version: string; runs: number }[]): void {
   }
 }
 
-test("a newest release with a token sample does not speak for the window", () => {
+test("the newest release speaks for itself even when an older release has more runs", () => {
   seedRuns([
     { version: "0.1.0+aaaaaaa", runs: 40 },
     { version: "0.1.0+bbbbbbb", runs: 2 },
   ]);
   const summary = telemetryQualitySummary(7);
-  // The 2-run release is newest but cannot carry the rates; the 40-run release does.
-  expect(summary.sampleVersion).toBe("0.1.0+aaaaaaa");
-  expect(summary.runs).toBe(40);
+  // Deferring to the 40-run release would report rates the current code never produced.
+  expect(summary.sampleVersion).toBe("0.1.0+bbbbbbb");
+  expect(summary.runs).toBe(2);
   expect(summary.populationRuns).toBe(42);
+  // The thin sample must still be visible to the reader rather than silently swapped away.
+  expect(summary.runs).toBeLessThan(summary.minimumSample);
 });
 
-test("with no release meeting the minimum, the largest sample speaks and coverage is disclosed", () => {
+test("a small newest sample is disclosed against the full window population", () => {
   seedRuns([
     { version: "0.1.0+ccccccc", runs: 6 },
     { version: "0.1.0+ddddddd", runs: 3 },
     { version: "0.1.0+eeeeeee", runs: 2 },
   ]);
   const summary = telemetryQualitySummary(7);
-  expect(summary.sampleVersion).toBe("0.1.0+ccccccc");
-  expect(summary.runs).toBe(6);
+  expect(summary.sampleVersion).toBe("0.1.0+eeeeeee");
+  expect(summary.runs).toBe(2);
   expect(summary.populationRuns).toBe(11);
 });
 

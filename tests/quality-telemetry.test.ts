@@ -744,7 +744,7 @@ test("behavior rates prefer the newest release that has a comparable sample", ()
   expect(quality.mixedRuntimeRuns).toBe(0);
 });
 
-test("the sample-fallback issue distinguishes no runs from too few runs", () => {
+test("the sample-fallback issue distinguishes no runs from unattributable runs", () => {
   const base = { ...qualitySummary(7), sampleVersion: "1.0.0+old", latestVersion: "1.0.0+new" };
   const engine = { version: "1.0.0+new", engineTransports: [], parity: { checks: 0, mismatches: 0 } };
 
@@ -753,13 +753,45 @@ test("the sample-fallback issue distinguishes no runs from too few runs", () => 
   );
   expect(noRuns.issues.some((issue) => issue.includes("has no completed runs yet"))).toBe(true);
 
-  // The release HAS runs; claiming it has none was a hardcoded cause the code never verified.
-  const tooFew = telemetryQualityVerdict(
+  // The release HAS runs; claiming it has none was a hardcoded cause the code never verified. Sample
+  // size is no longer the reason for falling back, so the message must name the real one.
+  const unattributed = telemetryQualityVerdict(
     { ...base, latestVersionRuns: 4, minimumSample: 20 } as never, engine as never,
   );
-  expect(tooFew.issues.some((issue) => issue.includes("has no completed runs yet"))).toBe(false);
-  expect(tooFew.issues.some((issue) =>
-    issue.includes("only 4 completed run(s), below the 20 needed to report"))).toBe(true);
+  expect(unattributed.issues.some((issue) => issue.includes("has no completed runs yet"))).toBe(false);
+  expect(unattributed.issues.some((issue) =>
+    issue.includes("4 completed run(s), none with comparable release attribution"))).toBe(true);
+});
+
+test("a thin sample is disclosed instead of deferring to a larger stale release", () => {
+  // The defect: minimumSample gated SELECTION, so a fresh release with real runs could never supply
+  // rates and a months-old 60-run release spoke for it indefinitely. Sample size is a caveat now.
+  const verdict = telemetryQualityVerdict(
+    {
+      ...qualitySummary(7), runs: 1, populationRuns: 60, minimumSample: 20,
+      sampleVersion: "1.0.0+new", latestVersion: "1.0.0+new", latestVersionRuns: 1,
+    } as never,
+    { version: "1.0.0+new", engineTransports: [], parity: { checks: 0, mismatches: 0 } } as never,
+  );
+  expect(verdict.issues.some((issue) => issue.includes("Behavior rates are from"))).toBe(false);
+  expect(verdict.issues.some((issue) =>
+    issue.includes("cover 1 completed run(s) of 60 in the window, below the 20"))).toBe(true);
+});
+
+test("one stray visibility failure degrades a release instead of declaring an outage", () => {
+  // An absolute count held the banner at OUTAGE for as long as that release supplied the sample.
+  const base = {
+    ...qualitySummary(7), runs: 20, populationRuns: 20, minimumSample: 20,
+    sampleVersion: "1.0.0+new", latestVersion: "1.0.0+new", latestVersionRuns: 20, workflowRate: 100,
+  };
+  const engine = { version: "1.0.0+new", engineTransports: [], parity: { checks: 0, mismatches: 0 } };
+
+  const stray = telemetryQualityVerdict({ ...base, visibilityFailures: 1 } as never, engine as never);
+  expect(stray.status).toBe("degraded");
+  expect(stray.issues.some((issue) => issue.includes("invisible in 1/20"))).toBe(true);
+
+  const widespread = telemetryQualityVerdict({ ...base, visibilityFailures: 5 } as never, engine as never);
+  expect(widespread.status).toBe("outage");
 });
 
 test("quality verdict reports no receipt compliance issue without samples", () => {

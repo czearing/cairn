@@ -94,6 +94,15 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   // The defect was the sample SIZE, not the scoping — a default minimum of 1 pinned rates to whichever
   // release happened to be newest, so with a release per commit the verdict spoke for a handful of runs
   // while the window held hundreds. Require a release to carry a real sample before it can speak.
+  // A minimum sample must never decide WHICH release speaks, only how much confidence to advertise.
+  // Requiring 20 runs before a release could carry the rates looked like a quality control, but under a
+  // release-per-commit cadence it is unreachable: measured live, only 3 of 19 releases in a 7-day window
+  // ever reached 20 and all three were old, so selection fell through to the LARGEST sample and pinned
+  // every rate to a stale release — hiding whether the newest fixes worked, which is the one thing the
+  // report exists to show. Scoping stays per-release, because that is what lets a fixed outage stop
+  // degrading the verdict and stops an old release's failures re-degrading a healthy one. The sliver
+  // problem the threshold was meant to solve is a DISCLOSURE problem, so the sample size is reported
+  // beside the rates and an explicit issue is raised while the sample is thin.
   const minimumSample = Math.max(1, Number(process.env.CAIRN_TELEMETRY_MIN_SAMPLE || "20"));
   // Prefer the newest release that has a COMPARABLE sample. Selecting on completed runs alone lands
   // on a release whose only runs are release-mismatched, which reports comparable runs 0 and hides a
@@ -101,21 +110,12 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   const comparableSampleVersion = (db.query(`SELECT r.version FROM telemetry_runs r
     WHERE r.started_ts>=? AND r.run_class='human' AND r.status='completed' AND r.version!=''
       AND ${comparableRuntimeSql}
-    GROUP BY r.version HAVING COUNT(*)>=? ORDER BY MAX(r.started_ts) DESC LIMIT 1`)
-    .get(sinceTs, minimumSample) as { version?: string } | null)?.version || "";
+    GROUP BY r.version ORDER BY MAX(r.started_ts) DESC LIMIT 1`)
+    .get(sinceTs) as { version?: string } | null)?.version || "";
   const sampleVersion = comparableSampleVersion || (db.query(`SELECT version FROM telemetry_runs
     WHERE started_ts>=? AND run_class='human' AND status='completed' AND version!=''
-    GROUP BY version HAVING COUNT(*)>=? ORDER BY MAX(started_ts) DESC LIMIT 1`)
-    .get(sinceTs, minimumSample) as { version?: string } | null)?.version
-    || (db.query(`SELECT r.version FROM telemetry_runs r
-      WHERE r.started_ts>=? AND r.run_class='human' AND r.status='completed' AND r.version!=''
-        AND ${comparableRuntimeSql}
-      GROUP BY r.version ORDER BY COUNT(*) DESC, MAX(r.started_ts) DESC LIMIT 1`)
-      .get(sinceTs) as { version?: string } | null)?.version
-    || (db.query(`SELECT version FROM telemetry_runs
-      WHERE started_ts>=? AND run_class='human' AND status='completed' AND version!=''
-      GROUP BY version ORDER BY COUNT(*) DESC, MAX(started_ts) DESC LIMIT 1`)
-      .get(sinceTs) as { version?: string } | null)?.version
+    GROUP BY version ORDER BY MAX(started_ts) DESC LIMIT 1`)
+    .get(sinceTs) as { version?: string } | null)?.version
     || latestVersion;
   // A scope is only trustworthy next to the population it was drawn from. Report both so a sample of
   // six can never again read as if it were the whole window.

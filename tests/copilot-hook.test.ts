@@ -17,6 +17,8 @@ import {
   stopDecision,
   requiredBrainNodes,
   countsAsExecution,
+  changesDurableState,
+  scratchOnlyShellCommand,
   workflowActionDecision,
   failedExecutionDisprovesSkill,
 } from "../src/hosts/copilot-cli/hook";
@@ -1215,4 +1217,26 @@ test("brain node floor scales with execution and keeps fail-closed invariants", 
     ...resolved, brainSearched: false, brainCreatedCount: 0, brainAnsweredCount: 0,
     rootSynthesized: false, minimumBrainNodes: requiredBrainNodes(0),
   })).toEqual({ file: "turn-reminder.md" });
+});
+
+test("a scratch probe that reads data does not raise the decomposition floor", () => {
+  const probe = "$code | Out-File -Encoding utf8 audit4.ts; bun run audit4.ts; Remove-Item audit4.ts";
+  // The fail-closed action gate must still see the write, or an unfinished workflow could smuggle edits.
+  expect(countsAsExecution("powershell", { command: probe })).toBe(true);
+  // The floor must not: nothing outlived the command, so the turn changed nothing.
+  expect(scratchOnlyShellCommand(probe)).toBe(true);
+  expect(changesDurableState("powershell", { command: probe })).toBe(false);
+
+  // Writes that outlive the command remain durable work.
+  expect(changesDurableState("powershell", { command: "Set-Content src/app.ts 'x'" })).toBe(true);
+  expect(changesDurableState("powershell", { command: "echo hi > out.txt" })).toBe(true);
+  expect(changesDurableState("edit")).toBe(true);
+  // Deleting a real file is not a scratch probe: it creates nothing to offset.
+  expect(changesDurableState("powershell", { command: "Remove-Item C:\\repo\\keep.txt" })).toBe(true);
+  // A scratch file cannot launder a durable verb in the same command.
+  expect(changesDurableState("powershell", {
+    command: "$c | Out-File t.ts; git commit -m x; Remove-Item t.ts",
+  })).toBe(true);
+  // Pure reads are unchanged.
+  expect(changesDurableState("powershell", { command: "rg pattern src" })).toBe(false);
 });

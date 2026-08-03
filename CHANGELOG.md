@@ -7,6 +7,18 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and 
 
 ### Fixed
 
+- A read-only investigation was classified as a code-changing turn by its own scratch file, tripling
+  the brain-node floor it had to clear. Reading data a native tool cannot reach — querying the
+  telemetry SQLite database, for example — requires writing a probe script, running it, and deleting
+  it, and `Out-File`/`Remove-Item` matched the shell-mutation pattern. The turn was then blocked for
+  having 2 nodes against a floor of 3 despite a complete search, answers, citations and root synthesis,
+  and the only way to clear a quantity floor is to create another node, so the gate built to protect
+  recall pushed toward padded ones — the same pressure `5d5e439` removed for reuse. The fail-closed
+  action gate still treats such a command as a side effect, so an unfinished workflow cannot smuggle
+  edits through a temp file; only the decomposition floor now ignores writes that the same command
+  deletes or that live in a scratch location. This restores the behavior the scaled floor already
+  documented, that "read-only shell probes and views do not count".
+
 - Release comparisons discarded a whole run whenever a single Cairn tool call failed to report its
   runtime release. Missing attribution was treated as proof that the hook and runtime releases
   differed, so runs that were in fact wholly served by one release were thrown away and comparable

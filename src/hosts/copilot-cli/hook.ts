@@ -217,6 +217,42 @@ export function countsAsExecution(toolName: string, args: Record<string, unknown
     && !readOnlyShell;
 }
 
+// Writing a script, running it, and deleting it leaves nothing behind: that is how a shell READS what no
+// native tool can reach — querying SQLite, for instance — not something the turn changed. Such a command
+// must still satisfy countsAsExecution, because the fail-closed action gate has to hold any write until
+// the workflow completes. The decomposition floor asks a different question, "did this turn do work deep
+// enough to need more nodes?", and answering it with a temp file inflates a floor whose only remedy is
+// creating nodes the graph does not need — the same padding pressure 5d5e439 removed for reuse.
+const DURABLE_SHELL_VERB =
+  /\bgit\s+(?:add|commit|push|checkout|switch|reset|clean|merge|rebase|tag)\b|(?:^|[;&|]\s*)(?:move-item|copy-item|rename-item|stop-process|start-process)\b|\baz\s+/i;
+const WRITE_VERB = /(?:^|[;&|]\s*)(?:set-content|add-content|out-file|new-item)\b|(?:^|[^<])>{1,2}(?![>&])/i;
+const REMOVE_VERB = /(?:^|[;&|]\s*)remove-item\b/i;
+const SCRATCH_LOCATION = /\$env:TEMP|%TEMP%|[\\/]tmp[\\/]|[\\/]temp[\\/]|session-state/i;
+
+const fileNames = (text: string): string[] =>
+  [...text.matchAll(/[\w$.:\\/-]*[\w-]+\.[a-z0-9]{1,6}\b/gi)]
+    .map((match) => match[0].toLowerCase().replace(/^.*[\\/]/, ""));
+
+// True when every file the command creates is also deleted by it, or lives in a scratch location.
+export function scratchOnlyShellCommand(command: string): boolean {
+  if (!command || DURABLE_SHELL_VERB.test(command)) return false;
+  const written = new Set<string>();
+  const removed = new Set<string>();
+  for (const statement of command.split(/[;|]|&&/).map((part) => part.trim())) {
+    const target = WRITE_VERB.test(statement) ? written : REMOVE_VERB.test(statement) ? removed : null;
+    if (target) for (const name of fileNames(statement)) target.add(name);
+  }
+  if (!written.size) return false;
+  return [...written].every((name) => removed.has(name) || SCRATCH_LOCATION.test(name));
+}
+
+// Whether a completed tool call did work durable enough to warrant the full decomposition floor.
+export function changesDurableState(toolName: string, args: Record<string, unknown> = {}): boolean {
+  if (!countsAsExecution(toolName, args)) return false;
+  const command = typeof args.command === "string" ? args.command : "";
+  return !scratchOnlyShellCommand(command);
+}
+
 export function workflowActionDecision(
   toolName: string,
   state: WorkflowEvidence,
@@ -547,7 +583,7 @@ export async function runCopilotHook(): Promise<void> {
       const resultId = skillResultId(result);
       if (isCairnMcpTool(toolName)) next.cairnToolAttempted = true;
       if (isCairnMcpTool(toolName) && succeeded) next.cairnToolObserved = true;
-      if (countsAsExecution(toolName, args)) next.executionToolCalls += 1;
+      if (changesDurableState(toolName, args)) next.executionToolCalls += 1;
       if ((isTool(toolName, "brain_search") || isTool(toolName, "brain_mutate")) && succeeded) next.brainUsed = true;
       if (isTool(toolName, "brain_search") && succeeded) {
         next.brainSearched = true;

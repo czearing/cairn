@@ -90,15 +90,21 @@ export async function checks(): Promise<Check[]> {
 
   const auto = autoUpdateEnabled();
   const stamp = readAutoUpdateState();
+  // "Did this machine actually get the fix?" is the question this line has to answer on sight, so it
+  // names the next scheduled check too: a skipped (dirty checkout) or failed install looks identical
+  // to a healthy one if you only report when it last looked.
+  const next = stamp.nextCheckTs ? `; next check ${new Date(stamp.nextCheckTs).toISOString()}` : "";
   const seen = stamp.lastCheckTs
-    ? `last check ${new Date(stamp.lastCheckTs).toISOString()}${stamp.lastStatus ? ` (${stamp.lastStatus}${stamp.lastReason ? `: ${stamp.lastReason}` : ""})` : ""}`
+    ? `last check ${new Date(stamp.lastCheckTs).toISOString()}${stamp.lastStatus ? ` (${stamp.lastStatus}${stamp.lastReason ? `: ${stamp.lastReason}` : ""})` : ""}${stamp.consecutiveFailures ? `; ${stamp.consecutiveFailures} consecutive failure(s), retrying with backoff` : ""}${next}`
     : "no check recorded yet; the next turn will run one";
   out.push({
     name: "Auto-update",
-    ok: auto,
+    ok: auto && stamp.lastStatus !== "skipped" && stamp.lastStatus !== "failed",
     required: false,
     detail: auto ? seen : "disabled; this install will not receive published fixes on its own",
-    fix: 'Re-enable with CAIRN_AUTO_UPDATE=1 or remove "autoUpdate": false from ~/.cairn/config.json.',
+    fix: auto
+      ? "A skipped check means the checkout is dirty or diverged: commit, stash, or push local work so fast-forward can apply."
+      : 'Re-enable with CAIRN_AUTO_UPDATE=1 or remove "autoUpdate": false from ~/.cairn/config.json.',
   });
 
   return out;

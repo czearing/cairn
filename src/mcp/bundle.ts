@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const cairnRoot = resolve(import.meta.dir, "..", "..");
@@ -7,17 +7,38 @@ export const mcpBundle = join(cairnRoot, "dist", "mcp-server.js");
 const engineServerSource = join(cairnRoot, "src", "core", "engine-server.ts");
 let built = false;
 
+const bytes = (path: string): Buffer | null => {
+  try { return readFileSync(path); } catch { return null; }
+};
+
+// Auto-update re-runs the installer on every fast-forward, and the installer rebuilds this bundle.
+// Writing it in place is what wedges live sessions: an already-connected MCP server is executing the
+// very file being replaced, and a running script image is mmap'd, so truncating it under the process
+// takes that connection down mid-session with "Transport closed". Build to a scratch path and swap it
+// in with a rename, which replaces the directory entry while leaving the old inode intact for
+// anything still running it, and skip the swap entirely when the output is byte-identical.
 export async function buildMcpBundle(): Promise<string> {
   if (built) return mcpBundle;
-  mkdirSync(join(cairnRoot, "dist"), { recursive: true });
-  const result = await Bun.build({
-    entrypoints: [mcpSource],
-    target: "bun",
-    outdir: join(cairnRoot, "dist"),
-    naming: "mcp-server.js",
-  });
-  if (!result.success) {
-    throw new Error(`failed to build Cairn MCP runtime: ${result.logs.join("\n")}`);
+  const outdir = join(cairnRoot, "dist");
+  const stagingName = `.mcp-server.${process.pid}.tmp`;
+  const staging = join(outdir, stagingName);
+  mkdirSync(outdir, { recursive: true });
+  try {
+    const result = await Bun.build({
+      entrypoints: [mcpSource],
+      target: "bun",
+      outdir,
+      naming: stagingName,
+    });
+    if (!result.success) {
+      throw new Error(`failed to build Cairn MCP runtime: ${result.logs.join("\n")}`);
+    }
+    const fresh = bytes(staging);
+    if (!fresh) throw new Error("failed to build Cairn MCP runtime: no output produced");
+    const current = existsSync(mcpBundle) ? bytes(mcpBundle) : null;
+    if (!current || !current.equals(fresh)) renameSync(staging, mcpBundle);
+  } finally {
+    try { rmSync(staging, { force: true }); } catch { /* already renamed away */ }
   }
   built = true;
   return mcpBundle;

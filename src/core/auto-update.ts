@@ -15,6 +15,7 @@ import { autoUpdateEnabled } from "./config";
 
 const ROOT = resolve(import.meta.dir, "..", "..");
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
+const RETRY_BASE_MS = 60 * 1000;
 const LOCK_STALE_MS = 15 * 60 * 1000;
 
 type AutoUpdateStatus = "updated" | "current" | "skipped" | "failed";
@@ -24,6 +25,11 @@ interface AutoUpdateState {
   lastRevision: string;
   lastStatus: AutoUpdateStatus | "";
   lastReason: string;
+  /** Consecutive `failed` checks, used to back off instead of burning a whole interval on a blip. */
+  consecutiveFailures: number;
+  /** When the next check becomes due. Distinct from lastCheckTs so a retry can be sooner than the
+   *  interval without lying about when the last check actually ran. */
+  nextCheckTs: number;
 }
 
 interface AutoUpdateResult {
@@ -60,9 +66,14 @@ export function readAutoUpdateState(): AutoUpdateState {
       lastRevision: String(parsed.lastRevision || ""),
       lastStatus: (parsed.lastStatus || "") as AutoUpdateState["lastStatus"],
       lastReason: String(parsed.lastReason || ""),
+      consecutiveFailures: Number(parsed.consecutiveFailures || 0),
+      nextCheckTs: Number(parsed.nextCheckTs || 0),
     };
   } catch {
-    return { lastCheckTs: 0, lastRevision: "", lastStatus: "", lastReason: "" };
+    return {
+      lastCheckTs: 0, lastRevision: "", lastStatus: "", lastReason: "",
+      consecutiveFailures: 0, nextCheckTs: 0,
+    };
   }
 }
 
@@ -72,11 +83,24 @@ function writeAutoUpdateState(state: AutoUpdateState): void {
   writeFileSync(path, JSON.stringify(state));
 }
 
-/** Pure throttle: a check is due once the interval has elapsed, and always on a first or clock-skewed run. */
+/** Pure backoff: a transient failure (no network, a blocked fetch) must not cost a whole interval of
+ *  update latency, but a persistently broken checkout must not be retried every turn either. Doubles
+ *  from one minute and is capped at the normal interval, so backoff can only ever make a check
+ *  SOONER than the steady-state cadence. */
+export function retryDelayMs(consecutiveFailures: number, intervalMs: number): number {
+  if (consecutiveFailures <= 0) return intervalMs;
+  const backoff = RETRY_BASE_MS * 2 ** (consecutiveFailures - 1);
+  return Math.min(intervalMs, backoff);
+}
+
+/** Pure throttle: a check is due once its scheduled time arrives, and always on a first or
+ *  clock-skewed run. Reads nextCheckTs so a backoff retry is honored; falls back to the interval for
+ *  state written before nextCheckTs existed. */
 export function autoUpdateDue(state: AutoUpdateState, now: number, intervalMs: number): boolean {
   if (!state.lastCheckTs) return true;
   if (state.lastCheckTs > now) return true;
-  return now - state.lastCheckTs >= intervalMs;
+  const due = state.nextCheckTs || state.lastCheckTs + intervalMs;
+  return now >= due;
 }
 
 /** Pure policy: only a clean checkout that origin strictly moved ahead of is fast-forwarded. */
@@ -113,8 +137,11 @@ const releaseLock = (): void => { try { rmSync(lockPath(), { force: true }); } c
 export function claimAutoUpdate(now = Date.now()): boolean {
   try {
     const state = readAutoUpdateState();
-    if (!autoUpdateDue(state, now, autoUpdateIntervalMs())) return false;
-    writeAutoUpdateState({ ...state, lastCheckTs: now });
+    const interval = autoUpdateIntervalMs();
+    if (!autoUpdateDue(state, now, interval)) return false;
+    // Reserve a full interval up front so a worker that dies before recording a result cannot make
+    // every turn spawn another one; a real result overwrites this with the right schedule below.
+    writeAutoUpdateState({ ...state, lastCheckTs: now, nextCheckTs: now + interval });
     return true;
   } catch {
     return false;
@@ -172,11 +199,18 @@ export function runAutoUpdate(
 
 export function recordAutoUpdateResult(result: AutoUpdateResult, now = Date.now()): void {
   try {
+    const prior = readAutoUpdateState();
+    const interval = autoUpdateIntervalMs();
+    // Only a hard failure backs off. "skipped" is a standing condition (dirty checkout, not a git
+    // checkout) that a fast retry cannot clear, so it keeps the normal cadence.
+    const consecutiveFailures = result.status === "failed" ? prior.consecutiveFailures + 1 : 0;
     writeAutoUpdateState({
       lastCheckTs: now,
       lastRevision: result.to || result.from,
       lastStatus: result.status,
       lastReason: result.reason,
+      consecutiveFailures,
+      nextCheckTs: now + retryDelayMs(consecutiveFailures, interval),
     });
   } catch { /* the stamp is advisory; a failed write only means an earlier retry */ }
 }

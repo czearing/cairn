@@ -12,11 +12,20 @@ import {
   maybeAutoUpdate,
   readAutoUpdateState,
   recordAutoUpdateResult,
+  retryDelayMs,
   runAutoUpdate,
 } from "../src/core/auto-update";
 
 const HOUR = 60 * 60 * 1000;
-const state = (lastCheckTs: number) => ({ lastCheckTs, lastRevision: "", lastStatus: "" as const, lastReason: "" });
+const MINUTE = 60 * 1000;
+const state = (lastCheckTs: number, overrides: { consecutiveFailures?: number; nextCheckTs?: number } = {}) => ({
+  lastCheckTs,
+  lastRevision: "",
+  lastStatus: "" as const,
+  lastReason: "",
+  consecutiveFailures: overrides.consecutiveFailures ?? 0,
+  nextCheckTs: overrides.nextCheckTs ?? 0,
+});
 
 let dir = "";
 const previousDir = process.env.CAIRN_AUTO_UPDATE_DIR;
@@ -115,6 +124,8 @@ describe("claim and stamp", () => {
       lastRevision: "bbb",
       lastStatus: "updated",
       lastReason: "fast-forwarded to origin/main",
+      consecutiveFailures: 0,
+      nextCheckTs: 42 + HOUR,
     });
   });
 
@@ -179,5 +190,63 @@ describe("runAutoUpdate against a real local origin", () => {
     } finally {
       process.env.CAIRN_AUTO_UPDATE = "0";
     }
+  });
+});
+
+// A transient blip — no network on a laptop lid-open, a blocked fetch, a VPN flap — used to cost a
+// full hour of update latency, because every result stamped lastCheckTs and the throttle only ever
+// asked whether one interval had elapsed. A published fix then sat undelivered for an hour per blip.
+describe("failure backoff", () => {
+  test("a healthy check keeps the normal cadence", () => {
+    expect(retryDelayMs(0, HOUR)).toBe(HOUR);
+  });
+
+  test("a failed check retries in a minute and doubles, never exceeding the interval", () => {
+    expect(retryDelayMs(1, HOUR)).toBe(MINUTE);
+    expect(retryDelayMs(2, HOUR)).toBe(2 * MINUTE);
+    expect(retryDelayMs(3, HOUR)).toBe(4 * MINUTE);
+    // A persistently broken checkout must not be retried every turn forever.
+    expect(retryDelayMs(20, HOUR)).toBe(HOUR);
+    // Backoff can only make a check sooner, never later than the steady-state cadence.
+    for (let n = 1; n <= 20; n++) expect(retryDelayMs(n, HOUR)).toBeLessThanOrEqual(HOUR);
+  });
+
+  test("a fetch failure schedules a fast retry instead of burning the interval", () => {
+    recordAutoUpdateResult({ status: "failed", from: "aaa", to: "", reason: "fetch failed: network" }, 10 * HOUR);
+    const after = readAutoUpdateState();
+    expect(after.consecutiveFailures).toBe(1);
+    expect(after.nextCheckTs).toBe(10 * HOUR + MINUTE);
+    expect(autoUpdateDue(after, 10 * HOUR + MINUTE, HOUR)).toBe(true);
+    // Still throttled before the retry window; a blip must not mean a check every single turn.
+    expect(autoUpdateDue(after, 10 * HOUR + 30_000, HOUR)).toBe(false);
+  });
+
+  test("a success clears the backoff so failures do not accumulate forever", () => {
+    recordAutoUpdateResult({ status: "failed", from: "aaa", to: "", reason: "fetch failed" }, HOUR);
+    recordAutoUpdateResult({ status: "failed", from: "aaa", to: "", reason: "fetch failed" }, 2 * HOUR);
+    expect(readAutoUpdateState().consecutiveFailures).toBe(2);
+    recordAutoUpdateResult({ status: "current", from: "aaa", to: "aaa", reason: "already up to date" }, 3 * HOUR);
+    const healthy = readAutoUpdateState();
+    expect(healthy.consecutiveFailures).toBe(0);
+    expect(healthy.nextCheckTs).toBe(3 * HOUR + HOUR);
+  });
+
+  test("a skipped check keeps the normal cadence because a fast retry cannot clear it", () => {
+    // "local changes present" is a standing condition; retrying every minute would be pure noise.
+    recordAutoUpdateResult({ status: "skipped", from: "aaa", to: "bbb", reason: "local changes present" }, HOUR);
+    const after = readAutoUpdateState();
+    expect(after.consecutiveFailures).toBe(0);
+    expect(after.nextCheckTs).toBe(2 * HOUR);
+  });
+
+  test("state written before nextCheckTs existed still throttles on the interval", () => {
+    expect(autoUpdateDue(state(10 * HOUR), 10 * HOUR + 60_000, HOUR)).toBe(false);
+    expect(autoUpdateDue(state(10 * HOUR), 11 * HOUR, HOUR)).toBe(true);
+  });
+
+  test("a claimed interval reserves a full interval so a dead worker cannot spawn one per turn", () => {
+    expect(claimAutoUpdate(5 * HOUR)).toBe(true);
+    expect(readAutoUpdateState().nextCheckTs).toBe(6 * HOUR);
+    expect(claimAutoUpdate(5 * HOUR + 60_000)).toBe(false);
   });
 });

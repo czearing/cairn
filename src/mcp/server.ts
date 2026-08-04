@@ -20,6 +20,7 @@ import {
 } from "../core/release";
 import { installedReleaseVersion, runtimeMetadata } from "../core/runtime-identity";
 import { warmEngineServer } from "../core/engine-client";
+import { claimWriterRole } from "../core/writer-role";
 import { formatSkillCatalog, skillCatalogSnapshot } from "../skill/catalog";
 import type { Neuron } from "../core/neurons.types";
 import { searchPayload } from "./search-payload";
@@ -30,6 +31,15 @@ import { searchPayload } from "./search-payload";
 // Bun hot reload re-evaluates this module while the connected server remains on globalThis. Each pass
 // refreshes callbacks and schemas in place, so existing host sessions receive new behavior without
 // replacing their stdio connection.
+
+// The MCP surface is the agent's WRITE path (brain_create/mutate/delete). Whatever launched this
+// process — a host CLI started from a shell that exported the flag, or any Cairn reader — must not be
+// able to demote it to a read-only brain connection. See core/writer-role.ts.
+const inheritedReaderRole = claimWriterRole();
+if (inheritedReaderRole) {
+  // stderr, never stdout: stdout is the MCP protocol channel.
+  console.error("cairn: cleared an inherited CAIRN_READONLY=1 role; brain writes are enabled.");
+}
 
 interface HotState {
   server?: McpServer;

@@ -7,6 +7,16 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and 
 
 ### Fixed
 
+- The brain could go permanently read-only on a machine, refusing every `brain_create`/`brain_mutate`
+  /`brain_delete` with `brain is open read-only (CAIRN_READONLY=1)`. `CAIRN_READONLY` is a per-process
+  *role*: the hooks set it on themselves because a hook only ever reads. But the hooks are exactly what
+  spawn the long-lived writers — the engine daemon, the embed daemon and the auto-updater — and each was
+  spawned with `{ ...process.env }`, so a reader handed its role to a writer that then served every
+  session on the machine from a read-only connection. A shell that exports the flag did the same to the
+  whole process tree, including the MCP server, which made it survive restarts and look like a
+  configuration setting rather than a bug. Writers are now spawned through `writerEnv()`, which strips
+  the role, and the two writer entry points (`engine-server`, the MCP server) claim the writer role
+  before their first database open. `cairn doctor` now reports an exported `CAIRN_READONLY`.
 - `brain_mutate` set edges in one direction only, so the Brain graph was systematically half-directed.
   `brain_create` mirrors every edge onto the peer to keep the graph undirected, but `mutate` replaced
   the source's edges without touching the peers — and `mutate ... edges` is the documented way to link

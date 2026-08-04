@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:f
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { config } from "./config";
+import { writerEnv } from "./writer-role";
 import type { Embedder } from "./embed.types";
 
 // Embedding provider abstraction. Swap the model with env vars, no code change:
@@ -157,7 +158,7 @@ function ensureServer(): void {
   try {
     const bin = process.platform === "win32" ? "bun.exe" : "bun";
     const path = fileURLToPath(new URL("./embed-server.ts", import.meta.url));
-    spawn(bin, [path], { detached: true, stdio: "ignore", windowsHide: true, env: { ...process.env } }).unref();
+    spawn(bin, [path], { detached: true, stdio: "ignore", windowsHide: true, env: writerEnv() }).unref();
   } catch {
     _spawned = false;
     try { rmSync(STARTFILE, { force: true }); } catch { /* absent */ }

@@ -16,6 +16,7 @@ import {
 } from "./engine-protocol";
 import { warmSearchEngine, search } from "./search";
 import { createRequestDeduper } from "./request-dedupe";
+import { claimWriterRole } from "./writer-role";
 import {
   createWithDuplicateCandidates,
   link,
@@ -25,6 +26,10 @@ import {
 } from "./neurons";
 
 process.env.CAIRN_ENGINE_NO_SERVER = "1";
+// This daemon exists to SERVE writes for every session on the machine. It is usually spawned by a
+// hook, which marks itself CAIRN_READONLY=1, so an inherited reader role here would fail every
+// create/mutate/delete until the daemon idled out — see core/writer-role.ts.
+claimWriterRole();
 
 const identity: EngineIdentity = {
   dbPath: config.dbPath,

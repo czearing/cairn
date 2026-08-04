@@ -52,6 +52,22 @@ export async function checks(): Promise<Check[]> {
   const out: Check[] = [];
   const sp = settingsPath();
 
+  // A reader role exported into the shell is inherited by the host CLI and therefore by the MCP
+  // server, which then rejects every brain write with an error that reads like an outage but is a
+  // setting. The writers now strip it, but a shell that exports it is still worth naming here.
+  const readerRole = process.env.CAIRN_READONLY === "1";
+  out.push({
+    name: "Brain write role",
+    ok: !readerRole,
+    required: false,
+    detail: readerRole
+      ? "CAIRN_READONLY=1 is exported in this environment; brain writes are refused in any process that inherits it"
+      : "writable",
+    fix: readerRole
+      ? "unset CAIRN_READONLY (remove it from your shell profile), then restart the host CLI"
+      : undefined,
+  });
+
   const bun = probe("bun", ["--version"]);
   out.push({
     name: "Bun runtime",

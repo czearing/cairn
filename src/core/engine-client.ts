@@ -22,6 +22,7 @@ import type { DuplicateCandidate } from "./neurons";
 import type { ScoredResult } from "./search.types";
 import { jsonChars } from "./telemetry-size";
 import { recordTelemetry } from "./telemetry-record";
+import { writerEnv } from "./writer-role";
 
 const identity = (): EngineIdentity => ({
   dbPath: config.dbPath,
@@ -109,7 +110,7 @@ function ensureServer(): void {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
-      env: { ...process.env },
+      env: writerEnv(),
     }).unref();
   } catch {
     spawned = false;

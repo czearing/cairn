@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { autoUpdateEnabled } from "./config";
+import { writerEnv } from "./writer-role";
 
 // Cairn keeps ITSELF current. `cairn update` stays available, but an install must never sit on a broken
 // release because a human forgot to run a command: every human turn start claims a throttled stamp and,
@@ -231,7 +232,7 @@ export function maybeAutoUpdate(now = Date.now()): boolean {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
-      env: { ...process.env },
+      env: writerEnv(),
     }).unref();
     return true;
   } catch {

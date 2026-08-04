@@ -191,7 +191,10 @@ async function execute(
     inputChars: jsonChars(request.payload),
     outputChars: response ? jsonChars(response) : 0,
     durationMs: performance.now() - started,
-    success: response?.ok === true,
+    // Transport health is delivery, not the verdict inside the payload: an engine
+    // that answers "rejected" is a working transport, so counting it as a failure
+    // would bury real outages (which surface as the `fallback` source).
+    success: response !== null,
     ...telemetry,
   });
   return response;

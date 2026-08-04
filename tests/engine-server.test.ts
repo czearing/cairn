@@ -266,6 +266,69 @@ test("a cold search waits through the bounded readiness retry instead of falling
   }
 }, 15_000);
 
+test("a rejected mutation is recorded as a healthy transport, not a transport failure", async () => {
+  const marker = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-engine-reject-${marker}.db`);
+  const lockPath = join(tmpdir(), `cairn-engine-reject-${marker}.json`);
+  const startPath = join(tmpdir(), `cairn-engine-reject-start-${marker}.json`);
+  const env = {
+    ...process.env,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_CONFIG_PATH: join(tmpdir(), `cairn-engine-reject-config-${marker}.json`),
+    CAIRN_ENGINE_LOCKFILE: lockPath,
+    CAIRN_ENGINE_STARTFILE: startPath,
+    CAIRN_ENGINE_ALLOW_TEMP: "1",
+    CAIRN_ENGINE_SKIP_WARMUP: "1",
+    CAIRN_EMBED_NO_SERVER: "1",
+    CAIRN_USAGE: "1",
+    CAIRN_ENGINE_IDLE_MS: "3000",
+  };
+  let ownerPid: number | null = null;
+  try {
+    // An answer with no citation is refused by the engine's validation. The refusal
+    // travels over a perfectly healthy transport, so transport health must stay clean.
+    const observed = await runBun(`
+      import { Database } from "bun:sqlite";
+      import { engineCreate, engineMutate } from "./src/core/engine-client";
+      const identity = { host: "copilot", sessionId: "reject-mutate", turnSeq: 1 };
+      const id = "${marker}";
+      await engineCreate("Why must transport health exclude application rejections?", [], identity, id);
+      let refused = false;
+      try {
+        await engineMutate(id, { answer: "An uncited claim.", citation: "" }, identity);
+      } catch { refused = true; }
+      const db = new Database(process.env.CAIRN_DB_PATH!);
+      const row = db.query(
+        "SELECT source,success FROM telemetry_events WHERE kind='engine_transport' AND tool_name='mutate' ORDER BY ts DESC LIMIT 1"
+      ).get();
+      db.close();
+      console.log(JSON.stringify({ refused, ...row }));
+    `, env);
+    expect(JSON.parse(observed)).toEqual({ refused: true, source: "daemon", success: 1 });
+    ownerPid = (await waitForLock(lockPath)).pid;
+  } finally {
+    if (ownerPid) {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try {
+          process.kill(ownerPid, 0);
+          await Bun.sleep(50);
+        } catch { break; }
+      }
+    }
+    for (const path of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, lockPath, startPath]) {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try {
+          rmSync(path, { force: true });
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EBUSY" || attempt === 99) throw error;
+          await Bun.sleep(50);
+        }
+      }
+    }
+  }
+}, 20_000);
+
 test("clients share writes and recover from an engine crash without duplicate creates", async () => {
   const marker = randomUUID();
   const id = randomUUID();

@@ -189,10 +189,13 @@ export function recordTelemetryState(input: TelemetryRunIdentity & {
     | "skill_correction_resolved"
     | "skill_correction_blocked"
     | "skill_receipt_checked"
-    | "skill_receipt_duplicate";
+    | "skill_receipt_duplicate"
+    | "skill_step_cited";
   success?: boolean;
   itemCount?: number;
   value?: number;
+  entityType?: "skill" | "brain";
+  entityId?: string;
 }): void {
   recordEvent({
     ...input,

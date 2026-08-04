@@ -178,6 +178,17 @@ export function skillLabels(): string[] {
   return (db().query("SELECT task FROM skills WHERE master_prompt <> '' AND TRIM(description) <> ''").all() as { task: string }[]).map((r) => r.task);
 }
 
+/** Every skill's id and title, with no visibility gate applied. Telemetry attribution needs the whole
+ *  set: a skill that is currently hidden (blank description) still has selections in the event history,
+ *  and dropping it would silently under-count. Read-only-tolerant. */
+export function allSkillIdentities(): { id: string; title: string }[] {
+  ensure();
+  try {
+    return (db().query("SELECT id, task FROM skills ORDER BY task COLLATE NOCASE").all() as { id: string; task: string }[])
+      .map((r) => ({ id: r.id, title: r.task }));
+  } catch { return []; }
+}
+
 export interface SkillCatalogEntry {
   id: string;
   title: string;
@@ -256,13 +267,15 @@ export function variantSkills(baseLabel: string): { id: string; task: string }[]
   try { return db().query("SELECT id, task FROM skills WHERE label_norm = ? OR base_label = ?").all(base, base) as { id: string; task: string }[]; } catch { return []; }
 }
 
-/** Append a changed master to the complete version history. */
-export function addVersion(skillId: string, master: string, explanation: string, score: number, ts: number): void {
+/** Append a changed master to the complete version history. Versions written after the post-turn review
+ *  pipeline was removed carry no score: the reviewer that produced one no longer runs, and copying a
+ *  stale best-run quality onto every new version made a frozen number look like a live grade. */
+export function addVersion(skillId: string, master: string, explanation: string, ts: number): void {
   ensure();
   try {
     const last = db().query("SELECT master FROM skill_versions WHERE skill_id = ? ORDER BY ts DESC, id DESC LIMIT 1").get(skillId) as { master: string } | undefined;
     if (last && last.master === master) return; // master unchanged: nothing new to version
-    db().run("INSERT INTO skill_versions (skill_id, master, explanation, score, ts) VALUES (?, ?, ?, ?, ?)", skillId, master, explanation, score, ts);
+    db().run("INSERT INTO skill_versions (skill_id, master, explanation, score, ts) VALUES (?, ?, ?, 0, ?)", skillId, master, explanation, ts);
   } catch { /* read-only */ }
 }
 
@@ -272,16 +285,18 @@ export function skillVersions(skillId: string): { master: string; explanation: s
   try { return db().query("SELECT master, explanation, score, ts FROM skill_versions WHERE skill_id = ? ORDER BY ts ASC, id ASC").all(skillId) as { master: string; explanation: string; score: number; ts: number }[]; } catch { return []; }
 }
 
-/** Record a run without deleting history. topRuns selects the bounded reviewer reference set. */
+/** Record a run without deleting history. Kept for the historical rows the removed review pipeline wrote. */
 export function addRun(run: SkillRun): void {
   ensure();
   db().run("INSERT INTO skill_runs (skill_id, recipe, quality, review, ts) VALUES (?, ?, ?, ?, ?)", run.skillId, run.recipe, run.quality, run.review, run.ts);
 }
 
-/** The top `n` runs for a skill by quality (the reviewer references these to assemble the master prompt). */
-export function topRuns(skillId: string, n = 10): SkillRun[] {
+/** A skill's recorded runs, oldest first. Historical only: nothing writes new runs since the post-turn
+ *  review was removed. Ranking these by quality is deliberately not offered — a best-of-history score
+ *  cannot describe a version written after the scoring stopped. */
+export function skillRuns(skillId: string): SkillRun[] {
   ensure();
-  return db().query("SELECT id, skill_id AS skillId, recipe, quality, review, ts FROM skill_runs WHERE skill_id = ? ORDER BY quality DESC, ts DESC LIMIT ?").all(skillId, n) as SkillRun[];
+  try { return db().query("SELECT id, skill_id AS skillId, recipe, quality, review, ts FROM skill_runs WHERE skill_id = ? ORDER BY ts ASC, id ASC").all(skillId) as SkillRun[]; } catch { return []; }
 }
 
 /** Every skill with its runs in chronological order, for the viewer (what is in the store + how it has
@@ -294,7 +309,7 @@ export function listSkills(): (Skill & { runs: SkillRun[]; versions: { master: s
     ).all() as Skill[];
     return skills.map((s) => ({
       ...s,
-      runs: db().query("SELECT id, skill_id AS skillId, recipe, quality, review, ts FROM skill_runs WHERE skill_id = ? ORDER BY ts ASC").all(s.id) as SkillRun[],
+      runs: skillRuns(s.id),
       versions: skillVersions(s.id),
     }));
   } catch { return []; }

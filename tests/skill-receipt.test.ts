@@ -9,7 +9,7 @@ const receipt = `**Cairn**
   Skill update — none, steps remained accurate.`;
 
 test("skill receipts report content-free structural evidence", () => {
-  expect(analyzeSkillReceipt(receipt, 4)).toEqual({
+  expect(analyzeSkillReceipt(receipt, 4)).toMatchObject({
     present: true,
     complete: true,
     duplicate: false,

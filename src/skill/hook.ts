@@ -72,7 +72,7 @@ export async function skillCreate(
     if (created || !skill.masterPrompt.trim()) {
       setSkillMetadata(skill.id, cleanTitle, cleanDescription);
       setMasterPrompt(skill.id, cleanPlan, "Initial reusable plan supplied before the first run.");
-      addVersion(skill.id, cleanPlan, "Initial reusable plan supplied before the first run.", 0, Date.now());
+      addVersion(skill.id, cleanPlan, "Initial reusable plan supplied before the first run.", Date.now());
       try { const { reindexSkill } = await import("./match"); await reindexSkill(skill.id, cleanTitle, cleanPlan); } catch { /* catalog routing does not depend on vectors */ }
     }
     return { created, id: skill.id, title: skill.task };
@@ -90,13 +90,13 @@ export async function skillEdit(id: string, master: string, explanation?: string
   if (!id.trim()) return { ok: false, id, task: "", error: "id is required" };
   if (!master.trim()) return { ok: false, id, task: "", error: "master is required" };
   try {
-    const { getSkill, setMasterPrompt, addVersion, topRuns } = await import("./store");
+    const { getSkill, setMasterPrompt, addVersion } = await import("./store");
     const s = getSkill(id.trim());
     if (!s) return { ok: false, id, task: "", error: "unknown skill id" };
     const now = Date.now();
     const expl = (explanation ?? "").trim() || s.explanation || "";
     setMasterPrompt(s.id, master, expl);
-    addVersion(s.id, master, expl, topRuns(s.id, 1)[0]?.quality ?? 0, now); // timeline entry for the manual edit
+    addVersion(s.id, master, expl, now); // timeline entry for the manual edit
     try { const { reindexSkill } = await import("./match"); await reindexSkill(s.id, s.task, master); } catch { /* embedder down: keep the existing vector */ }
     return { ok: true, id: s.id, task: s.task };
   } catch (e) { return { ok: false, id, task: "", error: e instanceof Error ? e.message : String(e) }; }

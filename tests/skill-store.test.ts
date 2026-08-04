@@ -1,5 +1,5 @@
 import { test, expect, beforeEach } from "bun:test";
-import { putSkill, getSkill, setMasterPrompt, setSkillMetadata, skillVectors, addRun, topRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector, deleteSkillByLabel, deleteSkill, skillCatalog, addVersion, skillVersions } from "../src/skill/store";
+import { putSkill, getSkill, setMasterPrompt, setSkillMetadata, skillVectors, addRun, skillRuns, insertSkillIfAbsent, skillByLabel, listSkills, variantSkills, setBaseLabel, setIdentityVector, skillIdentityVector, deleteSkillByLabel, deleteSkill, skillCatalog, addVersion, skillVersions } from "../src/skill/store";
 import { db } from "../src/core/db";
 import { formatSkillCatalog, selectedSkillBlock, skillCatalogSnapshot } from "../src/skill/catalog";
 
@@ -32,38 +32,38 @@ test("deleteSkillByLabel removes the skill and its runs, by normalized label; re
   addRun({ skillId: "k", recipe: "r", quality: 0.5, review: "", ts: 1 });
   expect(deleteSkillByLabel("PR Monitor 2")).toBe(true);   // normalized to the same key
   expect(skillByLabel("pr monitor 2")).toBeNull();          // skill gone
-  expect(topRuns("k", 10).length).toBe(0);                  // its runs gone too
+  expect(skillRuns("k").length).toBe(0);                  // its runs gone too
   expect(deleteSkillByLabel("never existed")).toBe(false);  // absent -> false, no throw
 });
 
 test("deleteSkill removes the skill and its runs AND its version history, by id", () => {
   putSkill({ id: "d", task: "doomed", masterPrompt: "m", ts: 1 }, [1, 0]);
   addRun({ skillId: "d", recipe: "r", quality: 0.6, review: "", ts: 1 });
-  addVersion("d", "m", "why", 0.6, 1);
+  addVersion("d", "m", "why", 1);
   expect(deleteSkill("d")).toBe(true);
   expect(getSkill("d")).toBeNull();
-  expect(topRuns("d", 10).length).toBe(0);
+  expect(skillRuns("d").length).toBe(0);
   expect(skillVersions("d").length).toBe(0);
   expect(deleteSkill("nope")).toBe(false); // absent -> false, no throw
 });
 
 test("addVersion records each CHANGED master (dedup unchanged), skillVersions returns them oldest-first", () => {
   putSkill({ id: "v1", task: "t", masterPrompt: "", ts: 1 }, [1, 0]);
-  addVersion("v1", "master A", "why A", 0.7, 100);
-  addVersion("v1", "master A", "why A v2", 0.7, 110);  // identical master -> NOT a new version
-  addVersion("v1", "master B", "why B", 0.85, 120);
+  addVersion("v1", "master A", "why A", 100);
+  addVersion("v1", "master A", "why A v2", 110);  // identical master -> NOT a new version
+  addVersion("v1", "master B", "why B", 120);
   const vs = skillVersions("v1");
   expect(vs.map((v) => v.master)).toEqual(["master A", "master B"]); // oldest first, the dup dropped
   expect(vs[1]!.explanation).toBe("why B");
-  expect(vs[1]!.score).toBeCloseTo(0.85, 5);
+  expect(vs[1]!.score).toBe(0);   // no score is written any more; see "addVersion writes no score"
 });
 
 test("listSkills includes the master-version timeline", () => {
   putSkill({ id: "v2", task: "t2", masterPrompt: "B", ts: 1 }, [1, 0]);
   setSkillMetadata("v2", "timeline skill", "Use for testing complete skill master version timelines and history rendering.");
   putSkill({ id: "pending", task: "pending", masterPrompt: "", ts: 2 }, [0, 1]);
-  addVersion("v2", "A", "wA", 0.6, 1);
-  addVersion("v2", "B", "wB", 0.8, 2);
+  addVersion("v2", "A", "wA", 1);
+  addVersion("v2", "B", "wB", 2);
   const listed = listSkills();
   const sk = listed.find((x) => x.id === "v2")!;
   expect(sk.versions.length).toBe(2);
@@ -131,29 +131,35 @@ test("delegated skill blocks reject hidden retired ids", () => {
   expect(selectedSkillBlock(["hidden-delegation"])).toContain("Skill selection failed");
 });
 
-test("addRun preserves complete history while topRuns returns the requested best subset", () => {
+test("addRun preserves complete history and skillRuns returns every run oldest-first", () => {
   putSkill({ id: "s1", task: "t", masterPrompt: "", ts: 1 }, [1, 0]);
   for (let i = 0; i < 14; i++) addRun({ skillId: "s1", recipe: `r${i}`, quality: i / 14, review: "", ts: 100 + i });
-  const top = topRuns("s1", 10);
-  expect(top.length).toBe(10);
-  expect(top[0]!.quality).toBeCloseTo(13 / 14, 5);              // best first
-  expect(top.every((r) => r.quality >= 4 / 14)).toBe(true);    // the four worst were dropped
+  const runs = skillRuns("s1");
+  expect(runs.length).toBe(14);                                 // nothing is dropped
+  expect(runs.map((r) => r.recipe)).toEqual(Array.from({ length: 14 }, (_, i) => `r${i}`)); // chronological
   expect((db().query("SELECT COUNT(*) count FROM skill_runs WHERE skill_id = 's1'").get() as { count: number }).count).toBe(14);
 });
 
-test("topRuns is scoped per skill", () => {
+test("skillRuns is scoped per skill", () => {
   putSkill({ id: "s1", task: "a", masterPrompt: "", ts: 1 }, [1, 0]);
   putSkill({ id: "s2", task: "b", masterPrompt: "", ts: 1 }, [0, 1]);
   addRun({ skillId: "s1", recipe: "ra", quality: 0.9, review: "", ts: 1 });
   addRun({ skillId: "s2", recipe: "rb", quality: 0.8, review: "", ts: 1 });
-  expect(topRuns("s1").map((r) => r.recipe)).toEqual(["ra"]);
-  expect(topRuns("s2").map((r) => r.recipe)).toEqual(["rb"]);
+  expect(skillRuns("s1").map((r) => r.recipe)).toEqual(["ra"]);
+  expect(skillRuns("s2").map((r) => r.recipe)).toEqual(["rb"]);
 });
 
 test("addRun stores the reviewer's review with the run", () => {
   putSkill({ id: "s1", task: "t", masterPrompt: "", ts: 1 }, [1, 0]);
   addRun({ skillId: "s1", recipe: "r", quality: 0.7, review: "imagery flat on line 2", ts: 1 });
-  expect(topRuns("s1")[0]!.review).toBe("imagery flat on line 2");
+  expect(skillRuns("s1")[0]!.review).toBe("imagery flat on line 2");
+});
+
+test("addVersion writes no score: the run review that produced one no longer exists", () => {
+  putSkill({ id: "nv", task: "t", masterPrompt: "", ts: 1 }, [1, 0]);
+  addRun({ skillId: "nv", recipe: "r", quality: 0.93, review: "", ts: 1 });  // a high historical run...
+  addVersion("nv", "master A", "why A", 200);                                // ...must not be copied onto a new version
+  expect(skillVersions("nv").map((v) => v.score)).toEqual([0]);
 });
 
 test("insertSkillIfAbsent is idempotent on the normalized label (no duplicate skills under a race)", () => {

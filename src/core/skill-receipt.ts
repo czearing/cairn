@@ -1,4 +1,5 @@
 import { visibleSkill } from "../skill/store";
+import { citedStepTotal, citedStepsBySkill } from "./skill-step-citations";
 
 interface SkillReceiptEvidence {
   present: boolean;
@@ -9,19 +10,17 @@ interface SkillReceiptEvidence {
   expectedSteps: number;
   reportedSteps: number;
   updateDispositionPresent: boolean;
+  /** The receipt block itself, so a caller can attribute the cited steps to the skills selected. */
+  receiptText: string;
 }
 
 const count = (text: string, pattern: RegExp): number => [...text.matchAll(pattern)].length;
 
-function reportedStepCount(text: string): number {
-  let count = 0;
-  for (const match of text.matchAll(/\bstep\s+(\d+)(?:\s*[-–]\s*(\d+))?/gi)) {
-    const first = Number(match[1]);
-    const last = Number(match[2] || first);
-    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || last < first) continue;
-    count += Math.min(last - first + 1, 101);
-  }
-  return count;
+/** Which steps of which selected skill the receipt actually cited. Empty when nothing is attributable. */
+export function receiptStepsBySkill(
+  receiptText: string, skills: { id: string; title: string }[]
+): { id: string; title: string; steps: number[] }[] {
+  return citedStepsBySkill(receiptText, skills);
 }
 
 // The receipt proves a skill was applied, not that every step was recited. Requiring one cited
@@ -54,7 +53,7 @@ export function analyzeSkillReceipt(text: string, expectedSteps: number): SkillR
     receiptText,
     /(?:^|\n)\s*(?:[-*]\s*)?\*{0,2}Skill application\*{0,2}\s*[:—–-]\*{0,2}/gim,
   );
-  const reportedSteps = reportedStepCount(receiptText);
+  const reportedSteps = citedStepTotal(receiptText);
   const updateDispositionPresent = /\bSkill update\*{0,2}\s*[-—–:]/i.test(receiptText)
     || (expectedSteps === 0
       && /Skill application\*{0,2}\s*[:—–-]\*{0,2}\s*(?:`?none`?|no\b)/i.test(receiptText));
@@ -77,5 +76,6 @@ export function analyzeSkillReceipt(text: string, expectedSteps: number): SkillR
     expectedSteps,
     reportedSteps,
     updateDispositionPresent,
+    receiptText,
   };
 }

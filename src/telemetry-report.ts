@@ -1,11 +1,14 @@
 import { telemetrySummary } from "./core/telemetry";
+import { MINIMUM_OUTCOME_RUNS, skillOutcomes } from "./core/telemetry-skill-outcomes";
+import { allSkillIdentities } from "./skill/store";
 import { c, line } from "./term";
 
 export function printTelemetryReport(days: number, json = false): void {
   const report = telemetrySummary(days);
   const quality = report.quality;
+  const outcomes = skillOutcomes(Date.now() - days * 86_400_000, allSkillIdentities());
   if (json) {
-    console.log(JSON.stringify({ ...report, quality }, null, 2));
+    console.log(JSON.stringify({ ...report, quality, skillOutcomes: outcomes }, null, 2));
     return;
   }
 
@@ -87,6 +90,25 @@ export function printTelemetryReport(days: number, json = false): void {
     `(${quality.skillReceiptComplianceRate}%)  duplicate ${quality.duplicateSkillReceipts}  ` +
     `steps ${quality.reportedSkillReceiptSteps}/${quality.expectedSkillReceiptSteps}`);
   line(`workflow blocks ${quality.workflowBlocks}  completion blocks ${quality.completionBlocks}`);
+  if (outcomes.length) {
+    line();
+    line(c.bold("Skill outcomes"));
+    line(c.dim("runs a skill was selected on, and how those runs ended. Association, not a grade."));
+    // Workflow pass tracks completion exactly on skill-selected runs, so a second identical column would
+    // be noise. Print it only when some skill actually separates the two.
+    const showWorkflow = outcomes.some((o) => o.workflowRate !== o.completedRate);
+    line(c.dim(`  RUNS  DONE%${showWorkflow ? "  FLOW%" : ""}  TOOLS  SKILL`));
+    for (const outcome of outcomes) {
+      // A rate over four runs moves 25 points per run. Print the count and withhold the rate.
+      const rate = (value: number) => outcome.sufficient ? `${value}`.padStart(5) : "    -";
+      line(`${String(outcome.runs).padStart(6)}  ${rate(outcome.completedRate)}  ` +
+        `${showWorkflow ? `${rate(outcome.workflowRate)}  ` : ""}` +
+        `${String(outcome.averageToolCalls).padStart(5)}  ` +
+        `${outcome.title}${outcome.sufficient ? "" : c.dim("  (not enough data)")}`);
+    }
+    line(c.dim(`rates are withheld below ${MINIMUM_OUTCOME_RUNS} runs`));
+    line();
+  }
   line(`prompt evals ${quality.promptEvaluations}  accepted ${quality.acceptedPromptEvaluations}` +
     (quality.latestPromptEvaluation
       ? `  latest quality +${quality.latestPromptEvaluation.qualityImprovements}` +

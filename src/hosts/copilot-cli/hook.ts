@@ -768,21 +768,15 @@ export async function runCopilotHook(): Promise<void> {
       try {
         const { extractRunCopilot } = await import("../../skill/transcript-copilot");
         const { analyzeSkillReceipt, requiredStepCitations } = await import("../../core/skill-receipt");
+        const { recordSkillReceiptTelemetry } = await import("../../core/skill-receipt-telemetry");
         const output = extractRunCopilot(transcriptPath)?.output;
         if (output) {
           const receipt = analyzeSkillReceipt(output, requiredStepCitations(st.selectedSkillIds));
-          const receiptKey = `${hostEventKey || `${sessionId}:${st.turnSeq}`}:skill-receipt`;
-          recordTelemetryState({
+          await recordSkillReceiptTelemetry({
             host: "copilot", sessionId, turnSeq: st.turnSeq,
-            eventKey: receiptKey, kind: "skill_receipt_checked",
-            success: receipt.complete, itemCount: receipt.reportedSteps, value: receipt.expectedSteps,
+            receiptKey: `${hostEventKey || `${sessionId}:${st.turnSeq}`}:skill-receipt`,
+            receipt, selectedSkillIds: st.selectedSkillIds,
           });
-          if (receipt.duplicate) {
-            recordTelemetryState({
-              host: "copilot", sessionId, turnSeq: st.turnSeq,
-              eventKey: `${receiptKey}:duplicate`, kind: "skill_receipt_duplicate",
-            });
-          }
         }
       } catch { /* receipt telemetry never blocks completion */ }
     }

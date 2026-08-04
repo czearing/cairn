@@ -299,21 +299,15 @@ async function main(): Promise<void> {
           try {
             const { extractRun } = await import("../../skill/transcript");
             const { analyzeSkillReceipt, requiredStepCitations } = await import("../../core/skill-receipt");
+            const { recordSkillReceiptTelemetry } = await import("../../core/skill-receipt-telemetry");
             const output = extractRun(transcriptPath)?.output;
             if (output) {
               const receipt = analyzeSkillReceipt(output, requiredStepCitations(state.pendingReviewIds));
-              const receiptKey = `${qualityEventKey}:skill-receipt`;
-              telemetry.recordTelemetryState({
+              await recordSkillReceiptTelemetry({
                 host: "claude", sessionId: session, turnSeq: state.turnSeq,
-                eventKey: receiptKey, kind: "skill_receipt_checked",
-                success: receipt.complete, itemCount: receipt.reportedSteps, value: receipt.expectedSteps,
+                receiptKey: `${qualityEventKey}:skill-receipt`,
+                receipt, selectedSkillIds: state.pendingReviewIds,
               });
-              if (receipt.duplicate) {
-                telemetry.recordTelemetryState({
-                  host: "claude", sessionId: session, turnSeq: state.turnSeq,
-                  eventKey: `${receiptKey}:duplicate`, kind: "skill_receipt_duplicate",
-                });
-              }
             }
           } catch { /* receipt telemetry never blocks completion */ }
         }

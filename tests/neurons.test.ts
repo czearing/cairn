@@ -179,3 +179,62 @@ test("a repeated create with the same id returns the stored node without a secon
   expect(again.neuron.answer).toBe("Source decay is onset-synchronous.");
   expect((DB.db().query("SELECT id FROM neurons WHERE id=?").all(id) as unknown[]).length).toBe(1);
 });
+
+// The graph is undirected by design: create mirrors every edge so a link is traversable from both
+// ends. mutate did not, yet `edges` on mutate is the documented way to record reuse, so the primary
+// linking path silently produced half-directed links the peer could never recall.
+test("mutate mirrors a new edge onto the peer, like create does", async () => {
+  const b = await N.create("Which node is the mutate mirror peer?");
+  const a = await N.create("Which node sets an edge by mutate?");
+  await N.mutate(a.id, { edges: [b.id] });
+  expect(N.get(a.id)?.edges).toEqual([b.id]);
+  expect(N.get(b.id)?.edges).toContain(a.id);
+});
+
+test("mutate removes the reverse edge of a peer it drops", async () => {
+  const b = await N.create("Which node gets dropped from the edge list?");
+  const c = await N.create("Which node replaces the dropped peer?");
+  const a = await N.create("Which node re-points its edges?", [b.id]);
+  expect(N.get(b.id)?.edges).toContain(a.id);
+
+  await N.mutate(a.id, { edges: [c.id] });
+  // A reverse edge to a node that no longer claims the peer is a dangling link the graph still walks.
+  expect(N.get(b.id)?.edges ?? []).not.toContain(a.id);
+  expect(N.get(c.id)?.edges).toContain(a.id);
+});
+
+test("clearing edges by mutate unmirrors every peer", async () => {
+  const b = await N.create("Which node is unlinked when edges are cleared?");
+  const a = await N.create("Which node clears its edges?", [b.id]);
+  await N.mutate(a.id, { edges: [] });
+  expect(N.get(a.id)?.edges).toEqual([]);
+  expect(N.get(b.id)?.edges ?? []).not.toContain(a.id);
+});
+
+test("a mutate that does not mention edges leaves the mirrored link intact", async () => {
+  const b = await N.create("Which node keeps its link across a partial mutate?");
+  const a = await N.create("Which node is answered without touching edges?", [b.id]);
+  await N.mutate(a.id, { answer: "Answered without touching edges.", citation: "probe" });
+  expect(N.get(a.id)?.edges).toEqual([b.id]);
+  expect(N.get(b.id)?.edges).toContain(a.id);
+});
+
+test("mutate returns the edges that were actually stored", async () => {
+  const b = await N.create("Which node is returned in the mutate result?");
+  const a = await N.create("Which node reports its stored edges?");
+  const returned = await N.mutate(a.id, { edges: [b.id, b.id, a.id] });
+  // Self-links and duplicates are dropped on write; the caller must not be told otherwise.
+  expect(returned?.edges).toEqual([b.id]);
+  expect(returned?.edges).toEqual(N.get(a.id)?.edges);
+});
+
+test("delete removes the node and every reverse edge pointing at it", async () => {
+  const peer = await N.create("Which node survives its neighbour being deleted?");
+  const doomed = await N.create("Which node is deleted?", [peer.id]);
+  expect(N.get(peer.id)?.edges).toContain(doomed.id);
+
+  expect(N.remove(doomed.id)).toBe(true);
+  expect(N.get(doomed.id)).toBeNull();
+  expect(N.get(peer.id)?.edges ?? []).not.toContain(doomed.id);
+  expect(N.remove(doomed.id)).toBe(false);
+});

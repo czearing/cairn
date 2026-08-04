@@ -97,8 +97,24 @@ export function unlinkBoth(a: string, b: string): void {
   });
 }
 
-export function sourcesTargeting(targetId: string): string[] {
-  return (db().query(`SELECT source_id AS sourceId
+/** Undirected edge assignment. `replaceEdges` only rewrites one direction, so using it to satisfy an
+ *  agent-supplied `edges` list silently produces a half-directed graph: newly named peers never point
+ *  back, and dropped peers keep a reverse edge to a node that no longer claims them. Both halves have
+ *  to move together, because a link the graph can only traverse one way is not recallable from the
+ *  other side. */
+export function replaceEdgesMirrored(sourceId: string, targets: string[], provenance = "agent"): void {
+  db().transaction(() => {
+    const before = new Set(edgesFrom(sourceId));
+    const after = new Set(
+      [...new Set(targets)].filter((target) => target && target !== sourceId),
+    );
+    replaceEdges(sourceId, [...after], provenance);
+    for (const peer of before) if (!after.has(peer)) removeEdge(peer, sourceId);
+    for (const peer of after) if (!before.has(peer)) addEdge(peer, sourceId, provenance);
+  });
+}
+
+export function sourcesTargeting(targetId: string): string[] {  return (db().query(`SELECT source_id AS sourceId
     FROM neuron_edges WHERE target_id = ? ORDER BY source_id`)
     .all(targetId) as { sourceId: string }[]).map((row) => row.sourceId);
 }

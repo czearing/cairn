@@ -7,6 +7,13 @@ This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and 
 
 ### Fixed
 
+- `brain_mutate` set edges in one direction only, so the Brain graph was systematically half-directed.
+  `brain_create` mirrors every edge onto the peer to keep the graph undirected, but `mutate` replaced
+  the source's edges without touching the peers — and `mutate ... edges` is the documented way to link
+  a turn's nodes to a reused one. A link recorded that way was invisible from the peer, and a peer
+  dropped from the list kept a dangling reverse edge pointing back at a node that no longer claimed it.
+  Both directions are now updated together in a single transaction, and `mutate` returns the edges that
+  were actually stored rather than the requested list.
 - `brain_create` failed with `UNIQUE constraint failed: neurons.id` and lost the thought. The engine
   client mints the node id before it sends the request and retries every non-search operation when its
   2s request timeout expires, so a slow embed left the original attempt still running when its own

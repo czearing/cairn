@@ -8,6 +8,7 @@ import {
   edgesFrom,
   linkBoth,
   replaceEdges,
+  replaceEdgesMirrored,
   resyncLegacyEdges,
   sourcesTargeting,
   unlinkBoth,
@@ -152,8 +153,7 @@ async function createResult(
        VALUES (?, ?, '', '', '[]', ?, ?) ON CONFLICT(id) DO NOTHING`,
     ).run(id, safeText, vec, model);
     if (!claim.changes) return false;
-    replaceEdges(id, clean);
-    for (const target of clean) addEdge(target, id);
+    replaceEdgesMirrored(id, clean);
     writeNeuronVector(id, model, vec);
     return true;
   });
@@ -211,17 +211,17 @@ export async function mutate(id: string, patch: NeuronPatch): Promise<Neuron | n
       prepareVectorIndex(embedModel(), vec.byteLength / 4);
       db().query("UPDATE neurons SET text = ?, answer = ?, citation = ?, embedding = ?, embedding_model = ? WHERE id = ?")
         .run(next.text, next.answer, next.citation, vec, embedModel(), id);
-      if (patch.edges) replaceEdges(id, next.edges);
+      if (patch.edges) replaceEdgesMirrored(id, next.edges);
       writeNeuronVector(id, embedModel(), vec);
     });
   } else {
     // text/answer unchanged → only citation/edges can differ; leave the embedding intact
     db().transaction(() => {
       db().query("UPDATE neurons SET citation = ? WHERE id = ?").run(next.citation, id);
-      if (patch.edges) replaceEdges(id, next.edges);
+      if (patch.edges) replaceEdgesMirrored(id, next.edges);
     });
   }
-  return next;
+  return { ...next, edges: patch.edges ? edgesFrom(id) : next.edges };
 }
 
 export function remove(id: string): boolean {

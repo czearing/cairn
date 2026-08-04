@@ -16,7 +16,7 @@ import { libsqlEnv } from "../../libsql-env";
 import { releaseVersion } from "../../core/release";
 import {
   buildMcpBundle,
-  mcpBundle,
+  mcpLaunchArgs,
   mcpRuntimeEnv,
 } from "../../mcp/bundle";
 
@@ -56,7 +56,7 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   const servers = cfg.mcpServers ?? (cfg.mcpServers = {});
   if (!dryRun) await buildMcpBundle();
   const env = { ...libsqlEnv(), ...mcpRuntimeEnv() };
-  const wantArgs = ["--smol", mcpBundle];
+  const wantArgs = mcpLaunchArgs();
   const existing = servers[mcpName()] as {
     command?: string;
     args?: string[];

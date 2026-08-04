@@ -778,6 +778,28 @@ test("a thin sample is disclosed instead of deferring to a larger stale release"
     issue.includes("cover 1 completed run(s) of 60 in the window, below the 20"))).toBe(true);
 });
 
+test("a thin sample reports not-enough-data, while a real fault alongside it still degrades", () => {
+  // DEGRADED for a small sample implied a breakage that did not exist, and since every release rolls
+  // the fingerprint the sample is thin most of the time, so the banner was permanently alarming.
+  const base = {
+    ...qualitySummary(7), runs: 1, populationRuns: 223, minimumSample: 20,
+    sampleVersion: "1.0.0+new", latestVersion: "1.0.0+new", latestVersionRuns: 1, workflowRate: 100,
+    visibilityFailures: 0, stalledActiveRuns: 0, skillReceiptChecks: 1, skillReceiptComplianceRate: 100,
+    duplicateSkillReceipts: 0, mixedRuntimeRuns: 0, unattributedRuntimeRuns: 0,
+  };
+  const engine = { version: "1.0.0+new", engineTransports: [], parity: { checks: 0, mismatches: 0 } };
+
+  const thinOnly = telemetryQualityVerdict(base as never, engine as never);
+  expect(thinOnly.status).toBe("insufficient_data");
+  expect(thinOnly.issues.some((issue) => issue.includes("below the 20"))).toBe(true);
+
+  // A thin sample must never mask a genuine finding: one real fault still degrades.
+  const withFault = telemetryQualityVerdict(
+    { ...base, workflowRate: 50 } as never, engine as never,
+  );
+  expect(withFault.status).toBe("degraded");
+});
+
 test("one stray visibility failure degrades a release instead of declaring an outage", () => {
   // An absolute count held the banner at OUTAGE for as long as that release supplied the sample.
   const base = {

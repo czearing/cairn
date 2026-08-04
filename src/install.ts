@@ -15,7 +15,7 @@ import {
 import { libsqlEnv } from "./libsql-env";
 import {
   buildMcpBundle,
-  mcpBundle,
+  mcpLaunchArgs,
   mcpRuntimeEnv,
 } from "./mcp/bundle";
 
@@ -87,7 +87,8 @@ function registerMcp(dryRun: boolean): "registered" | "updated" | "already" | "f
   if (!claude) return "no-cli";
   const env = { ...libsqlEnv(), ...mcpRuntimeEnv() };
   const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-  const runtime = mcpBundle.replace(/\\/g, "/");
+  const launch = mcpLaunchArgs();
+  const runtime = launch[launch.length - 1]!.replace(/\\/g, "/");
   const addArgs = [
     claude,
     "mcp",
@@ -98,8 +99,7 @@ function registerMcp(dryRun: boolean): "registered" | "updated" | "already" | "f
     ...envArgs,
     "--",
     bun(),
-    "--smol",
-    runtime,
+    ...launch,
   ];
   const exists = Bun.spawnSync([claude, "mcp", "get", mcpName()], { stdout: "pipe", stderr: "ignore" });
   if (exists.exitCode === 0) {
@@ -215,7 +215,7 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   // ── Phase 3: MCP registration ─────────────────────────────────────────────────────────────
   line(c.dim("\n3/7  Claude Code MCP server (brain_* tools)"));
   const mcp = process.env.CAIRN_SKIP_MCP ? "skipped" : registerMcp(dryRun);
-  const manual = `claude mcp add ${mcpName()} --scope user -- "${bun()}" --smol "${mcpBundle}"`;
+  const manual = `claude mcp add ${mcpName()} --scope user -- "${bun()}" ${mcpLaunchArgs().map((a) => `"${a}"`).join(" ")}`;
   if (mcp === "skipped") step(`${sym.dot} Skipped (CAIRN_SKIP_MCP set).`);
   else if (mcp === "registered") step(`${sym.ok} Registered '${mcpName()}' at user scope.${Object.keys(libsqlEnv()).length ? c.dim(" (cloud sync wired in)") : ""}`);
   else if (mcp === "updated") step(`${sym.ok} Updated '${mcpName()}' with cloud-sync credentials.`);

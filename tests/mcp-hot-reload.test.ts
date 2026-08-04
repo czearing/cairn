@@ -4,6 +4,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { mcpLaunchArgs } from "../src/mcp/bundle";
 
 test("Bun hot reload updates an MCP handler without replacing its stdio process", async () => {
   const root = join(import.meta.dir, "..", `.cairn-hot-reload-${randomUUID()}`);
@@ -58,6 +59,53 @@ test("Bun hot reload updates an MCP handler without replacing its stdio process"
     rmSync(root, { recursive: true, force: true });
   }
 }, 10_000);
+
+test("the launch arguments hosts are installed with are the ones that reload", async () => {
+  // Hosts used to launch `--smol dist/mcp-server.js`. That bundle is a snapshot: a running session kept
+  // the code it started with until the user restarted it, which is exactly the complaint. `--hot` cannot
+  // point at the bundle either, because on Windows it holds a handle on its entry and the rebuild's
+  // rename swap fails with EPERM. So the installed launch must be `--hot` on the SOURCE entry, and this
+  // test spawns the real production arguments rather than a hand-written copy of them.
+  const args = mcpLaunchArgs();
+  expect(args).toContain("--hot");
+  expect(args.some((arg) => arg.replaceAll("\\", "/").includes("/dist/"))).toBe(false);
+
+  const repository = join(import.meta.dir, "..");
+  const hook = join(repository, `.cairn-launch-hook-${randomUUID()}.json`);
+  const database = join(repository, `.cairn-launch-db-${randomUUID()}.db`);
+  writeFileSync(hook, JSON.stringify({ cairnRelease: "0.1.0+before" }));
+  const transport = new StdioClientTransport({
+    command: Bun.which("bun") ?? "bun",
+    args,
+    env: {
+      ...process.env,
+      CAIRN_COPILOT_HOOK_PATH: hook,
+      CAIRN_DB_PATH: database,
+      CAIRN_EMBED_NO_SERVER: "1",
+      CAIRN_ENGINE_NO_SERVER: "1",
+    },
+  });
+  const client = new Client({ name: "cairn-launch-args-test", version: "1" });
+  await client.connect(transport);
+  try {
+    const call = async () => {
+      const result = await client.callTool({
+        name: "brain_delete",
+        arguments: { id: randomUUID() },
+      }) as { _meta?: { cairn?: { version?: string; pid?: number } } };
+      return result._meta?.cairn;
+    };
+    const before = await call();
+    writeFileSync(hook, JSON.stringify({ cairnRelease: "0.1.0+after" }));
+    const after = await call();
+    expect(before).toMatchObject({ version: "0.1.0+before", pid: expect.any(Number) });
+    expect(after).toMatchObject({ version: "0.1.0+after", pid: before?.pid });
+  } finally {
+    await client.close();
+    rmSync(hook, { force: true });
+    rmSync(database, { force: true });
+  }
+}, 20_000);
 
 test("a connected Cairn server observes an installed release change in the same process", async () => {
   const repository = join(import.meta.dir, "..");

@@ -2,10 +2,19 @@ import { mkdirSync, readFileSync, renameSync, rmSync, existsSync } from "node:fs
 import { join, resolve } from "node:path";
 
 const cairnRoot = resolve(import.meta.dir, "..", "..");
-const mcpSource = join(cairnRoot, "src", "mcp", "server.ts");
+export const mcpSource = join(cairnRoot, "src", "mcp", "server.ts");
 export const mcpBundle = join(cairnRoot, "dist", "mcp-server.js");
 const engineServerSource = join(cairnRoot, "src", "core", "engine-server.ts");
 let built = false;
+
+// How a HOST must launch Cairn's MCP server. Bun hot reload re-evaluates the module graph in the
+// running process, so a `cairn update` reaches an already-connected session without restarting it —
+// src/mcp/server.ts keeps its server and tools on globalThis precisely so this refresh is in place.
+// It must be the SOURCE entry, not dist/mcp-server.js: --hot holds an open handle on its entry, and on
+// Windows renaming the freshly built bundle over that handle fails EPERM, so the update could not even
+// land. The bundle stays for short-lived spawns (CAIRN_MCP_SERVER), which take no handle and can be
+// swapped safely.
+export const mcpLaunchArgs = (): string[] => ["--hot", `--cwd=${cairnRoot}`, mcpSource];
 
 const bytes = (path: string): Buffer | null => {
   try { return readFileSync(path); } catch { return null; }

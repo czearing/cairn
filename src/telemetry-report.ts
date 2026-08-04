@@ -55,7 +55,11 @@ export function printTelemetryReport(days: number, json = false): void {
     `${quality.oldestActiveMinutes ? ` (oldest ${quality.oldestActiveMinutes}m)` : ""}  ` +
     `progressing ${quality.progressingActiveRuns}  stalled ${quality.stalledActiveRuns}  ` +
     `abandoned ${quality.abandonedRuns}  superseded ${quality.supersededRuns}`);
-  line(`quality status ${quality.verdict.status.toUpperCase()}  ` +
+  // "INSUFFICIENT_DATA" reads like a fault to anyone who is not holding the enum. Print what it means.
+  const statusLabel = quality.verdict.status === "insufficient_data"
+    ? "NOT ENOUGH DATA"
+    : quality.verdict.status.toUpperCase();
+  line(`quality status ${statusLabel}  ` +
     `release coherent ${quality.verdict.releaseCoherent ? "yes" : "no"}`);
   for (const issue of quality.verdict.issues) line(`  ! ${issue}`);
   line(`completed ${quality.completedRate}%  ` +

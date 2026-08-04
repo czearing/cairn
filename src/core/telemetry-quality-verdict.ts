@@ -59,12 +59,12 @@ export function telemetryQualityVerdict(
     );
   }
   // A thin sample is a confidence caveat, not a reason to report someone else's release. Say so.
-  if (behavior.runs && behavior.runs < behavior.minimumSample) {
-    issues.push(
-      `Behavior rates cover ${behavior.runs} completed run(s) of ${behavior.populationRuns} in the ` +
-      `window, below the ${behavior.minimumSample} wanted for a stable rate.`
-    );
-  }
+  const thinSample = Boolean(behavior.runs && behavior.runs < behavior.minimumSample);
+  const thinSampleIssue = thinSample
+    ? `Behavior rates cover ${behavior.runs} completed run(s) of ${behavior.populationRuns} in the `
+      + `window, below the ${behavior.minimumSample} wanted for a stable rate.`
+    : "";
+  if (thinSampleIssue) issues.push(thinSampleIssue);
   if (behavior.runs && visibilityFailureRate > 0) {
     issues.push(
       `Cairn tools were invisible in ${behavior.visibilityFailures}/${behavior.runs} completed human runs.`
@@ -116,7 +116,15 @@ export function telemetryQualityVerdict(
 
   let status: QualityVerdict["status"] = "healthy";
   if (!behavior.runs || !engine.version) status = "insufficient_data";
-  if (issues.length && status === "healthy") status = "degraded";
+  // A sample too small to trust is missing evidence, not a fault. Reporting DEGRADED for it implied a
+  // breakage that did not exist, and because every release rolls the fingerprint the sample is thin far
+  // more often than not, so the banner said DEGRADED almost permanently and stopped carrying meaning.
+  // Only real findings degrade; when the thin sample is the sole issue, say the data is insufficient.
+  const faults = thinSampleIssue ? issues.filter((issue) => issue !== thinSampleIssue) : issues;
+  if (status === "healthy") {
+    if (faults.length) status = "degraded";
+    else if (thinSample) status = "insufficient_data";
+  }
   // Rates are already scoped to the newest release, so a fixed fault stops counting as soon as the next
   // release produces runs. Within that scope the trigger is a RATE: a single stray visibility failure in
   // an otherwise healthy sample is a degradation, not a total outage, and an absolute count let one

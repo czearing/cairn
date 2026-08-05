@@ -1,0 +1,39 @@
+name: Bug report
+description: Something does not work the way it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: cairn doctor
+      description: Paste the output. It reports the setup problems we ask about first.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Version and OS
+      description: Output of `cairn --version`, your OS, and the agent you run Cairn under.
+      placeholder: 0.1.0, macOS 15, Claude Code
+    validations:
+      required: true

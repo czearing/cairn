@@ -25,12 +25,14 @@ read the script first:
 curl -fsSL https://raw.githubusercontent.com/czearing/cairn/main/scripts/install.sh
 ```
 
-The installer writes to four places, and nothing else:
+The installer writes to these places, and nothing else:
 
 - `~/.claude/settings.json` (the hooks; it keeps a `.bak`)
 - your user-scoped `claude mcp` registration
+- `~/.claude/agents/cairn.md` (the `cairn` subagent)
+- GitHub Copilot CLI's MCP config and its `hooks/cairn.json`, when that CLI is present
 - a `cairn` shim in bun's bin directory
-- the local brain under `~/.cairn/`
+- `~/.cairn/`, which holds the local brain and `config.json`
 
 It never needs `sudo`. `cairn uninstall` reverses the hooks and the MCP registration.
 

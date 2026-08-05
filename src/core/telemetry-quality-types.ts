@@ -25,6 +25,19 @@ export interface QualitySummary {
   latestVersion: string;
   /** Newest release with a completed sample; it labels the behavior scope. */
   sampleVersion: string;
+  /**
+   * Hash of the injected prompt that scopes prompt-driven rates (brain reuse, receipt compliance).
+   * Keyed on the cause rather than the commit, so an unrelated code change no longer resets the
+   * sample, while changing the prompt still drops prior runs out and lets a fix clear its own metric.
+   */
+  samplePromptHash: string;
+  /** Completed human runs sharing `samplePromptHash`; the sample size behind the behavior rates. */
+  behaviorRuns: number;
+  /**
+   * Completed human runs whose receipts were judged by the current checker. Receipt compliance is a
+   * stored judgement, so it is scoped to the code that made it rather than pooled with older verdicts.
+   */
+  receiptRuns: number;
   /** Completed human runs in the window, regardless of release; the population `runs` is drawn from. */
   populationRuns: number;
   /** Completed human runs on `latestVersion`; distinguishes "no runs yet" from "too few to qualify". */

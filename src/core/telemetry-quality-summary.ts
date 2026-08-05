@@ -117,6 +117,34 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     GROUP BY version ORDER BY MAX(started_ts) DESC LIMIT 1`)
     .get(sinceTs) as { version?: string } | null)?.version
     || latestVersion;
+  // Behavior rates need a SECOND scope, because they have a different cause than runtime health.
+  // Runtime health (visibility failures, transport, coherence) is caused by the code, so it must stay
+  // scoped to one release: that is what lets shipping a fix clear a fault, and it is the invariant the
+  // two reverted widening attempts broke. Brain reuse and receipt compliance are caused by the injected
+  // PROMPT, and a release-per-commit cadence resets their sample every time an unrelated file changes.
+  // Measured live: 40 releases in 30 days, median 5 completed runs, median release life 24 minutes, so
+  // rates spoke for 3 runs out of 219.
+  //
+  // Pooling by prompt hash is not the recency window that was reverted. That one walked back over
+  // releases until the sample was big enough, which re-imported an old release's failures into a
+  // healthy one. promptFingerprint is a hash of the injected prompt text, so it is keyed on the CAUSE:
+  // change the prompt to fix a behavior and the hash changes, which drops every prior run out of the
+  // sample immediately. A fix can still clear its own metric, with no walk-back and no tie-break.
+  const comparableBehaviorScope = (db.query(`SELECT r.prompt_hash AS promptHash FROM telemetry_runs r
+    WHERE r.started_ts>=? AND r.run_class='human' AND r.status='completed' AND r.prompt_hash!=''
+      AND ${comparableRuntimeSql}
+    ORDER BY r.started_ts DESC LIMIT 1`)
+    .get(sinceTs) as { promptHash?: string } | null)?.promptHash || "";
+  const samplePromptHash = comparableBehaviorScope
+    || (db.query(`SELECT prompt_hash AS promptHash FROM telemetry_runs
+      WHERE started_ts>=? AND run_class='human' AND status='completed' AND prompt_hash!=''
+      ORDER BY started_ts DESC LIMIT 1`)
+      .get(sinceTs) as { promptHash?: string } | null)?.promptHash || "";
+  const behaviorRuns = samplePromptHash
+    ? (db.query(`SELECT COUNT(*) AS runs FROM telemetry_runs
+        WHERE started_ts>=? AND run_class='human' AND status='completed' AND prompt_hash=?`)
+        .get(sinceTs, samplePromptHash) as { runs: number }).runs
+    : 0;
   // A scope is only trustworthy next to the population it was drawn from. Report both so a sample of
   // six can never again read as if it were the whole window.
   const populationRuns = (db.query(`SELECT COUNT(*) AS runs FROM telemetry_runs
@@ -169,13 +197,13 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
       FROM telemetry_events e
       JOIN telemetry_runs r USING(run_id)
       WHERE e.ts>=? AND r.status='completed' AND e.kind='brain_returned' AND e.entity_hash!=''
-        AND r.run_class='human' AND r.version=?
+        AND r.run_class='human' AND r.prompt_hash=?
       GROUP BY e.run_id,e.entity_hash
     ), used AS (
       SELECT e.run_id,e.entity_hash,e.rowid AS usedRowId FROM telemetry_events e
       JOIN telemetry_runs r USING(run_id)
       WHERE e.ts>=? AND r.status='completed' AND r.run_class='human'
-        AND r.version=? AND e.kind IN ('brain_referenced','brain_mutated') AND e.entity_hash!=''
+        AND r.prompt_hash=? AND e.kind IN ('brain_referenced','brain_mutated') AND e.entity_hash!=''
     ), cross_session AS (
       SELECT returned.* FROM returned WHERE EXISTS (
         SELECT 1 FROM telemetry_events prior
@@ -214,36 +242,66 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
           AND u.usedRowId>r.returnedRowId
       ))
         AS crossSessionReusedNodes`)
-    .get(sinceTs, sampleVersion, sinceTs, sampleVersion) as {
+    .get(sinceTs, samplePromptHash, sinceTs, samplePromptHash) as {
       returnedNodes: number; usedReturnedNodes: number; rankedUsedReturnedNodes: number;
       top3UsedReturnedNodes: number;
       maxUsedRank: number; minimumUsedScorePercent: number;
       crossSessionEligibleNodes: number; crossSessionReusedNodes: number;
     };
+  // Enforcement counters stay on the release scope: visibilityFailureRate divides them by the
+  // release-scoped run count, and a ratio whose two terms come from different populations is not a
+  // rate. Shipping a fix must be able to clear these.
   const skills = db.query(`SELECT
-    COUNT(DISTINCT CASE WHEN e.kind='skill_selected' THEN e.entity_hash END) AS selectedSkills,
-    COUNT(DISTINCT CASE WHEN e.kind='skill_edited' THEN e.entity_hash END) AS editedSkills,
     COALESCE(SUM(CASE WHEN e.kind='visibility_failure' THEN 1 ELSE 0 END),0) AS visibilityFailures,
     COALESCE(SUM(CASE WHEN e.kind='stop_blocked' THEN 1 ELSE 0 END),0) AS workflowBlocks,
     COALESCE(SUM(CASE WHEN e.kind='completion_blocked' THEN 1 ELSE 0 END),0) AS completionBlocks,
     COALESCE(SUM(CASE WHEN e.kind='skill_correction_required' THEN 1 ELSE 0 END),0) AS skillCorrectionsRequired,
     COALESCE(SUM(CASE WHEN e.kind='skill_correction_resolved' THEN 1 ELSE 0 END),0) AS skillCorrectionsResolved,
-    COALESCE(SUM(CASE WHEN e.kind='skill_correction_blocked' THEN 1 ELSE 0 END),0) AS skillCorrectionBlocks,
-    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' THEN 1 ELSE 0 END),0) AS skillReceiptChecks,
-    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' AND e.success=1 THEN 1 ELSE 0 END),0)
-      AS completeSkillReceipts,
-    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_duplicate' THEN 1 ELSE 0 END),0) AS duplicateSkillReceipts,
-    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' THEN e.value ELSE 0 END),0)
-      AS expectedSkillReceiptSteps,
-    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' THEN e.item_count ELSE 0 END),0)
-      AS reportedSkillReceiptSteps
+    COALESCE(SUM(CASE WHEN e.kind='skill_correction_blocked' THEN 1 ELSE 0 END),0) AS skillCorrectionBlocks
     FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
     WHERE e.ts>=? AND r.run_class='human' AND r.status='completed' AND r.version=?`)
     .get(sinceTs, sampleVersion) as {
-      selectedSkills: number; editedSkills: number; visibilityFailures: number;
+      visibilityFailures: number;
       workflowBlocks: number; completionBlocks: number;
       skillCorrectionsRequired: number; skillCorrectionsResolved: number;
       skillCorrectionBlocks: number;
+    };
+  // Skill selection is a raw observation, so it pools by prompt hash. Receipt COMPLIANCE is not an
+  // observation, it is a judgement made by the checker code, and a stored judgement is only as good as
+  // the code that made it. Pooling those across releases re-imports verdicts from a checker with known
+  // defects — 8 of the 9 releases in the current pool scored duplicates with a rule since proven wrong.
+  // So receipts are scoped to the newest release that has actually judged one: fixing the checker
+  // retires every stale verdict at once, which is the same property release scoping gives runtime health.
+  const receiptJudgeVersion = (db.query(`SELECT e.version FROM telemetry_events e
+    JOIN telemetry_runs r USING(run_id)
+    WHERE e.ts>=? AND r.run_class='human' AND r.status='completed'
+      AND e.kind='skill_receipt_checked' AND e.version!=''
+    GROUP BY e.version ORDER BY MAX(e.ts) DESC LIMIT 1`)
+    .get(sinceTs) as { version?: string } | null)?.version || "";
+  const skillBehavior = db.query(`SELECT
+    COUNT(DISTINCT CASE WHEN e.kind='skill_selected' AND r.prompt_hash=? THEN e.entity_hash END)
+      AS selectedSkills,
+    COUNT(DISTINCT CASE WHEN e.kind='skill_edited' AND r.prompt_hash=? THEN e.entity_hash END)
+      AS editedSkills,
+    COUNT(DISTINCT CASE WHEN e.kind='skill_receipt_checked' AND e.version=? THEN e.run_id END)
+      AS receiptRuns,
+    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' AND e.version=? THEN 1 ELSE 0 END),0)
+      AS skillReceiptChecks,
+    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' AND e.version=? AND e.success=1
+      THEN 1 ELSE 0 END),0) AS completeSkillReceipts,
+    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_duplicate' AND e.version=? THEN 1 ELSE 0 END),0)
+      AS duplicateSkillReceipts,
+    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' AND e.version=? THEN e.value ELSE 0 END),0)
+      AS expectedSkillReceiptSteps,
+    COALESCE(SUM(CASE WHEN e.kind='skill_receipt_checked' AND e.version=? THEN e.item_count ELSE 0 END),0)
+      AS reportedSkillReceiptSteps
+    FROM telemetry_events e JOIN telemetry_runs r USING(run_id)
+    WHERE e.ts>=? AND r.run_class='human' AND r.status='completed'`)
+    .get(
+      samplePromptHash, samplePromptHash, receiptJudgeVersion, receiptJudgeVersion,
+      receiptJudgeVersion, receiptJudgeVersion, receiptJudgeVersion, receiptJudgeVersion, sinceTs
+    ) as {
+      selectedSkills: number; editedSkills: number; receiptRuns: number;
       skillReceiptChecks: number; completeSkillReceipts: number;
       duplicateSkillReceipts: number; expectedSkillReceiptSteps: number;
       reportedSkillReceiptSteps: number;
@@ -304,6 +362,8 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   return {
     latestVersion,
     sampleVersion,
+    samplePromptHash,
+    behaviorRuns,
     populationRuns,
     latestVersionRuns,
     minimumSample,
@@ -334,14 +394,15 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
     mixedRuntimeRuns: coherence.mixedRuntimeRuns,
     unattributedRuntimeRuns: coherence.unattributedRuntimeRuns,
     ...skills,
-    skillEditRate: percent(skills.editedSkills, skills.selectedSkills),
+    ...skillBehavior,
+    skillEditRate: percent(skillBehavior.editedSkills, skillBehavior.selectedSkills),
     skillCorrectionResolutionRate: percent(
       skills.skillCorrectionsResolved,
       skills.skillCorrectionsRequired,
     ),
     skillReceiptComplianceRate: percent(
-      skills.completeSkillReceipts,
-      skills.skillReceiptChecks,
+      skillBehavior.completeSkillReceipts,
+      skillBehavior.skillReceiptChecks,
     ),
     promptEvaluations: promptEvaluationCounts.total,
     acceptedPromptEvaluations: promptEvaluationCounts.accepted,
@@ -358,7 +419,8 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
 
 function empty(): QualitySummary {
   return {
-    latestVersion: "", sampleVersion: "", populationRuns: 0, latestVersionRuns: 0,
+    latestVersion: "", sampleVersion: "", samplePromptHash: "", behaviorRuns: 0, receiptRuns: 0,
+    populationRuns: 0, latestVersionRuns: 0,
     minimumSample: 0, latestReleaseFingerprint: "",
     runs: 0, activeRuns: 0, abandonedRuns: 0, supersededRuns: 0, oldestActiveMinutes: 0,
     progressingActiveRuns: 0, stalledActiveRuns: 0, oldestActiveActivityMinutes: 0,

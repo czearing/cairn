@@ -59,9 +59,11 @@ export function telemetryQualityVerdict(
     );
   }
   // A thin sample is a confidence caveat, not a reason to report someone else's release. Say so.
-  const thinSample = Boolean(behavior.runs && behavior.runs < behavior.minimumSample);
+  // Prompt-driven rates are drawn from the prompt scope, so the disclosure must count THAT sample,
+  // not the release-scoped run count they are no longer computed from.
+  const thinSample = Boolean(behavior.behaviorRuns && behavior.behaviorRuns < behavior.minimumSample);
   const thinSampleIssue = thinSample
-    ? `Behavior rates cover ${behavior.runs} completed run(s) of ${behavior.populationRuns} in the `
+    ? `Behavior rates cover ${behavior.behaviorRuns} completed run(s) of ${behavior.populationRuns} in the `
       + `window, below the ${behavior.minimumSample} wanted for a stable rate.`
     : "";
   if (thinSampleIssue) issues.push(thinSampleIssue);
@@ -76,9 +78,9 @@ export function telemetryQualityVerdict(
   if (behavior.stalledActiveRuns) {
     issues.push(`${behavior.stalledActiveRuns}/${behavior.activeRuns} active human runs are stalled.`);
   }
-  if (behavior.runs && behavior.skillReceiptChecks < behavior.runs) {
+  if (behavior.receiptRuns && behavior.skillReceiptChecks < behavior.receiptRuns) {
     issues.push(
-      `Skill receipts were verified for ${behavior.skillReceiptChecks}/${behavior.runs} completed human runs.`
+      `Skill receipts were verified for ${behavior.skillReceiptChecks}/${behavior.receiptRuns} completed human runs.`
     );
   } else if (behavior.skillReceiptChecks && behavior.skillReceiptComplianceRate < 100) {
     issues.push(

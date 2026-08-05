@@ -25,8 +25,12 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
   const marker = `private-quality-${crypto.randomUUID()}`;
   const baseline = identity("quality-baseline");
   const current = identity("quality-current");
+  // Both completed runs saw the same injected prompt, so they are one behavior population and their
+  // reuse and receipt counters pool. Their catalog versions still differ, so the release fingerprints
+  // stay distinct and the release-comparison assertions below are unaffected.
+  const sharedPrompt = promptFingerprint("shared behavior prompt");
   beginQualityRun({
-    ...baseline, promptHash: promptFingerprint("baseline"), catalogVersion: "catalog-a",
+    ...baseline, promptHash: sharedPrompt, catalogVersion: "catalog-a",
     injectedChars: 400, ts: Date.now() - 1000,
   });
   recordQualityTool({
@@ -51,7 +55,7 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
   });
 
   beginQualityRun({
-    ...current, promptHash: promptFingerprint("current"), catalogVersion: "catalog-b",
+    ...current, promptHash: sharedPrompt, catalogVersion: "catalog-b",
     injectedChars: 320,
   });
   recordTelemetryState({
@@ -303,6 +307,9 @@ test("quality verdict scopes outages to the latest runtime release", () => {
     promptHash: promptFingerprint("old outage"),
     catalogVersion: "catalog-old",
     injectedChars: 0,
+    // Explicitly older: the release selection orders by start time, and two runs beginning in the
+    // same millisecond leave the tie to SQLite, which makes the assertion order-dependent.
+    ts: Date.now() - 60_000,
   });
   recordTelemetryState({
     ...old,
@@ -825,4 +832,62 @@ test("quality verdict reports no receipt compliance issue without samples", () =
   expect(empty.issues.some((issue) => issue.includes("skill receipts"))).toBe(false);
   expect(empty.issues.some((issue) => issue.includes("complete skill receipts"))).toBe(false);
   expect(empty.status).toBe("insufficient_data");
+});
+
+
+test("behavior pools releases sharing a prompt, but receipt verdicts follow the checker", () => {
+  const db = qualityDatabase()!;
+  db.run("DELETE FROM telemetry_events");
+  db.run("DELETE FROM telemetry_runs");
+  const pooled = promptFingerprint("pooled behavior prompt");
+  const other = promptFingerprint("a different prompt");
+  const seed = (
+    sessionId: string, promptHash: string, skillId: string, steps: number, ageMs: number
+  ) => {
+    const run = identity(sessionId);
+    beginQualityRun({
+      ...run, promptHash, catalogVersion: `catalog-${sessionId}`,
+      injectedChars: 100, ts: Date.now() - ageMs,
+    });
+    recordQualityTool({
+      ...run, eventKey: `${sessionId}-skill`, toolName: "skill_select",
+      args: { ids: [skillId] }, result: { selected: [{ id: skillId }] }, success: true,
+    });
+    recordTelemetryState({
+      ...run, eventKey: `${sessionId}-receipt`, kind: "skill_receipt_checked",
+      success: true, itemCount: steps, value: steps,
+    });
+    finishQualityRun({
+      ...run, completed: true, workflowPassed: true, skillUsed: true, brainUsed: true, stopNudges: 0,
+    });
+  };
+
+  // An unrelated prompt, oldest, must never join the pool.
+  seed("scope-other", other, "skill-z", 9, 180_000);
+  db.run("UPDATE telemetry_runs SET version='0.1.0+unrelated'");
+  // An earlier RELEASE that saw the same prompt. A code change cannot alter prompt-driven behavior,
+  // so its observations still count; before prompt scoping this whole run was discarded.
+  seed("scope-earlier", pooled, "skill-x", 2, 120_000);
+  db.run("UPDATE telemetry_runs SET version='0.1.0+earlier' WHERE version=?", [releaseVersion]);
+  // Both older runs were judged by an older checker.
+  db.run("UPDATE telemetry_events SET version='0.1.0+oldjudge'");
+  // The newest run, on the current release and the current checker, selects both scopes.
+  seed("scope-current", pooled, "skill-y", 3, 60_000);
+
+  const summary = qualitySummary(1);
+  expect(summary.samplePromptHash).toBe(pooled);
+  expect(summary).toMatchObject({
+    // Observations pool across the release boundary; the unrelated prompt stays out.
+    behaviorRuns: 2,
+    selectedSkills: 2,
+    // Verdicts do not pool: only the current checker's judgement counts, so fixing the checker
+    // retires every stale verdict instead of leaving it to age out of the window.
+    receiptRuns: 1,
+    skillReceiptChecks: 1,
+    expectedSkillReceiptSteps: 3,
+    reportedSkillReceiptSteps: 3,
+  });
+  // Release-scoped counters stay on one release, so shipping a fix can still clear a fault.
+  expect(summary.sampleVersion).toBe(releaseVersion);
+  expect(summary.runs).toBe(1);
 });

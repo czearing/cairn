@@ -67,6 +67,9 @@ export function printTelemetryReport(days: number, json = false): void {
   for (const issue of quality.verdict.issues) line(`  ! ${issue}`);
   line(`completed ${quality.completedRate}%  ` +
     `workflow ${quality.workflowRate}%  tool failures ${quality.toolFailures}`);
+  // Reuse and receipt rates are pooled by the injected prompt, not the commit, so say what they cover.
+  line(`behavior sample ${quality.behaviorRuns} run(s) sharing the current prompt` +
+    `${quality.populationRuns > quality.behaviorRuns ? ` of ${quality.populationRuns} in window` : ""}`);
   line(`brain search-to-use ${quality.searchToUseRate}% ` +
     `(${quality.usedReturnedNodes}/${quality.returnedNodes})  ` +
     `top-3 use ${quality.top3UseRate}% (${quality.top3UsedReturnedNodes}/` +

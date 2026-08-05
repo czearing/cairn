@@ -272,11 +272,13 @@ export function telemetryQualitySummary(days = 7): QualitySummary {
   // defects — 8 of the 9 releases in the current pool scored duplicates with a rule since proven wrong.
   // So receipts are scoped to the newest release that has actually judged one: fixing the checker
   // retires every stale verdict at once, which is the same property release scoping gives runtime health.
+  // Runs seeded inside one millisecond tie on MAX(e.ts), so insertion order breaks the tie and keeps
+  // the newest judge stable instead of letting SQLite's scan order pick a retired one.
   const receiptJudgeVersion = (db.query(`SELECT e.version FROM telemetry_events e
     JOIN telemetry_runs r USING(run_id)
     WHERE e.ts>=? AND r.run_class='human' AND r.status='completed'
       AND e.kind='skill_receipt_checked' AND e.version!=''
-    GROUP BY e.version ORDER BY MAX(e.ts) DESC LIMIT 1`)
+    GROUP BY e.version ORDER BY MAX(e.ts) DESC, MAX(e.rowid) DESC LIMIT 1`)
     .get(sinceTs) as { version?: string } | null)?.version || "";
   const skillBehavior = db.query(`SELECT
     COUNT(DISTINCT CASE WHEN e.kind='skill_selected' AND r.prompt_hash=? THEN e.entity_hash END)

@@ -891,3 +891,48 @@ test("behavior pools releases sharing a prompt, but receipt verdicts follow the 
   expect(summary.sampleVersion).toBe(releaseVersion);
   expect(summary.runs).toBe(1);
 });
+
+test("the receipt judge stays the current checker when every event shares one timestamp", () => {
+  const db = qualityDatabase()!;
+  db.run("DELETE FROM telemetry_events");
+  db.run("DELETE FROM telemetry_runs");
+  const pooled = promptFingerprint("pooled behavior prompt");
+  const other = promptFingerprint("a different prompt");
+  const seed = (
+    sessionId: string, promptHash: string, skillId: string, steps: number, ageMs: number
+  ) => {
+    const run = identity(sessionId);
+    beginQualityRun({
+      ...run, promptHash, catalogVersion: `catalog-${sessionId}`,
+      injectedChars: 100, ts: Date.now() - ageMs,
+    });
+    recordQualityTool({
+      ...run, eventKey: `${sessionId}-skill`, toolName: "skill_select",
+      args: { ids: [skillId] }, result: { selected: [{ id: skillId }] }, success: true,
+    });
+    recordTelemetryState({
+      ...run, eventKey: `${sessionId}-receipt`, kind: "skill_receipt_checked",
+      success: true, itemCount: steps, value: steps,
+    });
+    finishQualityRun({
+      ...run, completed: true, workflowPassed: true, skillUsed: true, brainUsed: true, stopNudges: 0,
+    });
+  };
+
+  seed("tie-other", other, "skill-z", 9, 180_000);
+  db.run("UPDATE telemetry_runs SET version='0.1.0+unrelated'");
+  seed("tie-earlier", pooled, "skill-x", 2, 120_000);
+  db.run("UPDATE telemetry_runs SET version='0.1.0+earlier' WHERE version=?", [releaseVersion]);
+  db.run("UPDATE telemetry_events SET version='0.1.0+oldjudge'");
+  seed("tie-current", pooled, "skill-y", 3, 60_000);
+
+  // Event timestamps default to the wall clock, so a fast machine writes all three runs inside one
+  // millisecond and the stale judge ties with the current one. Pin that tie instead of racing it.
+  db.run("UPDATE telemetry_events SET ts=?", [Date.now()]);
+
+  const summary = qualitySummary(1);
+  // The retired checker must not win the tie and re-import its 9 + 2 stale steps.
+  expect(summary.receiptRuns).toBe(1);
+  expect(summary.expectedSkillReceiptSteps).toBe(3);
+  expect(summary.reportedSkillReceiptSteps).toBe(3);
+});

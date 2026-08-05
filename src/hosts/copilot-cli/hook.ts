@@ -174,7 +174,7 @@ export function stopDecision(s: WorkflowEvidence): {
 //     which corrupts recall with duplicates and is the exact opposite of the instruction to reuse.
 // Reuse must still be recorded, not merely claimed: a bare search proves nothing, so the turn has to
 // mutate a node that its own search actually returned.
-export function brainWorkComplete(s: WorkflowEvidence): boolean {
+function brainWorkComplete(s: WorkflowEvidence): boolean {
   if (!s.brainSearched) return false;
   const created = s.brainCreatedCount ?? 0;
   const reused = s.brainReusedCount ?? 0;

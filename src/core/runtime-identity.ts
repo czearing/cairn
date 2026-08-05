@@ -12,7 +12,7 @@ const hookPath = (): string =>
  * and makes hook and runtime releases disagree mid-session. Restamp only when a live source revision
  * proves the label is stale — never when the release was not derived from a checkout.
  */
-export function releaseLabelRestamp(installed: string, live: string): string | null {
+function releaseLabelRestamp(installed: string, live: string): string | null {
   if (!sourceRevisionAvailable || !live || installed === live) return null;
   return live;
 }

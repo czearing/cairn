@@ -37,8 +37,8 @@ bun src/cli.ts install --dry-run # preview the changes, writing nothing
 
 - `src/core/` is the brain: db, embeddings, neurons, search. No host code goes here.
 - `src/mcp/server.ts` is the MCP adapter (the `brain_*` tools).
-- `src/inject/` and `src/hosts/<host>/` are the prompt-injection adapters. Claude Code is the only
-  host today.
+- `src/inject/` and `src/hosts/<host>/` are the prompt-injection adapters. Claude Code and GitHub
+  Copilot CLI are the hosts today.
 - `prompts/` is editable policy. No rebuild needed.
 - `scripts/` holds the installer bootstrap and the sandbox.
 

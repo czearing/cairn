@@ -2,8 +2,8 @@ import { mkdirSync, readFileSync, renameSync, rmSync, existsSync } from "node:fs
 import { join, resolve } from "node:path";
 
 const cairnRoot = resolve(import.meta.dir, "..", "..");
-export const mcpSource = join(cairnRoot, "src", "mcp", "server.ts");
-export const mcpBundle = join(cairnRoot, "dist", "mcp-server.js");
+const mcpSource = join(cairnRoot, "src", "mcp", "server.ts");
+const mcpBundle = join(cairnRoot, "dist", "mcp-server.js");
 const engineServerSource = join(cairnRoot, "src", "core", "engine-server.ts");
 let built = false;
 

@@ -34,7 +34,7 @@ export function skillResultIds(value: unknown): string[] {
   return [...new Set([...direct, ...selected, ...nested])];
 }
 
-export function skillResultNoMatch(value: unknown): boolean {
+function skillResultNoMatch(value: unknown): boolean {
   if (typeof value === "string") {
     try { return skillResultNoMatch(JSON.parse(value)); } catch { return false; }
   }

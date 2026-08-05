@@ -88,18 +88,6 @@ export function visibleSkill(id: string): Skill | null {
   return skill?.masterPrompt.trim() && skill.description?.trim() ? skill : null;
 }
 
-export function reviewableSkill(id: string): Skill | null {
-  const skill = getSkill(id);
-  return skill && (skill.description?.trim() || !skill.masterPrompt.trim()) ? skill : null;
-}
-
-export function setSkillRedirect(sourceId: string, targetId: string, ts = Date.now()): void {
-  ensure();
-  db().run(`INSERT INTO skill_redirects(source_id,target_id,ts) VALUES (?,?,?)
-    ON CONFLICT(source_id) DO UPDATE SET target_id=excluded.target_id,ts=excluded.ts`,
-  sourceId, targetId, ts);
-}
-
 export function resolveSkillId(id: string): string {
   ensure();
   let current = id;
@@ -148,19 +136,6 @@ export function setMasterPrompt(id: string, masterPrompt: string, explanation?: 
   db().run("UPDATE skills SET master_prompt = ?, explanation = ? WHERE id = ?", masterPrompt, explanation, id);
 }
 
-/** Bootstrap a legacy blank skill exactly once. Concurrent reviewers cannot overwrite the winner. */
-export function setMasterPromptIfBlank(
-  id: string,
-  masterPrompt: string,
-  explanation = ""
-): boolean {
-  ensure();
-  return db().query(`UPDATE skills
-    SET master_prompt = ?, explanation = ?
-    WHERE id = ? AND TRIM(master_prompt) = ''`)
-    .run(masterPrompt, explanation, id).changes > 0;
-}
-
 export function setSkillMetadata(id: string, title: string, description: string): void {
   ensure();
   db().run(
@@ -170,12 +145,6 @@ export function setSkillMetadata(id: string, title: string, description: string)
     description.trim(),
     id,
   );
-}
-
-/** Every skill's label (the `task` field), for biasing the labeler toward reuse. */
-export function skillLabels(): string[] {
-  ensure();
-  return (db().query("SELECT task FROM skills WHERE master_prompt <> '' AND TRIM(description) <> ''").all() as { task: string }[]).map((r) => r.task);
 }
 
 /** Every skill's id and title, with no visibility gate applied. Telemetry attribution needs the whole

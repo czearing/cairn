@@ -1,10 +1,15 @@
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mcpLaunchArgs } from "../src/mcp/bundle";
+
+// SQLite in WAL mode writes `-shm` and `-wal` beside the database, so deleting the database file
+// alone leaves both sidecars behind. Each test gets a scratch directory that is removed whole.
+const scratch = () => mkdtempSync(join(tmpdir(), "cairn-test-"));
 
 test("Bun hot reload updates an MCP handler without replacing its stdio process", async () => {
   const root = join(import.meta.dir, "..", `.cairn-hot-reload-${randomUUID()}`);
@@ -71,8 +76,9 @@ test("the launch arguments hosts are installed with are the ones that reload", a
   expect(args.some((arg) => arg.replaceAll("\\", "/").includes("/dist/"))).toBe(false);
 
   const repository = join(import.meta.dir, "..");
-  const hook = join(repository, `.cairn-launch-hook-${randomUUID()}.json`);
-  const database = join(repository, `.cairn-launch-db-${randomUUID()}.db`);
+  const directory = scratch();
+  const hook = join(directory, "launch-hook.json");
+  const database = join(directory, "launch.db");
   writeFileSync(hook, JSON.stringify({ cairnRelease: "0.1.0+before" }));
   const transport = new StdioClientTransport({
     command: Bun.which("bun") ?? "bun",
@@ -102,15 +108,15 @@ test("the launch arguments hosts are installed with are the ones that reload", a
     expect(after).toMatchObject({ version: "0.1.0+after", pid: before?.pid });
   } finally {
     await client.close();
-    rmSync(hook, { force: true });
-    rmSync(database, { force: true });
+    rmSync(directory, { recursive: true, force: true });
   }
 }, 20_000);
 
 test("a connected Cairn server observes an installed release change in the same process", async () => {
   const repository = join(import.meta.dir, "..");
-  const hook = join(repository, `.cairn-hot-hook-${randomUUID()}.json`);
-  const database = join(repository, `.cairn-hot-db-${randomUUID()}.db`);
+  const directory = scratch();
+  const hook = join(directory, "hot-hook.json");
+  const database = join(directory, "hot.db");
   writeFileSync(hook, JSON.stringify({ cairnRelease: "0.1.0+before" }));
   const transport = new StdioClientTransport({
     command: Bun.which("bun") ?? "bun",
@@ -142,7 +148,6 @@ test("a connected Cairn server observes an installed release change in the same 
     expect(after).toMatchObject({ version: "0.1.0+after", pid: before?.pid });
   } finally {
     await client.close();
-    rmSync(hook, { force: true });
-    rmSync(database, { force: true });
+    rmSync(directory, { recursive: true, force: true });
   }
 }, 10_000);

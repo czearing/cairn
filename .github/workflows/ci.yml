@@ -20,6 +20,13 @@ jobs:
           bun-version: latest
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      # Without this every job re-downloads the embedding model from Hugging Face, three times per
+      # push, which earns an HTTP 429 and fails a run that has nothing wrong with it.
+      - name: Cache the embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cairn/models
+          key: cairn-models-${{ runner.os }}-all-MiniLM-L6-v2
       - name: Typecheck
         run: bunx tsc --noEmit
       - name: Test

@@ -298,9 +298,11 @@ async function main(): Promise<void> {
         if (transcriptPath) {
           try {
             const { extractRun } = await import("../../skill/transcript");
-            const { analyzeSkillReceipt, requiredStepCitations } = await import("../../core/skill-receipt");
+            const { analyzeSkillReceipt, receiptScope, requiredStepCitations } = await import("../../core/skill-receipt");
             const { recordSkillReceiptTelemetry } = await import("../../core/skill-receipt-telemetry");
-            const output = extractRun(transcriptPath)?.output;
+            // The receipt belongs to a reply, not to the whole turn. See receiptScope for why.
+            const run = extractRun(transcriptPath);
+            const output = run ? receiptScope(run.replies, run.output) : "";
             if (output) {
               const receipt = analyzeSkillReceipt(output, requiredStepCitations(state.pendingReviewIds));
               await recordSkillReceiptTelemetry({

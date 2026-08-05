@@ -30,6 +30,21 @@ export function requiredStepCitations(skillIds: string[]): number {
   return [...new Set(skillIds)].filter((id) => visibleSkill(id)?.masterPrompt).length;
 }
 
+/** Which reply the receipt check should read.
+ *
+ *  Not the whole turn: a turn holds every reply since the last human message, because Cairn's own
+ *  continuation prompts are system envelopes and do not start a new turn. Reading the turn sees one
+ *  required receipt per reply and calls the turn a duplicate.
+ *
+ *  Not blindly the last reply either: a short trailing note after the receipt-bearing reply would then
+ *  read as a missing receipt. Take the last reply that actually carries a receipt, and fall back to the
+ *  last reply, which correctly reports the receipt as absent when no reply carried one.
+ */
+export function receiptScope(replies: string[], output = ""): string {
+  const carrying = replies.filter((reply) => analyzeSkillReceipt(reply, 0).present);
+  return carrying.at(-1) ?? replies.at(-1) ?? output;
+}
+
 export function analyzeSkillReceipt(text: string, expectedSteps: number): SkillReceiptEvidence {
   const receiptHeadings = [
     ...text.matchAll(/(?:^|\n)\s*(?:#{1,3}\s*)?\*{0,2}Cairn\*{0,2}\s*:?\s*(?=\n|$)/gim),

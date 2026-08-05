@@ -68,9 +68,14 @@ export function extractRun(path: string): RunInput | null {
   const turn = events.slice(start).filter((event) => !(event.role === "user" && isSystemEnvelope(event.text)));
   const request = turn.filter(genuineUser).map((event) => event.text).join("\n").trim();
   // Deliverable = the agent's visible messages (thinking is process, shown in the transcript, not the deliverable).
-  const output = turn.filter((event) => event.role === "assistant" && event.text).map((event) => event.text).join("\n\n").trim();
+  const visible = turn.filter((event) => event.role === "assistant" && event.text).map((event) => event.text);
+  const output = visible.join("\n\n").trim();
   if (!request || !output) return null;
-  return { request, output, transcript: renderTranscript(turn) };
+  return {
+    request, output,
+    replies: visible.map((message) => message.trim()).filter(Boolean),
+    transcript: renderTranscript(turn),
+  };
 }
 
 function renderTranscript(events: Event[]): string {

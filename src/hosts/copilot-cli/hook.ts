@@ -767,9 +767,11 @@ export async function runCopilotHook(): Promise<void> {
     if (transcriptPath) {
       try {
         const { extractRunCopilot } = await import("../../skill/transcript-copilot");
-        const { analyzeSkillReceipt, requiredStepCitations } = await import("../../core/skill-receipt");
+        const { analyzeSkillReceipt, receiptScope, requiredStepCitations } = await import("../../core/skill-receipt");
         const { recordSkillReceiptTelemetry } = await import("../../core/skill-receipt-telemetry");
-        const output = extractRunCopilot(transcriptPath)?.output;
+        // The receipt belongs to a reply, not to the whole turn. See receiptScope for why.
+        const run = extractRunCopilot(transcriptPath);
+        const output = run ? receiptScope(run.replies, run.output) : "";
         if (output) {
           const receipt = analyzeSkillReceipt(output, requiredStepCitations(st.selectedSkillIds));
           await recordSkillReceiptTelemetry({

@@ -3,7 +3,13 @@
 // generic over the event type with its predicate injected.
 
 /** One human turn reduced to what the skill-receipt check needs: the ask, the deliverable, and the process. */
-export interface RunInput { request: string; transcript: string; output: string }
+/** `replies` are the agent's visible messages in order, kept separate from the joined `output`.
+ *
+ *  A turn can contain several replies: Cairn's own continuation prompts are system envelopes, so they do
+ *  not start a new turn, and every reply since the last human message lands in the same `output`. A rule
+ *  about "the reply" — such as the receipt check — must read these, or it will see one reply's required
+ *  receipt repeated N times and call the turn a duplicate. */
+export interface RunInput { request: string; transcript: string; output: string; replies: string[] }
 
 export const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 

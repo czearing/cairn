@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { analyzeSkillReceipt } from "../src/core/skill-receipt";
+import { analyzeSkillReceipt, receiptScope } from "../src/core/skill-receipt";
 
 const receipt = `**Cairn**
 - **Root:** Done. http://localhost/node/1
@@ -116,4 +116,33 @@ Skill update — none needed.`, 1)).toMatchObject({
     reportedSteps: 0,
     updateDispositionPresent: false,
   });
+});
+
+
+test("receiptScope reads the reply, not the whole turn", () => {
+  // Cairn's continuation prompts are system envelopes, so a turn holds every reply since the last human
+  // message. Each reply carries the receipt Cairn required of it; the turn must not read that as cheating.
+  const replies = [receipt, "Interim progress note with no receipt.", receipt];
+  const turn = analyzeSkillReceipt(replies.join("\n\n"), 4);
+  expect(turn.receiptCount).toBe(2);
+  expect(turn.duplicate).toBe(true);            // what the turn-scoped check saw
+  const scoped = analyzeSkillReceipt(receiptScope(replies), 4);
+  expect(scoped.receiptCount).toBe(1);
+  expect(scoped.duplicate).toBe(false);
+  expect(scoped.complete).toBe(true);
+});
+
+test("receiptScope skips a trailing note and still finds the receipt", () => {
+  const replies = [receipt, "Pushed. Anything else?"];
+  expect(analyzeSkillReceipt(receiptScope(replies), 4).complete).toBe(true);
+});
+
+test("receiptScope reports an absent receipt when no reply carried one", () => {
+  expect(analyzeSkillReceipt(receiptScope(["did the work", "pushed it"]), 4).present).toBe(false);
+});
+
+test("two receipts inside ONE reply are still a duplicate", () => {
+  // The rule keeps its teeth: this is the misbehavior it was written to catch.
+  const doubled = `${receipt}\n\n${receipt}`;
+  expect(analyzeSkillReceipt(receiptScope([doubled]), 4).duplicate).toBe(true);
 });

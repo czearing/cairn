@@ -53,15 +53,17 @@ function artifactWrite(event: Event): string {
 }
 
 function deliverableOutput(events: Event[]): string {
-  const messages = events.filter((event) =>
-    event.role === "assistant" && event.text && !event.thinking
-  ).map((event) => event.text).join("\n\n").trim();
+  const messages = visibleMessages(events).join("\n\n").trim();
   const artifacts = events.map(artifactWrite).filter(Boolean);
   const durable = artifacts.length
     ? `DURABLE ARTIFACT WRITES:\n${artifacts.join("\n\n---\n\n")}`
     : "";
   return [messages, durable].filter(Boolean).join("\n\n").trim();
 }
+
+const visibleMessages = (events: Event[]): string[] => events
+  .filter((event) => event.role === "assistant" && event.text && !event.thinking)
+  .map((event) => event.text);
 
 export function extractRunCopilot(path: string): RunInput | null {
   let lines: string[];
@@ -115,7 +117,11 @@ export function extractRunCopilot(path: string): RunInput | null {
   // deliverable, so it is excluded here (it still appears in the transcript).
   const output = deliverableOutput(turn);
   if (!request || !output) return null;
-  return { request, output, transcript: transcriptRows(turn) };
+  return {
+    request, output,
+    replies: visibleMessages(turn).map((message) => message.trim()).filter(Boolean),
+    transcript: transcriptRows(turn),
+  };
 }
 
 function transcriptRows(events: Event[]): string {

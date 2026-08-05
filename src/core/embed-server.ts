@@ -9,6 +9,7 @@ import { join, dirname } from "node:path";
 import { writeFileSync, rmSync, mkdirSync, readFileSync } from "node:fs";
 import { embedInProcess, sidecarPort, STARTFILE } from "./embed";
 import { embedModel } from "./embed";
+import { installCrashGuard } from "./crash-guard";
 
 process.env.CAIRN_EMBED_NO_SERVER = "1"; // our own embed calls must stay in-process (never recurse into a server)
 
@@ -37,6 +38,8 @@ function cleanup(): void {
 process.on("exit", cleanup);
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT", () => process.exit(0));
+// Shared by every session on the machine, so a stray async fault here is felt everywhere.
+installCrashGuard("embed-server");
 
 let idle: ReturnType<typeof setTimeout> | undefined;
 function resetIdle(): void { if (idle) clearTimeout(idle); idle = setTimeout(() => process.exit(0), IDLE_MS); }

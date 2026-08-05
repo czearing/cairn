@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "./config";
+import { installCrashGuard } from "./crash-guard";
 import { embedModel } from "./embed";
 import {
   ENGINE_PROTOCOL_VERSION,
@@ -173,6 +174,9 @@ const cleanup = (): void => {
 process.on("exit", cleanup);
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT", () => process.exit(0));
+// This daemon outlives every session that uses it, so a single stray async fault would take the
+// search path down for all of them. See core/crash-guard.ts.
+installCrashGuard("engine-server");
 
 try { rmSync(startfile, { force: true }); } catch { /* absent */ }
 resetIdle();

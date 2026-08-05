@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { c, sym, line, step } from "./term";
 import { readAutoUpdateState } from "./core/auto-update";
+import { crashLogPath, recentCrashes } from "./core/crash-guard";
 import { autoUpdateEnabled } from "./core/config";
 
 // Preflight, flutter-doctor style: check every dependency the install needs UP FRONT and, for
@@ -121,6 +122,19 @@ export async function checks(): Promise<Check[]> {
     fix: auto
       ? "A skipped check means the checkout is dirty or diverged: commit, stash, or push local work so fast-forward can apply."
       : 'Re-enable with CAIRN_AUTO_UPDATE=1 or remove "autoUpdate": false from ~/.cairn/config.json.',
+  });
+
+  const crashes = recentCrashes();
+  out.push({
+    name: "Background faults",
+    ok: !crashes,
+    required: false,
+    detail: crashes
+      ? `${crashes.count} caught since the log was last cleared; latest ${crashes.latest}`
+      : "none recorded",
+    fix: crashes
+      ? `Cairn stayed up and recorded these instead of dropping the connection. Full stacks: ${crashLogPath()}`
+      : undefined,
   });
 
   return out;

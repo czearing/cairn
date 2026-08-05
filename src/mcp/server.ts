@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { config } from "../core/config";
+import { installCrashGuard } from "../core/crash-guard";
 import { recordTelemetry } from "../core/telemetry-record";
 import { jsonChars } from "../core/telemetry-size";
 import { structuredResult } from "../core/telemetry-entities";
@@ -31,6 +32,11 @@ import { searchPayload } from "./search-payload";
 // Bun hot reload re-evaluates this module while the connected server remains on globalThis. Each pass
 // refreshes callbacks and schemas in place, so existing host sessions receive new behavior without
 // replacing their stdio connection.
+
+// A stray async fault anywhere in this process would otherwise terminate it, and the host would
+// report only "Connection closed" with nothing to diagnose. Install the guard before any async work
+// starts. See core/crash-guard.ts.
+installCrashGuard("mcp-server");
 
 // The MCP surface is the agent's WRITE path (brain_create/mutate/delete). Whatever launched this
 // process — a host CLI started from a shell that exported the flag, or any Cairn reader — must not be

@@ -23,4 +23,6 @@ jobs:
       - name: Typecheck
         run: bunx tsc --noEmit
       - name: Test
-        run: bun test
+        # Several hook tests spawn the CLI eight times over; a cold Windows runner needs well past
+        # Bun's 5s default, and one of them timed out at 13s while passing everywhere else.
+        run: bun test --timeout 30000

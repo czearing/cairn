@@ -49,6 +49,7 @@ To support a new host, add a `src/hosts/<host>/` adapter. The core and the injec
 1. Branch from `main`.
 2. Keep the change focused. Update the README and CHANGELOG when behavior changes.
 3. Make sure `bun test` and `bunx tsc --noEmit` pass. CI runs them on Linux, macOS, and Windows.
-4. Write clear commit messages. [Conventional Commits](https://www.conventionalcommits.org) preferred.
+4. Write the commit subject as a short imperative sentence saying what the change does, like
+   "Break the receipt judge tie deterministically".
 
 Contributions are licensed under the project's MIT license.

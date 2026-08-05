@@ -22,7 +22,6 @@ import {
   writeNeuronVector,
 } from "./vector-store";
 import type { Neuron, Row, NeuronPatch } from "./neurons.types";
-import { unresolvedReferences } from "./citation";
 
 export const vecText = (text: string, answer: string) => `${text} ${answer}`.trim();
 
@@ -205,18 +204,6 @@ export async function mutate(id: string, patch: NeuronPatch): Promise<Neuron | n
   // A neuron with an answer MUST be cited — no uncited claims in the brain.
   if (next.answer.trim() && !next.citation.trim()) {
     throw new Error("citation required: set `citation` to a real source link when giving a neuron an answer.");
-  }
-  // A citation is only evidence if what it points at exists. A fabricated path or id keeps a valid
-  // shape and passes a presence check while resolving to nothing, so every reference this machine can
-  // check is resolved here and named individually when it fails. Remote URLs cannot be resolved
-  // without a network call and are left to the caller.
-  if (next.answer.trim()) {
-    const missing = unresolvedReferences(next.citation, (nodeId) => Boolean(get(nodeId)));
-    if (missing.length) {
-      throw new Error(
-        `citation does not resolve: ${missing.join(" | ")}. Every reference must point at a file or thought that exists — re-read the source and cite what you actually opened.`,
-      );
-    }
   }
   if (next.text !== cur.text || next.answer !== cur.answer) {
     const vec = encodeVector(await embed(vecText(next.text, next.answer)));

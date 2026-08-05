@@ -81,6 +81,28 @@ test("mutate: REQUIRES a citation when giving an answer", async () => {
   expect(m.answer).toBe("a cited claim");
 });
 
+test("mutate: REJECTS a citation naming a thought that does not exist", async () => {
+  const n = await N.create("Q?");
+  const fake = "b8a36170-0000-0000-0000-000000000000";
+  expect(N.mutate(n.id, { answer: "claim", citation: `see ${fake}` }))
+    .rejects.toThrow(/does not resolve/);
+  // the real neighbour resolves, so the same shape of citation is accepted
+  const real = await N.create("neighbour?");
+  const m = (await N.mutate(n.id, { answer: "claim", citation: `see ${real.id}` }))!;
+  expect(m.answer).toBe("claim");
+});
+
+test("mutate: REJECTS a citation naming a file that does not exist", async () => {
+  const n = await N.create("Q?");
+  expect(N.mutate(n.id, { answer: "claim", citation: "file:///C:/Code/cairn/src/core/nope.ts:12" }))
+    .rejects.toThrow(/does not resolve/);
+  const m = (await N.mutate(n.id, {
+    answer: "claim",
+    citation: "file:///C:/Code/cairn/src/core/citation.ts:1-10",
+  }))!;
+  expect(m.answer).toBe("claim");
+});
+
 test("link/unlink connect thoughts bidirectionally", async () => {
   const a = await N.create("A");
   const b = await N.create("B");

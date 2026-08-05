@@ -8,6 +8,7 @@ const booleans = [
 const numbers = [
   "promptTokens", "createdNodes", "answeredNodes", "citedAnswers", "deepestLevel",
   "returnedNodes", "usedReturnedNodes", "trial",
+  "plantedReturnedNodes", "plantedAdoptedNodes", "plantedContradictedNodes",
   "taskAssertionsPassed", "taskAssertionsTotal", "toolFailures", "stopNudges",
   "unexpectedEvents",
 ] as const;

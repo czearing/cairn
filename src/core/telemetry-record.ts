@@ -5,6 +5,7 @@ import { resultIds, structuredResult } from "./telemetry-entities";
 import { telemetryDatabase } from "./telemetry-schema";
 import { estimatedTokens, jsonChars, positive } from "./telemetry-size";
 import { toolEntityObservations } from "./telemetry-tool-entities";
+import { isCairnToolName, normalizeToolName } from "./tool-name";
 import type { TelemetryEvent, TelemetryRunIdentity } from "./telemetry-record-types";
 import { correlatedTransportRuntime } from "./telemetry-runtime-correlation";
 export type { TelemetryEvent, TelemetryHost, TelemetryRunIdentity } from "./telemetry-record-types";
@@ -144,7 +145,7 @@ export function recordTelemetryTool(input: TelemetryRunIdentity & {
   eventKey: string; toolName: string; args: Record<string, unknown>;
   result: unknown; success: boolean; durationMs?: number;
 }): void {
-  const tool = input.toolName.toLowerCase().replace(/^.*(?:__|-)(?=(?:brain|skill)_)/, "");
+  const tool = normalizeToolName(input.toolName);
   const parsed = structuredResult(input.result);
   const ids = resultIds(parsed);
   const inputChars = jsonChars(input.args);
@@ -166,7 +167,7 @@ export function recordTelemetryTool(input: TelemetryRunIdentity & {
     outputTokens: estimatedTokens(outputChars),
     itemCount: Array.isArray(parsed) ? parsed.length : ids.length,
     runtime,
-    runtimeExpected: /^(brain|skill)_/.test(tool),
+    runtimeExpected: isCairnToolName(tool),
   });
   for (const observation of toolEntityObservations(tool, input.args, parsed, ids)) {
     recordEvent({ ...input, toolName: tool, ...observation });

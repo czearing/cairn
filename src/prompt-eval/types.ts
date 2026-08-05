@@ -20,6 +20,9 @@ export interface PromptRunEvidence {
   deepestLevel: number;
   returnedNodes: number;
   usedReturnedNodes: number;
+  plantedReturnedNodes: number;
+  plantedAdoptedNodes: number;
+  plantedContradictedNodes: number;
   taskAssertionSet: string;
   taskAssertionsPassed: number;
   taskAssertionsTotal: number;

@@ -47,6 +47,7 @@ export function capturePromptEvidence(input: {
   taskAssertionSet: string;
   taskAssertionsPassed: number;
   taskAssertionsTotal: number;
+  plantedNodeIds?: string[];
 }): PromptRunEvidence {
   const path = resolve(input.dbPath);
   if (path === liveDb) throw new Error("prompt evidence refuses the live Cairn database");
@@ -96,7 +97,7 @@ export function capturePromptEvidence(input: {
       }
     }
     if (!run) throw new Error("no quality run found for isolated session");
-    const shape = graphEvidence(events);
+    const shape = graphEvidence(events, input.plantedNodeIds ?? []);
     const selectedSkillIds = events.flatMap((event) => {
       if (event.name === "skill_select" && Array.isArray(event.args.ids)) {
         return event.args.ids.filter((id): id is string => typeof id === "string");
@@ -126,6 +127,9 @@ export function capturePromptEvidence(input: {
       deepestLevel: shape.deepestLevel,
       returnedNodes: shape.returnedNodes,
       usedReturnedNodes: shape.usedReturnedNodes,
+      plantedReturnedNodes: shape.plantedReturnedNodes,
+      plantedAdoptedNodes: shape.plantedAdoptedNodes,
+      plantedContradictedNodes: shape.plantedContradictedNodes,
       taskAssertionSet: input.taskAssertionSet,
       taskAssertionsPassed: input.taskAssertionsPassed,
       taskAssertionsTotal: input.taskAssertionsTotal,

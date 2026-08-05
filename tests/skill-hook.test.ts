@@ -219,8 +219,14 @@ test("skill_select accepts exact catalog titles without exposing catalog metadat
 
   expect(skillSelect(["cli troubleshooting"]).selected[0]?.id).toBe(created.skill.id);
   expect(skillSelect([created.skill.id]).selected[0]?.id).toBe(created.skill.id);
-  expect(skillSelect(["none"])).toEqual({ selected: [], noMatch: true });
+  expect(skillSelect(["none"])).toEqual({
+    selected: [],
+    noMatch: true,
+    catalogSize: 1,
+    reason: "no_match_in_catalog",
+  });
   expect(skillSelect(["cli troubleshooting"])).not.toHaveProperty("catalogVersion");
+  expect(skillSelect(["cli troubleshooting"])).not.toHaveProperty("currentCatalog");
 
   setMasterPrompt(created.skill.id, "1. reproduce\n2. trace\n3. verify");
   expect(skillSelect(["cli troubleshooting"]).selected[0]?.steps).toContain("trace");

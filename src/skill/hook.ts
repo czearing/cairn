@@ -23,15 +23,27 @@ export function skillLoad(id: string): { id: string; title: string; description:
 export function skillSelect(ids: string[]): {
   selected: NonNullable<ReturnType<typeof skillLoad>>[];
   noMatch?: boolean;
+  catalogSize?: number;
+  reason?: "catalog_empty" | "no_match_in_catalog";
   currentCatalog?: ReturnType<typeof skillCatalog>;
   error?: string;
 } {
   if (!skillsEnabled()) return { selected: [], error: "skills are disabled" };
   const snapshot = skillCatalogSnapshot();
+  const catalogSize = snapshot.catalog.length;
   const references = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
   if (!references.length) return { selected: [], error: "select at least one skill title or id" };
   if (references.length === 1 && references[0]!.toLowerCase() === "none") {
-    return { selected: [], noMatch: true };
+    // An empty catalog and a genuine absence of matches must never share one result. They demand
+    // opposite responses: creating a skill is correct for a real gap and is duplication when the
+    // catalog simply failed to arrive. The size is read from the snapshot this call dereferenced,
+    // never recomputed, so a concurrent catalog change cannot report a size the caller never saw.
+    return {
+      selected: [],
+      noMatch: true,
+      catalogSize,
+      reason: catalogSize === 0 ? "catalog_empty" : "no_match_in_catalog",
+    };
   }
   const durableIds = references.map((reference) =>
     snapshot.catalog.find((skill) => skill.title.toLowerCase() === reference.toLowerCase())?.id
@@ -42,11 +54,12 @@ export function skillSelect(ids: string[]): {
   if (missing.length) {
     return {
       selected: [],
+      catalogSize,
       currentCatalog: snapshot.catalog,
       error: `unknown or unlearned skill titles or ids: ${missing.join(", ")}`,
     };
   }
-  return { selected: selected as NonNullable<ReturnType<typeof skillLoad>>[] };
+  return { selected: selected as NonNullable<ReturnType<typeof skillLoad>>[], catalogSize };
 }
 
 // New skills must describe a reusable capability with multiple distinct examples and explicitly justify why

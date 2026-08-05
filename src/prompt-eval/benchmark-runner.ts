@@ -160,6 +160,7 @@ async function runPrompt(
           taskAssertionSet: assertions.assertionSet,
           taskAssertionsPassed: assertions.passed,
           taskAssertionsTotal: assertions.total,
+          plantedNodeIds: item.plantedNodeIds ?? [],
         }));
       }
     }

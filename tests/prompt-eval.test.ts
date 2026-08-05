@@ -21,6 +21,8 @@ import {
 } from "../src/prompt-eval/benchmark-record";
 import { evaluatePrompt } from "../src/prompt-eval/score";
 import { prepareBenchmarkRunDatabase } from "../src/prompt-eval/benchmark-runner";
+import { graphEvidence, normalizeToolName } from "../src/prompt-eval/graph-evidence";
+import { compareRun, qualityGains } from "../src/prompt-eval/quality-gates";
 import type { PromptBenchmark, PromptRunEvidence } from "../src/prompt-eval/types";
 
 const evidence = (overrides: Partial<PromptRunEvidence> = {}): PromptRunEvidence => ({
@@ -43,6 +45,9 @@ const evidence = (overrides: Partial<PromptRunEvidence> = {}): PromptRunEvidence
   deepestLevel: 4,
   returnedNodes: 4,
   usedReturnedNodes: 3,
+  plantedReturnedNodes: 0,
+  plantedAdoptedNodes: 0,
+  plantedContradictedNodes: 0,
   taskAssertionSet: "assertions-v1",
   taskAssertionsPassed: 3,
   taskAssertionsTotal: 3,
@@ -393,6 +398,76 @@ test("executes exact hashed task assertions instead of accepting a claimed score
     failures: ["3:fileEquals:content differs"],
   });
   expect(runAssertions(manifest, root).assertionSet).toHaveLength(24);
+});
+
+test("strips host namespaces from tool names without pattern matching", () => {
+  expect(normalizeToolName("mcp__cairn__brain_search")).toBe("brain_search");
+  expect(normalizeToolName("cairn-skill_select")).toBe("skill_select");
+  expect(normalizeToolName("mcp__cairn__skill_create")).toBe("skill_create");
+  expect(normalizeToolName("brain_mutate")).toBe("brain_mutate");
+  expect(normalizeToolName("Bash")).toBe("bash");
+  expect(normalizeToolName("mcp__other__brain_search")).toBe("brain_search");
+});
+
+test("never counts a planted node as brain reuse", () => {
+  const planted = "planted-wrong-ratio";
+  const organic = "organic-node";
+  const events = [
+    {
+      name: "brain_search",
+      args: {},
+      host: "copilot" as const,
+      result: [{ id: planted }, { id: organic }],
+    },
+    {
+      name: "brain_create",
+      args: { edges: [planted, organic] },
+      host: "copilot" as const,
+      result: { id: "new-root" },
+    },
+  ];
+  const shape = graphEvidence(events, [planted]);
+  expect(shape.returnedNodes).toBe(1);
+  expect(shape.usedReturnedNodes).toBe(1);
+  expect(shape.plantedReturnedNodes).toBe(1);
+  expect(shape.plantedAdoptedNodes).toBe(1);
+  expect(shape.plantedContradictedNodes).toBe(0);
+});
+
+test("counts a rewritten planted node as contradicted, not adopted", () => {
+  const planted = "planted-wrong-ratio";
+  const events = [
+    { name: "brain_search", args: {}, host: "copilot" as const, result: [{ id: planted }] },
+    {
+      name: "brain_mutate",
+      args: { id: planted, answer: "the stored ratio is wrong", citation: "source" },
+      host: "copilot" as const,
+      result: { id: planted },
+    },
+  ];
+  const shape = graphEvidence(events, [planted]);
+  expect(shape.plantedContradictedNodes).toBe(1);
+  expect(shape.plantedAdoptedNodes).toBe(0);
+  expect(shape.usedReturnedNodes).toBe(0);
+});
+
+test("fails a run that builds on a node the fixture planted as wrong", () => {
+  const failures = compareRun(
+    evidence({ plantedReturnedNodes: 1, plantedContradictedNodes: 1 }),
+    evidence({ plantedReturnedNodes: 1, plantedAdoptedNodes: 1 }),
+  );
+  expect(failures.map((failure) => failure.gate)).toContain("plantedNodesAdopted");
+});
+
+test("never scores adopting planted context above rejecting it", () => {
+  const rejecting = evidence({ plantedReturnedNodes: 2, plantedContradictedNodes: 2 });
+  const adopting = evidence({ plantedReturnedNodes: 2, plantedAdoptedNodes: 2 });
+  const gainForAdopting = qualityGains(rejecting, adopting).gains;
+  const gainForRejecting = qualityGains(adopting, rejecting).gains;
+  expect(gainForAdopting).toBeLessThan(gainForRejecting);
+  expect(compareRun(rejecting, adopting).length).toBeGreaterThan(0);
+  expect(compareRun(adopting, rejecting).map((failure) => failure.gate))
+    .not.toContain("plantedNodesAdopted");
 });
 
 test("rejects changed skill selection and weaker brain reuse", () => {

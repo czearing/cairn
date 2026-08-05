@@ -194,9 +194,13 @@ const mutationAck = ({ id }: Neuron) => ({ id, url: nodeUrl(id) });
 const skillSelectionAck = (result: {
   selected: { id: string; steps: string }[];
   noMatch?: boolean;
+  catalogSize?: number;
+  reason?: string;
 }) => ({
   selected: result.selected.map(({ id, steps }) => ({ id, steps })),
+  ...(result.catalogSize == null ? {} : { catalogSize: result.catalogSize }),
   ...(result.noMatch ? { noMatch: true } : {}),
+  ...(result.reason ? { reason: result.reason } : {}),
 });
 
 // Optional hard cap on the agent-facing result set, OFF by default (0): the breadth is controlled by

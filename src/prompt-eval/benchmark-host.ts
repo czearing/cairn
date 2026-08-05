@@ -11,6 +11,9 @@ interface BenchmarkCase {
   task: string;
   assertions: Assertion[];
   files?: Record<string, string>;
+  /** Node ids seeded into the source database that hold deliberately wrong content. Reuse credit is
+   *  never awarded for these, and adopting one fails the run outright. */
+  plantedNodeIds?: string[];
 }
 
 export interface BenchmarkPlan {

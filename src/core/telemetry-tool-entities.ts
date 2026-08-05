@@ -4,6 +4,7 @@ interface ToolEntityObservation {
   entityId: string;
   rank?: number;
   scoreBucket?: number;
+  itemCount?: number;
 }
 
 const strings = (value: unknown): string[] =>
@@ -27,7 +28,22 @@ export function toolEntityObservations(
   const result: ToolEntityObservation[] = [];
   if (tool === "skill_select") {
     const selected = strings(args.ids).filter((id) => id.trim().toLowerCase() !== "none");
-    result.push(...observations("skill_selected", "skill", selected));
+    const row = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+    const catalogSize = Number.isFinite(Number(row.catalogSize)) ? Number(row.catalogSize) : 0;
+    // One outcome row per call, emitted whether or not anything was selected. Without it an empty
+    // selection writes no row at all, so stored telemetry cannot tell a delivered-but-unmatched
+    // catalog from a catalog that never arrived. The reason code is the entity so it can be grouped.
+    const reason = typeof row.reason === "string" && row.reason
+      ? row.reason
+      : (row.error ? "selection_error" : "selected");
+    result.push({
+      kind: "skill_selection",
+      entityType: "skill",
+      entityId: reason,
+      itemCount: catalogSize,
+    });
+    result.push(...observations("skill_selected", "skill", selected)
+      .map((observation, index) => ({ ...observation, rank: index + 1, itemCount: catalogSize })));
   }
   if (tool === "skill_create") result.push(...observations("skill_created", "skill", ids));
   if (tool === "skill_edit") result.push(...observations("skill_edited", "skill", [String(args.id || "")]));

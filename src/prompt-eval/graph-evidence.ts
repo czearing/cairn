@@ -1,4 +1,5 @@
 import type { PromptHost } from "./types";
+export { normalizeToolName } from "../core/tool-name";
 
 export interface ToolEvent {
   args: Record<string, unknown>;
@@ -7,8 +8,8 @@ export interface ToolEvent {
   host: PromptHost;
 }
 
-export const normalizeToolName = (value: string): string =>
-  value.toLowerCase().replace(/^.*(?:__|-)(?=(?:brain|skill)_)/, "");
+// Host tool names arrive namespaced; normalization lives in core/tool-name so the graded metrics and
+// the telemetry attribution can never disagree about which tool a row describes.
 
 function structured(value: unknown): unknown {
   if (typeof value === "string") {
@@ -36,13 +37,15 @@ export function resultIds(value: unknown): string[] {
   return typeof id === "string" && id ? [id] : [];
 }
 
-export function graphEvidence(events: ToolEvent[]) {
+export function graphEvidence(events: ToolEvent[], plantedNodeIds: string[] = []) {
+  const planted = new Set(plantedNodeIds.filter(Boolean));
   const created: string[] = [];
   const depths = new Map<string, number>();
   const answered = new Set<string>();
   const cited = new Set<string>();
   const returned = new Set<string>();
   const used = new Set<string>();
+  const rewritten = new Set<string>();
   let searchedAt = -1;
   let firstWriteAt = -1;
   let lastAnswerId = "";
@@ -68,6 +71,7 @@ export function graphEvidence(events: ToolEvent[]) {
       if (id) used.add(id);
       if (id && typeof event.args.answer === "string" && event.args.answer.trim()) {
         answered.add(id);
+        rewritten.add(id);
         lastAnswerId = id;
       }
       if (id && typeof event.args.citation === "string" && event.args.citation.trim()) {
@@ -76,14 +80,24 @@ export function graphEvidence(events: ToolEvent[]) {
     }
   }
   const root = created[0] || "";
+  // Reuse credit is scored only over nodes the fixture did not plant. A planted node is deliberately
+  // wrong, so counting its use as reuse inverts the metric: an agent that obeys bad stored context
+  // would outscore one that rejects it. Planted nodes are partitioned by observed action instead.
+  const organic = [...returned].filter((id) => !planted.has(id));
+  const plantedReturned = [...returned].filter((id) => planted.has(id));
+  const plantedContradicted = plantedReturned.filter((id) => rewritten.has(id));
+  const plantedAdopted = plantedReturned.filter((id) => !rewritten.has(id) && used.has(id));
   return {
     root,
     createdNodes: created.length,
     answeredNodes: created.filter((id) => answered.has(id)).length,
     citedAnswers: created.filter((id) => cited.has(id)).length,
     deepestLevel: Math.max(0, ...depths.values()),
-    returnedNodes: returned.size,
-    usedReturnedNodes: [...returned].filter((id) => used.has(id)).length,
+    returnedNodes: organic.length,
+    usedReturnedNodes: organic.filter((id) => used.has(id)).length,
+    plantedReturnedNodes: plantedReturned.length,
+    plantedAdoptedNodes: plantedAdopted.length,
+    plantedContradictedNodes: plantedContradicted.length,
     rootSynthesized: Boolean(root && answered.has(root)),
     rootSynthesizedLast: Boolean(root && lastAnswerId === root),
     searchBeforeWrite: searchedAt >= 0 && (firstWriteAt < 0 || searchedAt < firstWriteAt),

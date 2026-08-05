@@ -307,9 +307,13 @@ test("skill_edit rewrites a skill's master directly (agent-driven fix, no grader
   const selected = parse(await call("skill_select", { ids: ["flash edit"] }));
   expect(selected).toEqual({
     selected: [{ id: created.id, steps: expect.stringContaining("do the thing better") }],
+    catalogSize: expect.any(Number),
   });
+  // The catalog was delivered and simply held no fit, which must never look like an absent catalog.
   expect(parse(await call("skill_select", { ids: ["none"] }))).toEqual({
     selected: [],
+    catalogSize: expect.any(Number),
     noMatch: true,
+    reason: "no_match_in_catalog",
   });
 });

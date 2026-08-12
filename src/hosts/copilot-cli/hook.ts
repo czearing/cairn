@@ -101,7 +101,11 @@ const promptWithCatalog = async (file: string): Promise<string> => {
   try { return `${base}\n\n${formatSkillCatalog()}`; }
   catch { return base; }
 };
-const workflowPrompt = (): Promise<string> => promptWithCatalog("user-message.md");
+// Harness agents already carry a task-specific role prompt from the project config, so they get the
+// leaner harness-workflow.md instead of the full user-message.md aimed at an unscoped interactive user —
+// avoids stacking redundant generic explanation on top of an already-scoped role prompt.
+const workflowPrompt = (): Promise<string> =>
+  promptWithCatalog(process.env.AGENT_HARNESS === "1" ? "harness-workflow.md" : "user-message.md");
 const catalogVersion = (): string => {
   try { return skillCatalogSnapshot().version; }
   catch { return ""; }
@@ -602,6 +606,11 @@ export async function runCopilotHook(): Promise<void> {
         }
         if (typeof args.answer === "string" && args.answer.trim()) {
           if (id) next.brainAnsweredIds = [...new Set([...next.brainAnsweredIds, id])];
+          // A turn that reuses an existing node instead of creating a new one (the encouraged
+          // "search, then mutate rather than duplicate" path) never calls brain_create, so it would
+          // otherwise finish with an empty rootNodeId and fail the terminal-session compliance check.
+          // The first node this turn actually answers anchors the turn's work, same as a fresh create.
+          if (id && !next.rootNodeId) next.rootNodeId = id;
           if (id && id === next.rootNodeId) next.rootSynthesized = true;
         }
       }

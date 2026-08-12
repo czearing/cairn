@@ -454,7 +454,7 @@ test("Harness completes without queueing a review after a durable wait resolves"
   rmSync(transcriptPath, { force: true });
 }, 20_000);
 
-test("Harness user prompts receive the complete user Cairn workflow", () => {
+test("Harness user prompts receive a leaner workflow than direct interactive prompts", () => {
   const id = randomUUID();
   const cairnDb = join(tmpdir(), `cairn-harness-prompt-${id}.db`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
@@ -476,11 +476,23 @@ test("Harness user prompts receive the complete user Cairn workflow", () => {
   expect(harness.status).toBe(0);
   const directOutput = JSON.parse(direct.stdout.toString()) as { additionalContext: string };
   const harnessOutput = JSON.parse(harness.stdout.toString()) as { additionalContext: string };
-  expect(harnessOutput.additionalContext).toBe(directOutput.additionalContext);
-  expect(harnessOutput.additionalContext).toContain("## Brain workflow");
-  expect(harnessOutput.additionalContext).toContain("no breadth or depth limit");
-  expect(harnessOutput.additionalContext).toContain("select `none`");
-  expect(harnessOutput.additionalContext).toContain("never a one-off task");
+  // Harness agents already carry a task-specific role prompt, so their injected Cairn workflow must be a
+  // distinct, shorter prompt rather than the full explanatory text aimed at an unscoped interactive user.
+  expect(harnessOutput.additionalContext).not.toBe(directOutput.additionalContext);
+  expect(harnessOutput.additionalContext.length).toBeLessThan(directOutput.additionalContext.length);
+  expect(directOutput.additionalContext).toContain("## Brain workflow");
+  expect(directOutput.additionalContext).toContain("no breadth or depth limit");
+  // Both prompts must still require the same enforceable rules the pre-tool/agent-stop gates check for,
+  // even though the two prompts use different wording (the harness prompt is intentionally condensed).
+  for (const output of [directOutput.additionalContext, harnessOutput.additionalContext]) {
+    expect(output).toContain("skill_select");
+    expect(output).toContain("skill_edit");
+    expect(output).toContain("none");
+    expect(output.toLowerCase()).toContain("one-off");
+    expect(output.toLowerCase()).toContain("mutate");
+    expect(output).toContain("Skill application");
+    expect(output).toContain("Skill update");
+  }
   rmSync(cairnDb, { force: true });
 });
 

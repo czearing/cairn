@@ -378,6 +378,13 @@ if (!state.connected) {
   await warmEngine();
   state.connected = true;
   await server.connect(new StdioServerTransport());
+  // StdioServerTransport only listens for stdin 'data'/'error' (see the SDK's server/stdio.js), never
+  // 'end'/'close'. When the host process (e.g. an ACP agent) exits, its end of the pipe closes and
+  // stdin reaches EOF here, but nothing reacts to that — so this process would otherwise run forever,
+  // orphaned. Exit as soon as the host disconnects so it never outlives its parent.
+  const exitWithHost = () => process.exit(0);
+  process.stdin.once("end", exitWithHost);
+  process.stdin.once("close", exitWithHost);
 } else {
   void warmEngine();
   // RegisteredTool.update() emits tools/list_changed for each refreshed definition.

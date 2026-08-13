@@ -39,7 +39,6 @@ import {
 import { promptFingerprint } from "../../core/release";
 import { formatSkillCatalog, selectedSkillBlock, skillCatalogSnapshot, skillIdsFromTask } from "../../skill/catalog";
 import {
-  claimDelegation,
   lifecycleScope,
   readLifecycle,
   registerDelegation,
@@ -50,6 +49,16 @@ import {
 import { skillResultId, skillResultIds, selectedSkillIds } from "../../skill/tool-result";
 import { postToolPromptFiles } from "../../inject/post-tool";
 import { completionContinuationEnabled } from "./completion-gate";
+import {
+  CONTRACT_DECLARE_REASON,
+  contractDeclared,
+  contractExhausted,
+  clearContract,
+  contractStopReason,
+  noteContractNudge,
+  readContract,
+  recordObservedRun,
+} from "./contract";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
 let emittedUsage: Parameters<typeof recordTelemetry>[0] | undefined;
@@ -136,12 +145,20 @@ export function postToolFiles(toolName: string, answer: string): string[] {
 // Whether agentStop should force another turn, and with which prompt. Final submission stays blocked
 // until the mandatory Cairn workflow succeeds; ordinary tools remain available for recovery.
 export const STOP_CAP = 2;
+// A dependency that is DOWN cannot be satisfied by trying harder. If the Cairn MCP transport is
+// unreachable, skill_select and brain_search can never succeed, so every fail-closed branch below nudges
+// forever — observed live: five identical continuations demanding a skill call against a dead server.
+// Past a cap deliberately set above STOP_CAP the gate releases, so an impossible precondition leaves as a
+// reported outage instead of an infinite loop. A turn that merely skipped Cairn still pays every nudge.
+export const OUTAGE_CAP = STOP_CAP * 2;
 interface WorkflowEvidence {
   brainUsed: boolean;
   brainSearched?: boolean;
   brainCreatedCount?: number;
   brainAnsweredCount?: number;
   brainReusedCount?: number;
+  /** Nodes the turn CREATED and never answered. Optional so existing callers keep the count fallback. */
+  openCreatedCount?: number;
   rootSynthesized?: boolean;
   skillUsed: boolean;
   pendingReviewCount?: number;
@@ -154,6 +171,7 @@ interface WorkflowEvidence {
 export function stopDecision(s: WorkflowEvidence): {
   file: string;
 } {
+  if (s.stopNudges >= OUTAGE_CAP) return { file: "" };
   if ((s.pendingSkillCorrections ?? 0) > 0) {
     return { file: "skill-correction-reminder.md" };
   }
@@ -183,8 +201,19 @@ function brainWorkComplete(s: WorkflowEvidence): boolean {
   const created = s.brainCreatedCount ?? 0;
   const reused = s.brainReusedCount ?? 0;
   if (created === 0) return reused > 0;
-  return created + reused >= (s.minimumBrainNodes ?? 1)
-    && (s.brainAnsweredCount ?? 0) >= created
+  // The COUNT floor is a depth heuristic, not an invariant, and it is the only part of this predicate a
+  // turn can fail while having genuinely done the work. Left unbounded it re-blocks forever (observed:
+  // stop_nudges=3 against a nominal STOP_CAP of 2), so past the cap the floor relaxes to one node. Every
+  // real invariant — searched, a node created, all created nodes answered, root synthesized last — still
+  // holds after the cap, so a turn that skipped Cairn is still blocked indefinitely.
+  const floor = s.stopNudges >= STOP_CAP ? 1 : (s.minimumBrainNodes ?? 1);
+  // OWNERSHIP, not arithmetic. Comparing COUNTS let a turn discharge its obligation with answers to
+  // nodes it did not create: created 3 / answered 3 released while two created nodes were still open,
+  // because two of those answers were mutations of pre-existing nodes. Every question the turn OPENED
+  // must be the question it closed, which is what makes decomposition go deeper instead of sideways.
+  const owed = (s.openCreatedCount ?? Math.max(0, created - (s.brainAnsweredCount ?? 0))) > 0;
+  return created + reused >= floor
+    && !owed
     && Boolean(s.rootSynthesized);
 }
 
@@ -302,6 +331,18 @@ const safeJson = (s: string): unknown => {
     return undefined;
   }
 };
+// A shell tool reports resultType "success" for a command that exited NON-ZERO: the host puts the status
+// in the result text, verified in a live transcript ("completed with exit code 1" under resultType
+// "success"). Without this, a failing check would close the criterion it was meant to disprove. This
+// parses the HOST's own result format, which is fixed, not anything about the task being performed.
+export const reportedNonZeroExit = (result: unknown): boolean => {
+  const text = typeof result === "object" && result
+    ? String((result as { textResultForLlm?: unknown }).textResultForLlm ?? "")
+    : "";
+  const match = text.match(/exit code (\d+)/i);
+  return match ? match[1] !== "0" : false;
+};
+
 const toolResultSucceeded = (result: unknown): boolean => {
   if (!result || typeof result !== "object") return true;
   const value = result as { success?: unknown; isError?: unknown; resultType?: unknown };
@@ -370,7 +411,6 @@ export function resolveCopilotModel(
 
 export const shouldStartUserTurn = (prompt: string): boolean =>
   !isSystemEnvelope(prompt);
-const isToolCallSession = (sessionId: string): boolean => sessionId.startsWith("call_");
 
 export function harnessTurnDeferred(
   dbPath = process.env.CAIRN_HARNESS_DB || "",
@@ -477,39 +517,9 @@ export async function runCopilotHook(): Promise<void> {
     // Every genuine prompt starts a fully fresh budget; preserving only exhausted nudges while clearing
     // skill/brain usage would let a resumed Harness task bypass both gates.
     const stateId = turnScope(sessionId);
-    const delegatedIds = claimDelegation(sessionId, stateId);
-    if (delegatedIds.length) {
-      const delegatedNode = `delegated:${sessionId}`;
-      const state = resetLifecycle(stateId, {
-        brainUsed: true,
-        brainSearched: true,
-        brainCreatedIds: [delegatedNode, `${delegatedNode}:1`, `${delegatedNode}:2`],
-        brainAnsweredIds: [delegatedNode, `${delegatedNode}:1`, `${delegatedNode}:2`],
-        rootNodeId: delegatedNode,
-        rootSynthesized: true,
-        skillUsed: true,
-      });
-      beginTelemetryRun({
-        host: "copilot", sessionId, turnSeq: state.turnSeq, promptHash: "",
-        catalogVersion: catalogVersion(), injectedChars: 0, model,
-      });
-      return void emit({});
-    }
-    // Built-in/custom subagents use their host-owned tool-call id as sessionId. Some launch paths do not
-    // expose the parent preToolUse event, so no delegation row exists to claim. They still must not receive
-    // the main-agent workflow; the parent owns skill maintenance.
-    if (isToolCallSession(sessionId)) {
-      const state = resetLifecycle(stateId, { brainUsed: true, skillUsed: true });
-      const protocol = await promptText("subagent-protocol.md");
-      beginTelemetryRun({
-        host: "copilot", sessionId, turnSeq: state.turnSeq,
-        promptHash: promptFingerprint(protocol), catalogVersion: catalogVersion(),
-        injectedChars: internalContext(protocol).length, model,
-      });
-      return void emit(protocol ? { additionalContext: internalContext(protocol) } : {});
-    }
     if (!shouldStartUserTurn(prompt)) return void emit({});
     rmSync(complianceReceiptPath(sessionId), { force: true });
+    clearContract();
     try { (await import("../../core/auto-update")).maybeAutoUpdate(); }
     catch { /* self-update is background work and never blocks a turn */ }
     const state = resetLifecycle(stateId);
@@ -528,6 +538,13 @@ export async function runCopilotHook(): Promise<void> {
     // preToolUse command hooks are FAIL-CLOSED (a crash denies the tool), so default to allow and only
     // ever deny on an explicit gate match.
     if (process.env.CAIRN_COPILOT_NO_GATE) return void emit({});
+    // The ONLY signal that separates "Cairn is unreachable" from "the agent ignored Cairn" was recorded
+    // in post-tool, which never runs when the call dies at the transport — so an outage was indexed as
+    // defiance and nudged forever (observed: ten identical skill_select demands against a dead server).
+    // The attempt is therefore recorded here, before execution, where a failing transport cannot erase it.
+    if (isCairnMcpTool(toolName)) {
+      updateLifecycle(turnScope(sessionId, agentId), (current) => ({ ...current, cairnToolAttempted: true }));
+    }
     let decision: { deny: boolean; reason?: string } = { deny: false };
     try {
       if (process.env.AGENT_HARNESS === "1" && !agentId) {
@@ -572,6 +589,18 @@ export async function runCopilotHook(): Promise<void> {
     } catch {
       decision = { deny: false };
     }
+    // Conditional by construction: only a tool that would CHANGE something needs a declared contract, so
+    // a conversational turn never sees this gate. Delegation is excluded for the same reason a read-only
+    // shell is: spawning a subagent alters nothing durable by itself, and it is the channel Cairn uses to
+    // reach that subagent, so denying it here severs delegation and protocol injection. This is not a
+    // loophole now that the subagent exemptions are gone — the child runs Cairn and pays the gate for its
+    // own execution tools. Checked AFTER the delegation branches, which only return early when they
+    // actually inject a protocol.
+    if (!decision.deny && !isTask(toolName) && countsAsExecution(toolName, args)
+      && !contractDeclared() && !contractExhausted()) {
+      emit({ permissionDecision: "deny", permissionDecisionReason: CONTRACT_DECLARE_REASON });
+      return;
+    }
     emit(decision.deny ? { permissionDecision: "deny", permissionDecisionReason: decision.reason } : {});
     return;
   }
@@ -579,6 +608,9 @@ export async function runCopilotHook(): Promise<void> {
   if (mode === "post-tool") {
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const stateId = turnScope(sessionId, agentId);
+    if (typeof args.command === "string") {
+      recordObservedRun(args.command, toolResultSucceeded(result) && !reportedNonZeroExit(result));
+    }
     let correctionRequired = false;
     let correctionResolved = false;
     const state = updateLifecycle(stateId, (current) => {
@@ -673,23 +705,12 @@ export async function runCopilotHook(): Promise<void> {
   }
 
   if (mode === "agent-stop") {
-    // agentStop enforces the required workflow and final completion gate.
+    // agentStop enforces the required workflow and final completion gate. There is no subagent exemption:
+    // a subagent runs Cairn exactly like a main agent, so it receives the same injected workflow at
+    // user-prompt and is held to the same gate here. The previous carve-out identified subagents by the
+    // SHAPE of their session id, which is a guess about the host rather than a fact from it; it matched
+    // nothing in production, and where it did match it silently turned Cairn off for that agent.
     if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
-    if (isToolCallSession(sessionId) && !transcriptPath) {
-      const stateId = turnScope(sessionId);
-      updateLifecycle(stateId, (state) => ({
-        ...state,
-        pendingReviewIds: [],
-        pendingReviews: [],
-        stopBlocked: false,
-      }));
-      finishTelemetryRun({
-        host: "copilot", sessionId, turnSeq: readLifecycle(stateId).turnSeq,
-        completed: true, workflowPassed: true, skillUsed: true, brainUsed: true,
-        stopNudges: 0, status: "subagent",
-      });
-      return void emit({});
-    }
     const stateId = turnScope(sessionId);
     const st = readLifecycle(stateId);
     if (!st.cairnToolObserved && st.cairnToolAttempted) {
@@ -705,18 +726,26 @@ export async function runCopilotHook(): Promise<void> {
           kind: "visibility_failure",
         });
       }
-      emit({
-        decision: "block",
-        reason: internalContext(CAIRN_VISIBILITY_REMINDER),
-      });
-      return;
+      // This branch returned before the nudge counter, so an unreachable Cairn blocked forever: the agent
+      // is told to restart, cannot restart itself, and is asked again. Counting the block lets the same
+      // OUTAGE_CAP that bounds the workflow gate end it, leaving the outage reported rather than looping.
+      if (st.stopNudges < OUTAGE_CAP) {
+        updateLifecycle(stateId, (current) => ({ ...current, stopNudges: current.stopNudges + 1 }));
+        emit({
+          decision: "block",
+          reason: internalContext(CAIRN_VISIBILITY_REMINDER),
+        });
+        return;
+      }
     }
+    const openCreated = st.brainCreatedIds.filter((id) => !st.brainAnsweredIds.includes(id));
     const file = stopDecision({
       brainUsed: st.brainUsed,
       brainSearched: st.brainSearched,
       brainCreatedCount: st.brainCreatedIds.length,
       brainAnsweredCount: st.brainAnsweredIds.length,
       brainReusedCount: st.brainReusedIds.length,
+      openCreatedCount: openCreated.length,
       rootSynthesized: st.rootSynthesized,
       skillUsed: st.skillUsed,
       stopNudges: st.stopNudges,
@@ -725,7 +754,12 @@ export async function runCopilotHook(): Promise<void> {
       pendingSkillCorrections: st.invalidatedSkillIds.length,
       skillCorrectionNudges: st.skillCorrectionNudges,
     }).file;
-    const text = file ? internalContext(await promptText(file)) : "";
+    // Name the ACTUAL deficit. A generic "search the brain and create the root" re-block against a turn
+    // that already did both sends the agent to redo finished work instead of the one thing still missing.
+    const deficit = file === "turn-reminder.md"
+      ? `\n\nThis turn already has: searched=${st.brainSearched}, created=${st.brainCreatedIds.length}, answered=${st.brainAnsweredIds.length}, reused=${st.brainReusedIds.length}, root synthesized=${st.rootSynthesized}. Required nodes for a turn that changed durable state: ${requiredBrainNodes(st.executionToolCalls)}. Supply only what is missing; do not repeat what is already done.${openCreated.length ? ` These nodes you created are still unanswered: ${openCreated.join(", ")}.` : ""}`
+      : "";
+    const text = file ? internalContext(`${await promptText(file)}${deficit}`) : "";
     if (text) {
       const skillCorrection = file === "skill-correction-reminder.md";
       updateLifecycle(stateId, () => ({
@@ -739,9 +773,23 @@ export async function runCopilotHook(): Promise<void> {
       recordTelemetryState({
         host: "copilot", sessionId, turnSeq: st.turnSeq,
         eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:${skillCorrection ? "skill-correction" : "workflow"}`,
-        kind: skillCorrection ? "skill_correction_blocked" : "stop_blocked",
+        // Ownership blocks are counted separately so the gate's real effect is measurable: itemCount is
+        // how many questions the turn opened and left open, which is the number it must now go answer.
+        kind: skillCorrection ? "skill_correction_blocked" : (openCreated.length ? "ownership_blocked" : "stop_blocked"),
+        itemCount: openCreated.length,
       });
       emit({ decision: "block", reason: text });
+      return;
+    }
+    const contractReason = contractStopReason(st.executionToolCalls > 0);
+    if (contractReason) {
+      noteContractNudge();
+      recordTelemetryState({
+        host: "copilot", sessionId, turnSeq: st.turnSeq,
+        eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:contract:${readContract()?.nudges ?? 0}`,
+        kind: "contract_blocked",
+      });
+      emit({ decision: "block", reason: internalContext(contractReason) });
       return;
     }
     if (process.env.AGENT_HARNESS === "1" && harnessTurnDeferred()) {

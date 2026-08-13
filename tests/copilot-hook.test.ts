@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   gateDecision,
@@ -19,6 +19,7 @@ import {
   countsAsExecution,
   changesDurableState,
   scratchOnlyShellCommand,
+  reportedNonZeroExit,
   workflowActionDecision,
   failedExecutionDisprovesSkill,
 } from "../src/hosts/copilot-cli/hook";
@@ -44,6 +45,14 @@ function lifecycleState(dbPath: string, scope: string): { pendingReviewIds: stri
   }
 }
 
+// The contract gate is unconditional, so any test that expects a turn to be RELEASED must first put a
+// satisfied contract where the `contract` MCP tool writes it: beside the database.
+function satisfyContract(dbPath: string, check = "the task is done"): void {
+  writeFileSync(join(dirname(dbPath), "contract.json"), JSON.stringify({
+    criteria: [{ check, passed: true, failedFirst: false, evidence: "verified" }], nudges: 0,
+  }));
+}
+
 function telemetryKinds(dbPath: string): string[] {
   const database = new Database(dbPath);
   try {
@@ -57,7 +66,17 @@ function telemetryKinds(dbPath: string): string[] {
 function completeBrainWorkflow(
   invoke: (mode: string, payload: object) => ReturnType<typeof spawnSync>,
   sessionId: string,
+  options: { contractDir?: string; declareContract?: boolean } = {},
 ): void {
+  // The contract gate is unconditional, so reaching a releasable state means the brain workflow AND a
+  // satisfied contract. Written as a file because the criteria live beside the database, exactly where
+  // the `contract` MCP tool writes them.
+  if (options.declareContract !== false) {
+    writeFileSync(join(options.contractDir ?? tmpdir(), "contract.json"), JSON.stringify({
+      criteria: [{ check: `${sessionId} is done`, passed: true, failedFirst: false, evidence: "verified" }],
+      nudges: 0,
+    }));
+  }
   const root = `${sessionId}-root`;
   const child = `${sessionId}-child`;
   const leaf = `${sessionId}-leaf`;
@@ -282,6 +301,7 @@ test("Harness preToolUse blocks premature side effects and allows them after roo
     invoke("post-tool", { sessionId: "strict-action", toolName, toolArgs, toolResult });
 
   invoke("user-prompt", { sessionId: "strict-action", prompt: "Send a certification message." });
+  satisfyContract(dbPath, "the certification message is sent");
   post("skill", { skill: "discord" });
   post("cairn-brain_search", { query: "certification" });
   for (const nodeId of ["root", "child-1", "child-2"]) {
@@ -431,12 +451,14 @@ test("Harness completes without queueing a review after a durable wait resolves"
   expect(select().status).toBe(0);
   expect(searchBrain().status).toBe(0);
   completeBrain();
+  satisfyContract(cairnDb, "the feature is implemented");
   expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString()).toBe("{}");
 
   expect(invoke("user-prompt", { sessionId: "harness-session", prompt: "Complete the retried task." }).status).toBe(0);
   expect(select().status).toBe(0);
   expect(searchBrain().status).toBe(0);
   completeBrain();
+  satisfyContract(cairnDb, "the retried task is complete");
   const completed = new Database(harnessDb);
   completed.query("UPDATE tasks SET status='completed',completed_at=? WHERE id=?")
     .run("2026-07-17T10:02:00Z", "task-1");
@@ -578,6 +600,134 @@ test("a stale model tool manifest blocks submission until a Cairn tool succeeds"
   expect(invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString()).toContain("skill_select");
 });
 
+// Ownership, not arithmetic: answering a node the turn did NOT create must never discharge the obligation
+// to answer one it did. Verified against the real gate, which released with two created nodes still open.
+test("answers to reused nodes cannot discharge the obligation to answer nodes the turn created", () => {
+  const base = {
+    brainUsed: true, brainSearched: true, rootSynthesized: true, skillUsed: true,
+    stopNudges: 0, strict: true, minimumBrainNodes: 1,
+  };
+  // Created 3, answered 3 — but two of those answers were mutations of pre-existing nodes.
+  expect(stopDecision({
+    ...base, brainCreatedCount: 3, brainAnsweredCount: 3, brainReusedCount: 2, openCreatedCount: 2,
+  }).file).toBe("turn-reminder.md");
+  // The same turn once every created node is genuinely answered.
+  expect(stopDecision({
+    ...base, brainCreatedCount: 3, brainAnsweredCount: 3, brainReusedCount: 2, openCreatedCount: 0,
+  }).file).toBe("");
+  // Pure reuse turns are unaffected: nothing was created, so nothing is owed.
+  expect(stopDecision({
+    ...base, brainCreatedCount: 0, brainAnsweredCount: 1, brainReusedCount: 1, openCreatedCount: 0,
+  }).file).toBe("");
+});
+
+// The gate's effect must be measurable, or there is no way to tell whether it is helping.
+test("an ownership block is recorded as its own telemetry kind, with the number of open questions", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-ownership-telemetry-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_ENFORCE_STOP_GATES: "1", CAIRN_SKILLS: "1" };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const session = "ownership-telemetry";
+
+  expect(invoke("user-prompt", { sessionId: session, prompt: "Do the work." }).status).toBe(0);
+  expect(invoke("post-tool", {
+    sessionId: session, toolName: "cairn-skill_select", toolArgs: { ids: ["skill-own"] },
+  }).status).toBe(0);
+  expect(invoke("post-tool", {
+    sessionId: session, toolName: "cairn-brain_search", toolArgs: { query: session }, toolResult: { success: true },
+  }).status).toBe(0);
+  // Two questions opened, only one closed: the turn still owes an answer to a question it asked.
+  for (const nodeId of ["own-a", "own-b"]) {
+    expect(invoke("post-tool", {
+      sessionId: session, toolName: "cairn-brain_create",
+      toolArgs: { text: `How is ${nodeId} resolved?`, edges: [] }, toolResult: { success: true, id: nodeId },
+    }).status).toBe(0);
+  }
+  expect(invoke("post-tool", {
+    sessionId: session, toolName: "cairn-brain_mutate",
+    toolArgs: { id: "own-a", answer: "Because of X.", citation: "file://x" }, toolResult: { success: true, id: "own-a" },
+  }).status).toBe(0);
+
+  const blocked = invoke("agent-stop", { sessionId: session }).stdout.toString();
+  expect(blocked).toContain("block");
+  expect(blocked).toContain("own-b");
+  expect(telemetryKinds(dbPath)).toContain("ownership_blocked");
+  rmSync(dbPath, { force: true });
+});
+
+// The host reports resultType "success" for a command that exited non-zero, with the status only in the
+// result text. Taken from a live transcript: without this a FAILING check would close its own criterion.
+test("a shell result that reports a non-zero exit is not treated as a passing check", () => {
+  expect(reportedNonZeroExit({ resultType: "success", textResultForLlm: "\n<shellId: 8 completed with exit code 1>" }))
+    .toBe(true);
+  expect(reportedNonZeroExit({ resultType: "success", textResultForLlm: "PASS\n<shellId: 4 completed with exit code 0>" }))
+    .toBe(false);
+  expect(reportedNonZeroExit({ resultType: "success", textResultForLlm: "no status here" })).toBe(false);
+  expect(reportedNonZeroExit(undefined)).toBe(false);
+});
+
+// End-to-end through the real hook process: an execution tool is DENIED until a contract exists, the stop
+// gate then blocks while a criterion is unmet, and only satisfying it releases the turn.
+test("the contract gate denies execution, loops the turn, and releases only when criteria are met", () => {
+  const dir = join(tmpdir(), `cairn-contract-e2e-${randomUUID()}`);
+  mkdirSync(dir, { recursive: true });
+  const dbPath = join(dir, "c.db");
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_ENFORCE_STOP_GATES: "0",
+    CAIRN_SKILLS: "0",
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const contractFile = join(dir, "contract.json");
+  try {
+    expect(invoke("user-prompt", { sessionId: "contract-e2e", prompt: "Fix the thing." }).status).toBe(0);
+    // 1. Undeclared: the side effect is refused before it happens.
+    const denied = invoke("pre-tool", {
+      sessionId: "contract-e2e", toolName: "create", toolArgs: { path: join(dir, "out.txt") },
+    }).stdout.toString();
+    expect(denied).toContain("deny");
+    expect(denied).toContain("Declare your contract first");
+
+    // 2. Declared: the same call is allowed through.
+    writeFileSync(contractFile, JSON.stringify({
+      criteria: [{ check: "bun test", passed: false, failedFirst: false, evidence: "" }], nudges: 0,
+    }));
+    expect(invoke("pre-tool", {
+      sessionId: "contract-e2e", toolName: "create", toolArgs: { path: join(dir, "out.txt") },
+    }).stdout.toString()).not.toContain("deny");
+
+    // 3. Unmet criterion blocks the stop, and the block is bounded and recorded.
+    expect(invoke("post-tool", {
+      sessionId: "contract-e2e", toolName: "cairn-skill_select", toolArgs: { ids: ["skill-e2e"] },
+    }).status).toBe(0);
+    completeBrainWorkflow(invoke, "contract-e2e", { declareContract: false });
+    expect(invoke("post-tool", {
+      sessionId: "contract-e2e", timestamp: 30, toolName: "cairn-skill_review", toolArgs: { id: "skill-e2e" },
+    }).status).toBe(0);
+    expect(invoke("agent-stop", { sessionId: "contract-e2e" }).stdout.toString()).toContain("unmet");
+    expect(telemetryKinds(dbPath)).toContain("contract_blocked");
+
+    // 4. An observed run through the real post-tool path releases the turn.
+    expect(invoke("post-tool", {
+      sessionId: "contract-e2e", toolName: "shell", toolArgs: { command: "bun test" },
+      toolResult: { success: true },
+    }).status).toBe(0);
+    expect(JSON.parse(readFileSync(contractFile, "utf8")).criteria[0].passed).toBe(true);
+    expect(invoke("agent-stop", { sessionId: "contract-e2e" }).stdout.toString()).not.toContain("unmet");
+
+    // 5. A new user turn starts with no contract, so the next task must declare its own.
+    expect(invoke("user-prompt", { sessionId: "contract-e2e", prompt: "Next task." }).status).toBe(0);
+    expect(existsSync(contractFile)).toBe(false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("an ignored healthy Cairn workflow remains blocked until Cairn is used", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-ignored-workflow-${id}.db`);
@@ -614,6 +764,7 @@ test("adopting a searched node ends the turn, but an unsearched id cannot fake r
   const unsearched = "99999999-8888-7777-6666-555555555555";
 
   expect(invoke("user-prompt", { sessionId: session, prompt: "Resolve the task." }).status).toBe(0);
+  satisfyContract(dbPath, "the task is resolved");
   expect(invoke("post-tool", {
     sessionId: session,
     toolName: "cairn-skill_select",
@@ -983,8 +1134,76 @@ test("a queued mid-turn human message does not reset completed skill search", ()
     .toContain("completed every requested task");
   expect(invoke("agent-stop", { sessionId: "session-queued", transcriptPath }).stdout.toString()).toBe("{}");
 });
+
+test("an undeclared contract nudge is bounded, so a session that cannot declare one is not bricked", () => {
+  // The stop gate capped itself only once a contract EXISTED. With none declared, noteContractNudge
+  // no-opped, the counter never moved, and "declare your contract" repeated forever — unbounded for any
+  // client whose tool list was negotiated before the `contract` tool existed and so cannot declare at all.
+  const id = randomUUID();
+  const home = join(tmpdir(), `cairn-contract-bound-home-${id}`);
+  const dir = join(tmpdir(), `cairn-contract-bound-${id}`);
+  mkdirSync(dir, { recursive: true });
+  const dbPath = join(dir, "cairn.db");
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath,
+    CAIRN_SKILLS: "1", CAIRN_CONTRACT_CAP: "2",
+  };
+  const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const session = "contract-bound";
+  expect(invoke("user-prompt", { sessionId: session, prompt: "Do the task." }).status).toBe(0);
+  completeBrainWorkflow(invoke, session, { declareContract: false });
 
-test("a parent-delegated internal prompt satisfies the subagent-local stop gate", () => {
+  // Never declaring anything: the gate asks, but only while it can still be acted on.
+  const reasons: string[] = [];
+  let released = false;
+  for (let attempt = 0; attempt < 12 && !released; attempt++) {
+    const reason = invoke("agent-stop", { sessionId: session }).stdout.toString();
+    reasons.push(reason);
+    released = reason === "{}";
+  }
+  const asked = reasons.filter((reason) => reason.includes("declare what done means")).length;
+  expect(asked).toBeGreaterThan(0);
+  expect(asked).toBeLessThanOrEqual(3);
+  expect(released).toBe(true);
+
+  // Once exhausted the pre-tool deny lifts too, otherwise the turn could never write anything again.
+  const write = invoke("pre-tool", { sessionId: session, toolName: "edit", toolArgs: { path: "a.ts" } });
+  expect(write.stdout.toString()).not.toContain("Declare your contract first");
+});
+
+test("the contract gate never denies delegation, so Cairn can still reach a subagent", () => {
+  // The deny sits after the delegation branches, but those branches only return early when they actually
+  // inject a protocol. A plain `task` fell through and was denied, which silently severed delegation for
+  // every turn that had not yet declared a contract. Spawning a subagent changes nothing durable on its
+  // own and the child is now gated for its own execution tools, so delegation is excluded outright.
+  const id = randomUUID();
+  const home = join(tmpdir(), `cairn-task-gate-home-${id}`);
+  const dbPath = join(tmpdir(), `cairn-task-gate-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
+  const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  expect(invoke("user-prompt", { sessionId: "task-gate", prompt: "Delegate some research." }).status).toBe(0);
+
+  // A plain delegation carrying no skills hits neither injection branch: it must still be allowed.
+  const spawned = invoke("pre-tool", {
+    sessionId: "task-gate",
+    toolCallId: "child-1",
+    toolName: "task",
+    toolArgs: { agent_type: "explore", prompt: "Look into it." },
+  });
+  expect(spawned.stdout.toString()).not.toContain("Declare your contract first");
+
+  // An ordinary write on the same undeclared turn is still denied, so the exclusion is delegation-only.
+  const write = invoke("pre-tool", { sessionId: "task-gate", toolName: "edit", toolArgs: { path: "a.ts" } });
+  expect(write.stdout.toString()).toContain("Declare your contract first");
+});
+
+test("a parent-delegated subagent still runs Cairn instead of inheriting a satisfied gate", () => {
+  // Previously the parent's delegation row let the child skip Cairn entirely: its lifecycle was reset
+  // with brainUsed/skillUsed already true and three fabricated `delegated:` node ids standing in for a
+  // real graph. That is Cairn switched off for the subagent, so it is gone. The parent still passes its
+  // selected skills down, but the child does its own skill and brain work and is gated like any agent.
   const id = randomUUID();
   const skillId = randomUUID();
   const home = join(tmpdir(), `cairn-delegated-session-home-${id}`);
@@ -997,48 +1216,39 @@ test("a parent-delegated internal prompt satisfies the subagent-local stop gate"
     putSkill({ id: ${JSON.stringify(skillId)}, task: "poetry writing", masterPrompt: "1. Draft three lines", description: "Use for poems.", ts: 1 }, [1, 0]);
   `], { env }).status).toBe(0);
   expect(invoke("post-tool", { sessionId: "parent-session", toolName: "cairn-skill_select", toolArgs: { ids: [skillId] } }).status).toBe(0);
-  expect(invoke("pre-tool", {
+  const delegated = invoke("pre-tool", {
     sessionId: "parent-session",
     toolCallId: "subagent-session",
     toolName: "task",
     toolArgs: { agent_type: "explore", prompt: `CAIRN_SKILL_IDS: ${skillId}\nWrite a haiku.` },
-  }).status).toBe(0);
+  });
+  expect(delegated.status).toBe(0);
+  // The child receives the workflow, not a free pass, and its stop is gated on its own Cairn work.
   const prompt = `<cairn-internal>\nDelegated protocol.\n</cairn-internal>\n\nWrite a haiku.`;
   const start = invoke("user-prompt", { sessionId: "subagent-session", prompt });
   expect(start.status).toBe(0);
-  expect(start.stdout.toString()).toBe("{}");
   expect(invoke("agent-stop", { sessionId: "subagent-session" }).stdout.toString())
-    .toContain("completed every requested task");
-  expect(invoke("agent-stop", { sessionId: "subagent-session" }).stdout.toString()).toBe("{}");
+    .toContain('"decision":"block"');
 });
 
-test("a transcriptless tool-call subagent leaves skill maintenance to its parent", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-tool-call-subagent-${id}.db`);
+test("a subagent runs Cairn: it receives the full workflow and is held to the same gate", () => {
+  // Subagents are NOT exempt. The old carve-outs identified a subagent by the SHAPE of its session id
+  // and then pre-satisfied its lifecycle (brainUsed/skillUsed true, fabricated `delegated:` node ids),
+  // which is Cairn silently switched off for that agent. Both are gone: there is one path for every
+  // session, so a subagent gets the same injected workflow and the same agent-stop gate.
+  const dbPath = join(tmpdir(), `cairn-subagent-runs-cairn-${randomUUID()}.db`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
   const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
   const invoke = (mode: string, payload: object) =>
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  const sessionId = `call_${id}`;
-
-  const start = invoke("user-prompt", { sessionId, prompt: "Review this diff." });
-  expect(start.stdout.toString()).toContain("parent owns skill selection and maintenance");
-  expect(start.stdout.toString()).not.toContain("Available skill catalog");
-  expect(invoke("post-tool", {
-    sessionId,
-    toolName: "cairn-skill_select",
-    toolArgs: { ids: ["skill-review", "skill-test"] },
-  }).status).toBe(0);
-  expect(invoke("agent-stop", { sessionId, transcriptPath: "" }).stdout.toString()).toBe("{}");
-
-  const database = new Database(dbPath);
-  const state = database.query("SELECT pending_review_ids pendingIds, pending_reviews pending FROM lifecycle_turns WHERE scope=?")
-    .get(`copilot:${sessionId}`) as { pendingIds: string; pending: string };
-  expect(JSON.parse(state.pendingIds)).toEqual([]);
-  expect(JSON.parse(state.pending)).toEqual([]);
-  database.close();
+  // The exact host id that looped in production, and an OpenAI-style one: neither is special-cased now.
+  for (const sessionId of ["toolu_01BJn8LTK5VRTyb8CGjzhAmS", `call_${randomUUID()}`]) {
+    const start = invoke("user-prompt", { sessionId, prompt: "Search the repo for the retry policy." });
+    expect(start.stdout.toString()).toContain("skill_select");
+    expect(invoke("agent-stop", { sessionId, transcriptPath: "" }).stdout.toString())
+      .toContain("block");
+  }
 });
-
 test("a user-controlled delegated marker cannot satisfy the stop gate", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-untrusted-delegation-${id}.db`);
@@ -1251,4 +1461,68 @@ test("a scratch probe that reads data does not raise the decomposition floor", (
   })).toBe(true);
   // Pure reads are unchanged.
   expect(changesDurableState("powershell", { command: "rg pattern src" })).toBe(false);
+});
+
+// -- The completion loop is general: it knows nothing about the task ------------------------------
+// Two differently shaped tasks run through the SAME code path with no task-specific branch: one whose
+// done-ness is decided by running something, one whose done-ness is an artifact no shell can judge.
+// This is the regression guard against re-introducing hardcoded phrase/extension/command lists.
+test("the contract loop blocks until declared criteria are met, whatever shape the task has", () => {
+  const dir = join(tmpdir(), `cairn-contract-${randomUUID()}`);
+  mkdirSync(dir, { recursive: true });
+  const prior = process.env.CAIRN_DB_PATH;
+  process.env.CAIRN_DB_PATH = join(dir, "c.db");
+  try {
+    const contract = require("../src/hosts/copilot-cli/contract") as typeof import("../src/hosts/copilot-cli/contract");
+
+    // 1. A turn that declared nothing is never released, whatever it was asked to do.
+    contract.clearContract();
+    expect(contract.contractStopReason(false)).toContain("declare what done means");
+
+    // 2. Non-executable work (no shell can decide it) closes by naming the artifact.
+    expect(contract.declareContract(["a three-line poem is written in the reply"]).criteria).toHaveLength(1);
+    expect(contract.contractStopReason(false)).toContain("unmet");
+    expect(contract.satisfyCriterion("a three-line poem is written in the reply", "").error)
+      .toContain("evidence is required");
+    expect(contract.satisfyCriterion("a three-line poem is written in the reply", "3 lines in the reply").remaining)
+      .toEqual([]);
+    expect(contract.contractStopReason(false)).toBe("");
+
+    // 3. Executable work: an observed successful run of the declared check closes it.
+    contract.clearContract();
+    contract.declareContract(["bun test"]);
+    expect(contract.contractStopReason(true)).toContain("unmet");
+    contract.recordObservedRun("bun test", true);
+    expect(contract.contractStopReason(true)).toBe("");
+
+    // 4. Assertion closes non-runnable work: the gate forces delivery, it does not judge quality.
+    contract.clearContract();
+    contract.declareContract(["the config is updated"]);
+    expect(contract.contractStopReason(true)).toContain("unmet");
+    contract.satisfyCriterion("the config is updated", "edited settings.json");
+    expect(contract.contractStopReason(true)).toBe("");
+
+    // 4b. The ratchet: criteria can be ADDED, but adding never removes, rewords, or resets an existing one.
+    contract.clearContract();
+    contract.declareContract(["the config is updated"]);
+    contract.satisfyCriterion("the config is updated", "edited settings.json");
+    const ratchet = contract.declareContract(["the config is updated", "a new runnable check"]).criteria ?? [];
+    expect(ratchet).toHaveLength(2);
+    expect(ratchet[0]?.passed).toBe(true);
+    expect(contract.contractStopReason(true)).toContain("unmet");
+    contract.recordObservedRun("a new runnable check", true);
+    expect(contract.contractStopReason(true)).toBe("");
+
+    // 5. Bounded: an impossible criterion escapes as a report instead of looping forever.
+    contract.clearContract();
+    contract.declareContract(["an impossible thing"]);
+    const cap = Number(process.env.CAIRN_CONTRACT_CAP || "3");
+    for (let i = 0; i < cap; i += 1) contract.noteContractNudge();
+    expect(contract.contractStopReason(false)).toContain("decision it needs from the user");
+    contract.noteContractNudge();
+    expect(contract.contractStopReason(false)).toBe("");
+  } finally {
+    if (prior == null) delete process.env.CAIRN_DB_PATH; else process.env.CAIRN_DB_PATH = prior;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

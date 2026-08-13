@@ -384,6 +384,28 @@ registerTool(
   })
 );
 
+// The proof contract is always registered. Gating tool REGISTRATION on the same env flag that gates the
+// deny created a hard dependency ordering: with the gate on but the tool absent, pre-tool denies every
+// execution tool while the agent has no way to declare a contract, locking the session. Registering it
+// unconditionally makes the tool's presence independent of whether the gate is currently enforcing.
+registerTool(
+  "contract",
+  "Declare what done means for this task, then close each criterion. Criteria are yours to choose: runnable commands where the work is verifiable by running something, otherwise the concrete artifact that must exist. Frozen once declared.",
+  {
+    checks: z.array(z.string()).min(1).optional()
+      .describe("Declare the criteria that define done. Prefer commands that FAIL while the task is unfinished."),
+    satisfied: z.string().optional().describe("A declared criterion to close."),
+    evidence: z.string().optional().describe("What satisfies it: the artifact produced or the output observed."),
+  },
+  async ({ checks, satisfied, evidence }) => measured("contract", { checks, satisfied, evidence }, async () => {
+    const { declareContract, satisfyCriterion } = await import("../hosts/copilot-cli/contract");
+    const result = satisfied
+      ? satisfyCriterion(satisfied, evidence || "")
+      : declareContract(checks || []);
+    return result.error ? fail(result.error) : json(result);
+  })
+);
+
 const schemaIdentity = currentReleaseIdentity();
 for (const [toolName, schema] of toolSchemas) {
   recordTelemetry({

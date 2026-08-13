@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { telemetryRunId } from "../src/core/telemetry";
 
@@ -20,7 +20,16 @@ function invoke(path: string, args: string[], payload: object, env: Record<strin
 function completeCopilotBrain(
   post: (toolName: string, toolArgs: object, toolResult: unknown) => ReturnType<typeof spawnSync>,
   prefix: string,
+  dbPath?: string,
 ): void {
+  // The contract gate is unconditional, so a releasable turn also needs a satisfied contract, written
+  // beside the database exactly where the `contract` MCP tool puts it.
+  if (dbPath) {
+    writeFileSync(join(dirname(dbPath), "contract.json"), JSON.stringify({
+      criteria: [{ check: `${prefix} is done`, passed: true, failedFirst: false, evidence: "verified" }],
+      nudges: 0,
+    }));
+  }
   const root = `${prefix}-root`;
   const child = `${prefix}-child`;
   const leaf = `${prefix}-leaf`;
@@ -69,7 +78,7 @@ test("Copilot hooks correlate returned brain nodes with later use and completion
     content: [{ text: JSON.stringify([{ id: "node-a", text: "answer", score: 0.9 }]) }],
   }).status).toBe(0);
   expect(post("cairn-brain_mutate", { id: "node-a", answer: "done" }, { id: "node-a" }).status).toBe(0);
-  completeCopilotBrain(post, sessionId);
+  completeCopilotBrain(post, sessionId, dbPath);
   expect(invoke(hook, ["agent-stop"], { sessionId }, env).status).toBe(0);
 
   const db = new Database(dbPath, { readonly: true });
@@ -109,7 +118,7 @@ test("Copilot can retain the completion continuation as an explicit baseline", (
     }, env);
   post("cairn-skill_select", { ids: ["software"] }, { ok: true });
   post("cairn-brain_search", { query: "fix" }, { success: true, content: [] });
-  completeCopilotBrain(post, sessionId);
+  completeCopilotBrain(post, sessionId, dbPath);
   const blocked = invoke(hook, ["agent-stop"], { sessionId }, env);
   expect(JSON.parse(blocked.stdout.toString())).toMatchObject({ decision: "block" });
   invoke(hook, ["agent-stop"], { sessionId }, env);

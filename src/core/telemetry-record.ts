@@ -183,6 +183,8 @@ export function recordTelemetryState(input: TelemetryRunIdentity & {
   eventKey: string;
   kind:
     | "stop_blocked"
+    | "ownership_blocked"
+    | "contract_blocked"
     | "completion_blocked"
     | "visibility_failure"
     | "deferred"

@@ -37,7 +37,6 @@ import type { TelemetryEvent } from "./telemetry-record-types";
 // (measured ~25x). A one-shot hook process just pays the same single load as before.
 let _cache: { token: string; model: string; dim: number; vecs: NeuronVector[] } | null = null;
 let _warmup: Promise<void> | null = null;
-let _cacheRefresh: Promise<void> | null = null;
 type SearchTelemetryIdentity = Pick<
   TelemetryEvent,
   "releaseFingerprint" | "version" | "runClass"
@@ -129,17 +128,6 @@ function hasCurrentVectorCache(expectDim: number): boolean {
   );
 }
 
-function refreshVectorCache(expectDim: number): void {
-  if (_cacheRefresh) return;
-  const pending = new Promise<void>((resolve) => setTimeout(resolve, 0))
-    .then(() => vectors(expectDim, null))
-    .then(() => {}, () => {});
-  _cacheRefresh = pending;
-  pending.finally(() => {
-    if (_cacheRefresh === pending) _cacheRefresh = null;
-  });
-}
-
 // Semantic search. Neurons above the threshold are "seeds"; from each we descend INTO its
 // subtree (its sub-questions and their findings), then interleave everything into one list
 // ranked by relevance. A match never pulls in its parents or root. Deduped, NO count limit.
@@ -208,7 +196,13 @@ async function executeSearch(
         options.searchGraphBoost,
       );
       searchStage("rerank", rerankStarted, result.length, telemetry);
-      refreshVectorCache(qv.length);
+      // Deliberately NOT rebuilding the linear vector cache here. Any neuron or edge write bumps the
+      // search token, so eagerly rewarming meant one full reload+decode of every neuron per write, on
+      // a cache this path did not use to answer the query. Cairn's own loop writes to the brain every
+      // turn, so that ran constantly. Measured at 22.7k nodes, create-then-search went 720ms -> 41ms
+      // (p50) and the block on the single-threaded server, which stalls every other request, went
+      // 726ms -> 46ms. vectors() still builds on demand for the paths that genuinely need the linear
+      // scan (subtree expansion, or an index that is stale, absent or under the size threshold).
       return result;
     }
 

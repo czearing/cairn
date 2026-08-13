@@ -537,7 +537,6 @@ export async function runCopilotHook(): Promise<void> {
   if (mode === "pre-tool") {
     // preToolUse command hooks are FAIL-CLOSED (a crash denies the tool), so default to allow and only
     // ever deny on an explicit gate match.
-    if (process.env.CAIRN_COPILOT_NO_GATE) return void emit({});
     // The ONLY signal that separates "Cairn is unreachable" from "the agent ignored Cairn" was recorded
     // in post-tool, which never runs when the call dies at the transport — so an outage was indexed as
     // defiance and nudged forever (observed: ten identical skill_select demands against a dead server).
@@ -710,7 +709,6 @@ export async function runCopilotHook(): Promise<void> {
     // user-prompt and is held to the same gate here. The previous carve-out identified subagents by the
     // SHAPE of their session id, which is a guess about the host rather than a fact from it; it matched
     // nothing in production, and where it did match it silently turned Cairn off for that agent.
-    if (process.env.CAIRN_COPILOT_NO_STOP) return void emit({});
     const stateId = turnScope(sessionId);
     const st = readLifecycle(stateId);
     if (!st.cairnToolObserved && st.cairnToolAttempted) {

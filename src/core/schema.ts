@@ -1,5 +1,5 @@
 import type { Stmt } from "./db";
-import { HOST_EVENTS_SCHEMA } from "./host-events.schema";
+import { HOST_EVENTS_SCHEMA, hostEventsPruneSql } from "./host-events.schema";
 
 type Query = (sql: string) => Stmt;
 type Exec = (sql: string) => void;
@@ -73,5 +73,9 @@ export function ensureEngineSchema(query: Query, exec: Exec): void {
     FROM neurons n, json_each(CASE WHEN json_valid(n.edges) THEN n.edges ELSE '[]' END) j
     WHERE j.type = 'text' AND CAST(j.value AS TEXT) <> n.id`);
   for (const sql of TRIGGERS) exec(sql);
+  // Writer-only, so a hook fire never pays for it: the hooks' own host_events connection applies the
+  // DDL alone. The long-lived server and every CLI open pass through here, which is enough to keep the
+  // append-only event log bounded.
+  exec(hostEventsPruneSql());
   query("PRAGMA optimize").get();
 }

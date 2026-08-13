@@ -102,6 +102,28 @@ test("raw host event indexing is byte-preserving and idempotent", () => {
   ]);
 });
 
+test("the append-only host event log is pruned to the retention window on writer open", () => {
+  const path = join(tmpdir(), `cairn-host-event-retention-${randomUUID()}.db`);
+  const now = Date.now();
+  const script = `
+    import { db } from ${JSON.stringify(join(import.meta.dir, "..", "src", "core", "db.ts"))};
+    const stale = ${now} - 31 * 86400000;
+    for (const [key, ts] of [["stale", stale], ["fresh", ${now}]]) {
+      db().query("INSERT INTO host_events(event_key,host,hook_type,raw_json,recorded_ts) VALUES (?,?,?,?,?)")
+        .run(key, "copilot", "pre-tool", "{}", ts);
+    }
+  `;
+  const env = { ...process.env, CAIRN_DB_PATH: path, CAIRN_READONLY: "" };
+  expect(spawnSync(process.execPath, ["-e", script], { env }).status).toBe(0);
+  // A second open re-runs the engine schema, which is where the prune lives.
+  const read = spawnSync(process.execPath, ["-e", `
+    import { db } from ${JSON.stringify(join(import.meta.dir, "..", "src", "core", "db.ts"))};
+    console.log(JSON.stringify(db().query("SELECT event_key FROM host_events ORDER BY event_key").all()));
+  `], { env });
+  expect(read.status).toBe(0);
+  expect(JSON.parse(read.stdout.toString())).toEqual([{ event_key: "fresh" }]);
+});
+
 test("immediate transactions preserve every concurrent writer", async () => {
   const path = join(tmpdir(), `cairn-concurrent-writes-${randomUUID()}.db`);
   const seed = new Database(path);

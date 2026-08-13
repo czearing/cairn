@@ -22,3 +22,13 @@ export const HOST_EVENTS_SCHEMA = [
   `CREATE INDEX IF NOT EXISTS host_events_agent
     ON host_events(host, session_id, agent_id, recorded_ts)`,
 ] as const;
+
+// Every hook fire of every agent appends its full payload here and nothing ever removed it, so the log
+// grew without bound (~4k rows/day once Cairn ran for all agents). Both readers — hostEvents() and the
+// prompt-eval evidence query — join a session against telemetry_runs, which telemetry already prunes on
+// CAIRN_USAGE_RETENTION_DAYS; reusing that one window keeps the two logs consistent instead of adding a
+// second knob, since a session whose telemetry row is gone cannot be evaluated anyway.
+export function hostEventsPruneSql(now = Date.now()): string {
+  const days = Math.max(1, Number(process.env.CAIRN_USAGE_RETENTION_DAYS || "30"));
+  return `DELETE FROM host_events WHERE recorded_ts < ${Math.floor(now - days * 86_400_000)}`;
+}

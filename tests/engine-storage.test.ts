@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { db } from "../src/core/db";
 import { embedModel } from "../src/core/embed";
 import { addEdge, edgesFrom } from "../src/core/graph";
-import { recordHostEvent, hostEvents } from "../src/core/host-events";
+import { recordHostEvent, hostEvents, unannouncedTools } from "../src/core/host-events";
 import { encodeVector } from "../src/core/vector";
 import {
   activeVectorIndex,
@@ -100,6 +100,31 @@ test("raw host event indexing is byte-preserving and idempotent", () => {
       recordedTs: 100,
     }),
   ]);
+});
+
+test("a session whose host never announced its tool calls is reported as running a stale hook config", () => {
+  db().run("DELETE FROM host_events");
+  const ev = (hook: string, tool: string, ts: number) => {
+    const raw = JSON.stringify({ sessionId: "stale", toolCallId: `c${ts}`, toolName: tool });
+    recordHostEvent("copilot", hook, raw, JSON.parse(raw), ts);
+  };
+
+  // A live gate announces every call before it runs, so nothing is unannounced.
+  for (const [i, tool] of ["powershell", "view", "edit"].entries()) {
+    ev("pre-tool", tool, 100 + i * 10);
+    ev("post-tool", tool, 105 + i * 10);
+  }
+  expect(unannouncedTools("copilot", "stale")).toEqual([]);
+
+  // A session running a config that gates only one tool still reports every other call afterwards,
+  // which is the hole this detects.
+  db().run("DELETE FROM host_events");
+  ev("pre-tool", "cairn-brain_create", 200);
+  ev("post-tool", "cairn-brain_create", 205);
+  for (const [i, tool] of ["edit", "grep", "powershell"].entries()) ev("post-tool", tool, 210 + i * 10);
+
+  expect(unannouncedTools("copilot", "stale")).toEqual(["edit", "grep", "powershell"]);
+  expect(unannouncedTools("copilot", "another-session")).toEqual([]);
 });
 
 test("the append-only host event log is pruned to the retention window on writer open", () => {

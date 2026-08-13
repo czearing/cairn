@@ -99,3 +99,26 @@ export function hostEvents(host: HostName, sessionId: string): HostEventRow[] {
     FROM host_events WHERE host = ? AND session_id = ?
     ORDER BY recorded_ts,event_key`).all(host, sessionId) as HostEventRow[];
 }
+
+// Tools this session reported AFTER running but never announced BEFORE running.
+//
+// Hosts cache their hook configuration when the session starts, so a session that began before a hook
+// config change keeps running the OLD one for its entire life and cannot heal itself. That is invisible
+// from inside the session: the pre-tool gate simply never fires and everything looks normal. It is
+// observable here because every hook fire records an event before any dispatch, so a pre-tool hook that
+// the host never invoked leaves a hole rather than a row.
+//
+// When the gate is installed and live, the host announces every call before running it, so the set of
+// tools with post-tool events is a SUBSET of the set with pre-tool events. Any tool outside that subset
+// means the host is not calling preToolUse for it. This compares a session against itself and knows no
+// tool names, so it reports a real host/config divergence rather than a guess about which tools matter.
+export function unannouncedTools(host: HostName, sessionId: string): string[] {
+  return (localEventsDatabase().query(`SELECT tool_name AS toolName
+    FROM host_events
+    WHERE host = ? AND session_id = ? AND tool_name <> ''
+    GROUP BY tool_name
+    HAVING SUM(CASE WHEN hook_type = 'pre-tool' THEN 1 ELSE 0 END) = 0
+       AND SUM(CASE WHEN hook_type = 'post-tool' THEN 1 ELSE 0 END) > 0
+    ORDER BY tool_name`).all(host, sessionId) as { toolName: string }[])
+    .map((row) => row.toolName);
+}

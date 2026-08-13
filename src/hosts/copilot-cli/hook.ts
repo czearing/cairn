@@ -525,12 +525,30 @@ export async function runCopilotHook(): Promise<void> {
     const state = resetLifecycle(stateId);
     if (emittedUsage) emittedUsage.turnSeq = state.turnSeq;
     const wf = await workflowPrompt();
+    // A host reads its hook configuration once, when the session starts, so a session that began before
+    // a config change runs the OLD hooks for its entire life and cannot reload them. When that change
+    // added the pre-tool gate, the gate silently never fires for that session and nothing inside it can
+    // tell. Surface it instead, once per turn, so a stale session is visible rather than quietly ungated.
+    // Requiring several distinct tools rules out a lone pre/post race between two hook processes.
+    let staleHooks = "";
+    try {
+      const { unannouncedTools } = await import("../../core/host-events");
+      const missed = unannouncedTools("copilot", sessionId);
+      if (missed.length >= 3) {
+        staleHooks = `This session started before the currently installed Cairn hook configuration, so its `
+          + `pre-tool gate is NOT running: ${missed.length} tools have run unannounced (${missed.slice(0, 3).join(", ")}). `
+          + `A host loads hook config only at session start, so this session cannot restore the gate itself. `
+          + `Tell the user, in your reply, that this session predates the current Cairn install and that a new `
+          + `session is required for the gate to apply.`;
+      }
+    } catch { /* a stale-config notice must never block a turn */ }
+    const injected = [wf, staleHooks].filter((part) => part.length > 0).join("\n\n");
     beginTelemetryRun({
       host: "copilot", sessionId, turnSeq: state.turnSeq,
       promptHash: promptFingerprint(wf), catalogVersion: catalogVersion(),
-      injectedChars: internalContext(wf).length, model,
+      injectedChars: internalContext(injected).length, model,
     });
-    emit(wf ? { additionalContext: internalContext(wf) } : {});
+    emit(injected ? { additionalContext: internalContext(injected) } : {});
     return;
   }
 

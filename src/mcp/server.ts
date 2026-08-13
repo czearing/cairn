@@ -53,6 +53,31 @@ interface HotState {
   tools?: Map<string, RegisteredTool>;
   toolSchemas?: Map<string, { chars: number; fingerprint: string }>;
   idleGc?: ReturnType<typeof setTimeout>;
+  orphanWatchdog?: ReturnType<typeof setInterval>;
+}
+
+// Same probe as core/engine-client.ts's pidAlive: signal 0 sends nothing but still surfaces ESRCH
+// (no such process) vs EPERM (exists, just not ours to signal) vs success (exists).
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as { code?: string })?.code === "EPERM";
+  }
+}
+
+// Belt-and-suspenders for exitWithHost below: stdin 'end'/'close' depends on the host cleanly
+// closing its end of the pipe, and proved unreliable in practice (orphaned bun processes were
+// found running minutes after their launching host process had already exited, with neither event
+// ever firing). Poll the actual parent PID instead so a genuinely dead host is always caught, even
+// when the pipe-close signal never arrives.
+function startOrphanWatchdog() {
+  const parentPid = process.ppid;
+  if (!parentPid) return;
+  state.orphanWatchdog ??= setInterval(() => {
+    if (!pidAlive(parentPid)) process.exit(0);
+  }, 15_000).unref();
 }
 const hotState = globalThis as typeof globalThis & { __cairnHotState?: HotState };
 const state = hotState.__cairnHotState ??= {};
@@ -385,6 +410,7 @@ if (!state.connected) {
   const exitWithHost = () => process.exit(0);
   process.stdin.once("end", exitWithHost);
   process.stdin.once("close", exitWithHost);
+  startOrphanWatchdog();
 } else {
   void warmEngine();
   // RegisteredTool.update() emits tools/list_changed for each refreshed definition.

@@ -1,5 +1,5 @@
 import { skillsEnabled } from "../core/config";
-import { getSkill, skillCatalog, visibleSkill } from "./store";
+import { skillCatalog, visibleSkill } from "./store";
 import { skillCatalogSnapshot } from "./catalog";
 
 // Entry points the Claude Code dispatch calls. The skill feature is ON by default; turn it OFF per machine

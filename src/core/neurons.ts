@@ -3,11 +3,9 @@ import { db } from "./db";
 import { config } from "./config";
 import { embed, embedModel } from "./embed";
 import {
-  addEdge,
   edgesForSources,
   edgesFrom,
   linkBoth,
-  replaceEdges,
   replaceEdgesMirrored,
   resyncLegacyEdges,
   sourcesTargeting,

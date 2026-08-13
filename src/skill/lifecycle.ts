@@ -149,9 +149,7 @@ function database(): Database {
     tool_call_id TEXT PRIMARY KEY,
     parent_scope TEXT NOT NULL,
     skill_ids TEXT NOT NULL,
-    child_scope TEXT NOT NULL DEFAULT '',
-    created_ts INTEGER NOT NULL,
-    claimed_ts INTEGER NOT NULL DEFAULT 0
+    created_ts INTEGER NOT NULL
   )`);
   connection = d;
   return d;
@@ -288,29 +286,3 @@ export function releaseDelegation(toolCallId: string): void {
   database().query("DELETE FROM lifecycle_delegations WHERE tool_call_id = ?").run(toolCallId);
 }
 
-export function claimDelegation(toolCallId: string, childScope: string): string[] {
-  if (!toolCallId || !childScope) return [];
-  const d = database();
-  d.run("BEGIN IMMEDIATE");
-  try {
-    const row = d.query("SELECT skill_ids, child_scope FROM lifecycle_delegations WHERE tool_call_id = ?")
-      .get(toolCallId) as { skill_ids?: string; child_scope?: string } | null;
-    if (!row || (row.child_scope && row.child_scope !== childScope)) {
-      d.run("COMMIT");
-      return [];
-    }
-    d.query("UPDATE lifecycle_delegations SET child_scope = ?, claimed_ts = ? WHERE tool_call_id = ?")
-      .run(childScope, Date.now(), toolCallId);
-    d.run("COMMIT");
-    return parse(row.skill_ids, []);
-  } catch (error) {
-    try { d.run("ROLLBACK"); } catch { /* no transaction */ }
-    throw error;
-  }
-}
-
-function clearLifecycleForTests(): void {
-  const d = database();
-  d.run("DELETE FROM lifecycle_turns");
-  d.run("DELETE FROM lifecycle_delegations");
-}

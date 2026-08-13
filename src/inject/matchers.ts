@@ -23,7 +23,7 @@ export function matchEvent(event: NormalizedEvent): Match {
     return null;
   }
 
-  const { tool, input } = event;
+  const { tool } = event;
   if (isTool(tool, "brain_search")) return { promptFile: "search-results.md" };
   if (isTool(tool, "brain_create")) return { promptFile: "node-created.md" };
   if (isTool(tool, "brain_mutate")) return null;

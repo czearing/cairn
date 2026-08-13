@@ -19,9 +19,6 @@ export interface ClaudeOpts {
   cwd?: string;
 }
 
-/** The reviewer's verdict on one output: a quality score plus what to keep, fix, and improve. */
-export interface Review { score: number; right: string; wrong: string; improve: string; raw: string }
-
 /** Result of a CLI run. `ok` is false on any spawn error, timeout, or non-zero exit; `error` then holds the
  *  real reason (stderr, exit code, or timeout). */
 export interface ClaudeResult { ok: boolean; text: string; error?: string }

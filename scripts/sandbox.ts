@@ -35,7 +35,7 @@ const tempDb = join(sandbox, "brain.db");
 const tempBin = join(sandbox, "bin");
 mkdirSync(tempBin, { recursive: true });
 
-async function run(title: string, args: string[], env: Record<string, string>, opts: { tty?: boolean } = {}) {
+async function run(title: string, args: string[], env: Record<string, string>) {
   console.log(`\n${"=".repeat(78)}\n▶ ${title}\n${"=".repeat(78)}`);
   const proc = Bun.spawn([BUN, CLI, ...args], {
     env: { ...process.env, ...env },

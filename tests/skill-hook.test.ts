@@ -1,8 +1,7 @@
 import { test, expect, beforeEach } from "bun:test";
-import { writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
 import { extractRun } from "../src/skill/transcript";
 import { skillsEnabled, skillCreate, skillLoad, skillSelect, skillsExist } from "../src/skill/hook";
 import { categorize, reindexSkill } from "../src/skill/match";

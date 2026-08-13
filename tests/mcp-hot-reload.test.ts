@@ -75,7 +75,6 @@ test("the launch arguments hosts are installed with are the ones that reload", a
   expect(args).toContain("--hot");
   expect(args.some((arg) => arg.replaceAll("\\", "/").includes("/dist/"))).toBe(false);
 
-  const repository = join(import.meta.dir, "..");
   const directory = scratch();
   const hook = join(directory, "launch-hook.json");
   const database = join(directory, "launch.db");

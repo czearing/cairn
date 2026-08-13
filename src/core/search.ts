@@ -1,5 +1,5 @@
 import { db, searchChangeToken } from "./db";
-import { config, searchOptionsFromConfig } from "./config";
+import { searchOptionsFromConfig } from "./config";
 import { embed, embedModel, cosine } from "./embed";
 import { edgesForSources } from "./graph";
 import { toNeuron, vecText, SELECT } from "./neurons";

@@ -31,7 +31,12 @@ interface Contract {
 
 // Bounds the loop: a criterion that cannot be met must not spin forever. Mirrors STOP_CAP.
 const cap = (): number => Math.max(1, Number(process.env.CAIRN_CONTRACT_CAP || "3"));
-const path = (): string => join(dirname(config.dbPath), "contract.json");
+// Resolved per call, and CAIRN_DB_PATH is consulted directly rather than only through `config`, whose
+// value is fixed when the module is first imported. A test that redirects the env var after that import
+// would otherwise keep writing here, to the real brain directory — observed live: running the suite
+// deleted the live session's contract.json, because clearContract() in an "isolated" test was never
+// isolated at all. State that a test can reach must be addressable at call time, not at import time.
+const path = (): string => join(dirname(process.env.CAIRN_DB_PATH || config.dbPath), "contract.json");
 const normalize = (text: string): string => text.replace(/\s+/g, " ").trim();
 
 export function readContract(): Contract | null {
@@ -68,6 +73,25 @@ export function declareContract(checks: string[]): { error?: string; criteria?: 
   return { criteria };
 }
 
+// Whether an executed command actually RAN the declared check, rather than merely mentioning it.
+//
+// This was `executed.includes(check)`, which any command containing the text satisfied — so the criterion
+// "bun test" was closed by `echo "bun test"`, by a grep for it, or (observed live) by the very command
+// that DECLARED the contract, since the declaration necessarily quotes its own checks. A proof gate whose
+// proof is satisfied by naming the proof is not a gate at all, and it failed open, silently.
+//
+// A shell command is a sequence of commands, so the check must match one of those positions: the segment
+// must BE the check, or start with it followed by an argument boundary. `bun test` therefore still closes
+// on `cd repo; bun test --coverage`, but never on `echo "bun test"`, where the check sits inside an
+// argument rather than at the head of a segment.
+function ranCheck(executed: string, check: string): boolean {
+  if (!check) return false;
+  return executed
+    .split(/[;|]|&&/)
+    .map((segment) => segment.trim())
+    .some((segment) => segment === check || segment.startsWith(`${check} `));
+}
+
 // Executable criteria satisfy themselves: an observed successful run of the declared check closes it.
 // An earlier draft also demanded every criterion be seen FAILING first ("red before green"). Two live
 // sessions proved that wrong: asked for a haiku, the agent spent six minutes manufacturing a negative
@@ -79,7 +103,7 @@ export function recordObservedRun(command: string, succeeded: boolean): void {
   const executed = normalize(command);
   let changed = false;
   const criteria = contract.criteria.map((criterion) => {
-    if (!executed.includes(criterion.check)) return criterion;
+    if (!ranCheck(executed, criterion.check)) return criterion;
     if (!succeeded && !criterion.passed) {
       changed = true;
       return { ...criterion, failedFirst: true };

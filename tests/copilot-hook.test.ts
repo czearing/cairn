@@ -1566,7 +1566,15 @@ test("the contract loop blocks until declared criteria are met, whatever shape t
     contract.clearContract();
     contract.declareContract(["bun test"]);
     expect(contract.contractStopReason(true)).toContain("unmet");
-    contract.recordObservedRun("bun test", true);
+    // 3a. But only a command that RAN it. Merely naming the check must never close it, or the proof is
+    // satisfied by quoting the proof — observed live, where the command that DECLARED the contract closed
+    // every criterion in it, because a declaration necessarily contains its own check text.
+    contract.recordObservedRun('echo "bun test"', true);
+    contract.recordObservedRun("bun -e 'declareContract([`bun test`])'", true);
+    contract.recordObservedRun("rg 'bun test' tests", true);
+    expect(contract.contractStopReason(true)).toContain("unmet");
+    // 3b. A real invocation closes it, including as one segment of a longer command line, with arguments.
+    contract.recordObservedRun("cd repo; bun test --coverage", true);
     expect(contract.contractStopReason(true)).toBe("");
 
     // 4. Assertion closes non-runnable work: the gate forces delivery, it does not judge quality.

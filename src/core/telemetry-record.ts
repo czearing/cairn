@@ -185,6 +185,7 @@ export function recordTelemetryState(input: TelemetryRunIdentity & {
     | "stop_blocked"
     | "ownership_blocked"
     | "contract_blocked"
+    | "contract_unavailable"
     | "completion_blocked"
     | "visibility_failure"
     | "deferred"

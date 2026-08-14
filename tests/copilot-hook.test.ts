@@ -728,6 +728,59 @@ test("the contract gate denies execution, loops the turn, and releases only when
   }
 });
 
+// A client negotiates its tool list at session start, so a session older than the `contract` tool can
+// never call it. The per-turn nudge cap cannot see that, because a new prompt clears the contract file and
+// re-arms the cap, so such a session is demanded of forever and — worse — has every execution tool denied
+// at the start of each turn. Two turns of unanswered demands is the evidence that the tool is absent.
+test("a session that can never declare a contract is told once and then released, not bricked", () => {
+  const dir = join(tmpdir(), `cairn-contract-missing-${randomUUID()}`);
+  mkdirSync(dir, { recursive: true });
+  const dbPath = join(dir, "c.db");
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_ENFORCE_STOP_GATES: "0",
+    CAIRN_SKILLS: "0",
+    COPILOT_HOME: join(dir, "home"),
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const sid = "contract-missing";
+  const stop = () => invoke("agent-stop", { sessionId: sid }).stdout.toString();
+  const useSkill = () => invoke("post-tool", {
+    sessionId: sid, toolName: "cairn-skill_select", toolArgs: { ids: ["skill-missing"] },
+  });
+  try {
+    // Turn 1: the demand is legitimate and repeats up to its cap. Nothing is released early.
+    expect(invoke("user-prompt", { sessionId: sid, prompt: "Do the thing." }).status).toBe(0);
+    useSkill();
+    completeBrainWorkflow(invoke, sid, { declareContract: false });
+    expect(stop()).toContain("declare what done means");
+    expect(stop()).toContain("declare what done means");
+
+    // Turn 2: a second turn of unanswered demands proves the instrument is absent, so the turn is told
+    // once — in terms the user will hear — instead of being asked a fifth time.
+    expect(invoke("user-prompt", { sessionId: sid, prompt: "Next thing." }).status).toBe(0);
+    useSkill();
+    completeBrainWorkflow(invoke, sid, { declareContract: false });
+    let notice = stop();
+    for (let i = 0; i < 6 && notice.includes("declare what done means"); i += 1) notice = stop();
+    expect(notice).toContain("not reachable from this session");
+    expect(notice).toContain("new session is required");
+    expect(telemetryKinds(dbPath)).toContain("contract_unavailable");
+
+    // Having said it once, the gate expires rather than repeating: the turn releases and, critically,
+    // execution tools stop being denied.
+    expect(stop()).not.toContain("not reachable from this session");
+    expect(invoke("pre-tool", {
+      sessionId: sid, toolName: "create", toolArgs: { path: join(dir, "out.txt") },
+    }).stdout.toString()).not.toContain("deny");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("an ignored healthy Cairn workflow remains blocked until Cairn is used", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-ignored-workflow-${id}.db`);

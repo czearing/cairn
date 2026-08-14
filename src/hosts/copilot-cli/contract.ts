@@ -12,6 +12,7 @@
 // One file, no session key: the MCP server (which never learns a session id) must read the same contract
 // the hooks write, so both resolve it from the brain's directory.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { config } from "../../core/config";
 
@@ -152,6 +153,92 @@ export function contractStopReason(_changedDurableState = false): string {
   }
   return "";
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Instrument check: is the `contract` tool actually reachable from THIS session?
+//
+// A client negotiates its tool list once, when the session starts, exactly as a host loads its hook
+// config once (see unannouncedTools). A session that began before the `contract` tool shipped therefore
+// cannot call it for its entire life, and nothing inside that session can fix it. The gate above cannot
+// see that on its own: clearContract() wipes the per-turn file at every prompt, so `nudges` restarts at
+// zero every turn and the cap re-arms forever. The result is the exact failure this whole system exists
+// to prevent — an unsatisfiable demand, repeated at every turn boundary, that the user must micromanage
+// around. Worse, the pre-tool gate denies every execution tool until that same counter passes the cap,
+// so an otherwise healthy session is bricked at the start of each turn.
+//
+// Counting ACROSS turns separates the two cases behaviourally, with no tool names, no version numbers and
+// no host strings: a turn that merely ignored the demand still has the tool and declares once it is told
+// again, so it never accumulates a second turn's worth of refusals. A session that has burned the entire
+// per-turn budget in two or more separate turns without ever declaring is missing the instrument, not
+// disobeying. It is then told once, so the user hears it, and released — a gate whose instrument is
+// absent must expire, not brick.
+interface NudgeLedger { nudges: number; turns: number[]; reported: boolean }
+
+/** Per-session scratch, in the host's own session-state dir so it is discarded with the session. */
+export const sessionStatePath = (sessionId: string, file: string): string =>
+  join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, file);
+
+const EMPTY_LEDGER: NudgeLedger = { nudges: 0, turns: [], reported: false };
+const ledgerPath = (sessionId: string): string => sessionStatePath(sessionId, "cairn-contract-nudges.json");
+
+function readLedger(sessionId: string): NudgeLedger {
+  if (!sessionId) return EMPTY_LEDGER;
+  try {
+    const parsed = JSON.parse(readFileSync(ledgerPath(sessionId), "utf8")) as Partial<NudgeLedger>;
+    return {
+      nudges: Number(parsed.nudges) || 0,
+      turns: Array.isArray(parsed.turns) ? parsed.turns.filter((t) => typeof t === "number") : [],
+      reported: parsed.reported === true,
+    };
+  } catch {
+    return EMPTY_LEDGER;
+  }
+}
+
+function writeLedger(sessionId: string, ledger: NudgeLedger): void {
+  try {
+    mkdirSync(dirname(ledgerPath(sessionId)), { recursive: true });
+    writeFileSync(ledgerPath(sessionId), JSON.stringify(ledger));
+  } catch { /* the ledger only relaxes a gate, so failing to persist it must never block a turn */ }
+}
+
+/** Record one "you must declare a contract" demand that the turn ended without satisfying. */
+export function noteUndeclaredNudge(sessionId: string, turnSeq: number): void {
+  if (!sessionId) return;
+  const ledger = readLedger(sessionId);
+  writeLedger(sessionId, {
+    ...ledger,
+    nudges: ledger.nudges + 1,
+    turns: ledger.turns.includes(turnSeq) ? ledger.turns : [...ledger.turns, turnSeq],
+  });
+}
+
+/** Demanded across at least two separate turns and never once satisfied: the tool is not there. */
+export function contractInstrumentMissing(sessionId: string): boolean {
+  const ledger = readLedger(sessionId);
+  return ledger.turns.length >= 2 && ledger.nudges > cap();
+}
+
+export function contractInstrumentReported(sessionId: string): boolean {
+  return readLedger(sessionId).reported;
+}
+
+export function markContractInstrumentReported(sessionId: string): void {
+  if (sessionId) writeLedger(sessionId, { ...readLedger(sessionId), reported: true });
+}
+
+/** Declaring even once proves the tool is reachable, so the evidence of absence is discarded. */
+export function clearInstrumentDoubt(sessionId: string): void {
+  if (sessionId) rmSync(ledgerPath(sessionId), { force: true });
+}
+
+export const CONTRACT_UNAVAILABLE_REASON =
+  "The `contract` tool is not reachable from this session: Cairn has asked for a contract across several"
+  + " turns and no declaration has ever arrived. A client negotiates its tool list when the session starts,"
+  + " so a session older than the tool can never call it and cannot fix that itself. Stop trying to call it."
+  + " Cairn is releasing this gate for the rest of this session; state your completion criteria and their"
+  + " evidence directly in your reply instead. Tell the user, in your reply, that this session predates the"
+  + " `contract` tool and that a new session is required for the completion gate to apply.";
 
 export const CONTRACT_DECLARE_REASON =
   "Declare your contract first: call the `contract` tool with the criteria that define done for this task."

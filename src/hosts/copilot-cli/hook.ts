@@ -51,6 +51,13 @@ import { postToolPromptFiles } from "../../inject/post-tool";
 import { completionContinuationEnabled } from "./completion-gate";
 import {
   CONTRACT_DECLARE_REASON,
+  CONTRACT_UNAVAILABLE_REASON,
+  clearInstrumentDoubt,
+  contractInstrumentMissing,
+  contractInstrumentReported,
+  markContractInstrumentReported,
+  noteUndeclaredNudge,
+  sessionStatePath,
   contractDeclared,
   contractExhausted,
   clearContract,
@@ -72,7 +79,7 @@ const emit = (obj: object) => {
 };
 export const internalContext = (text: string): string => text ? `<cairn-internal>\n${text}\n</cairn-internal>` : "";
 const complianceReceiptPath = (sessionId: string): string =>
-  join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, "cairn-compliance.json");
+  sessionStatePath(sessionId, "cairn-compliance.json");
 const COMPLETION_REMINDER = "Ensure you completed every requested task.";
 const SKILL_APPLICATION_REMINDER =
   "End with one compact **Cairn** receipt: `Root — synthesis (URL)`; `Coverage — validation and why nothing remains`; `Recall — improvement`; `Skill application — step N: action/result` for every selected or invoked skill; `Skill update — exact skill_edit change and why`, or `none — steps remained accurate and complete`. Report observable evidence, not hidden reasoning.";
@@ -613,8 +620,12 @@ export async function runCopilotHook(): Promise<void> {
     // loophole now that the subagent exemptions are gone — the child runs Cairn and pays the gate for its
     // own execution tools. Checked AFTER the delegation branches, which only return early when they
     // actually inject a protocol.
+    // `contractInstrumentMissing` releases this deny for a session that provably cannot call the tool.
+    // Without it the brick is total rather than annoying: `nudges` only rises when a turn STOPS, so at
+    // the start of every turn an instrument-less session has a fresh zero count and every execution tool
+    // it needs is denied until it has stopped past the cap.
     if (!decision.deny && !isTask(toolName) && countsAsExecution(toolName, args)
-      && !contractDeclared() && !contractExhausted()) {
+      && !contractDeclared() && !contractExhausted() && !contractInstrumentMissing(sessionId)) {
       emit({ permissionDecision: "deny", permissionDecisionReason: CONTRACT_DECLARE_REASON });
       return;
     }
@@ -799,14 +810,32 @@ export async function runCopilotHook(): Promise<void> {
     }
     const contractReason = contractStopReason(st.executionToolCalls > 0);
     if (contractReason) {
-      noteContractNudge();
-      recordTelemetryState({
-        host: "copilot", sessionId, turnSeq: st.turnSeq,
-        eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:contract:${readContract()?.nudges ?? 0}`,
-        kind: "contract_blocked",
-      });
-      emit({ decision: "block", reason: internalContext(contractReason) });
-      return;
+      // Declaring even once proves the tool is reachable, so any accumulated doubt is discarded.
+      if (contractDeclared()) clearInstrumentDoubt(sessionId);
+      else noteUndeclaredNudge(sessionId, st.turnSeq);
+      const missing = !contractDeclared() && contractInstrumentMissing(sessionId);
+      if (!missing) {
+        noteContractNudge();
+        recordTelemetryState({
+          host: "copilot", sessionId, turnSeq: st.turnSeq,
+          eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:contract:${readContract()?.nudges ?? 0}`,
+          kind: "contract_blocked",
+        });
+        emit({ decision: "block", reason: internalContext(contractReason) });
+        return;
+      }
+      if (!contractInstrumentReported(sessionId)) {
+        markContractInstrumentReported(sessionId);
+        recordTelemetryState({
+          host: "copilot", sessionId, turnSeq: st.turnSeq,
+          eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:contract-unavailable`,
+          kind: "contract_unavailable",
+        });
+        emit({ decision: "block", reason: internalContext(CONTRACT_UNAVAILABLE_REASON) });
+        return;
+      }
+      // Instrument absent and the user has already been told: release the turn rather than repeat a
+      // demand this session provably cannot satisfy.
     }
     if (process.env.AGENT_HARNESS === "1" && harnessTurnDeferred()) {
       // A waiting task will resume in a new turn after its dependency completes.

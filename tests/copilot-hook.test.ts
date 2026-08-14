@@ -693,6 +693,14 @@ test("the contract gate denies execution, loops the turn, and releases only when
     expect(denied).toContain("deny");
     expect(denied).toContain("Declare your contract first");
 
+    // 1b. The instrument the deny NAMES must itself be allowed, or obeying the message is impossible.
+    // Both wire forms, because the host may present an MCP tool bare or server-prefixed.
+    for (const toolName of ["contract", "cairn-contract"]) {
+      expect(invoke("pre-tool", {
+        sessionId: "contract-e2e", toolName, toolArgs: { checks: ["bun test"] },
+      }).stdout.toString()).not.toContain("deny");
+    }
+
     // 2. Declared: the same call is allowed through.
     writeFileSync(contractFile, JSON.stringify({
       criteria: [{ check: "bun test", passed: false, failedFirst: false, evidence: "" }], nudges: 0,
@@ -1477,6 +1485,19 @@ test("brain node floor scales with execution and keeps fail-closed invariants", 
   expect(countsAsExecution("powershell", { command: "git commit -m x" })).toBe(true);
   expect(countsAsExecution("edit")).toBe(true);
   expect(countsAsExecution("cairn-brain_create")).toBe(false);
+  // The gate's own instrument is never an execution tool: the pre-tool deny names `contract` as the way
+  // out, so classifying it as execution denies the only exit from the gate and deadlocks the session.
+  expect(countsAsExecution("contract")).toBe(false);
+  expect(countsAsExecution("cairn-contract")).toBe(false);
+  // A read-only probe is not a write just because its code contains an arrow function: `=>` is not the
+  // `>` redirect. This misread also removed the last escape from the deadlock above, since it denied the
+  // read-only shell an instrument-less session would use to declare through Cairn's own API.
+  expect(countsAsExecution("powershell", { command: "bun -e 'const f = () => 1; console.log(f())'" }))
+    .toBe(false);
+  // The real file redirect it must still catch. `2>&1` is deliberately NOT one: it merges streams for
+  // the pipeline rather than writing anything, which is why the pattern excludes a following `>` or `&`.
+  expect(countsAsExecution("powershell", { command: "echo hi > out.txt" })).toBe(true);
+  expect(countsAsExecution("powershell", { command: "bun test 2>&1 | cat" })).toBe(false);
 
   const resolved = {
     brainUsed: true, brainSearched: true, brainCreatedCount: 2, brainAnsweredCount: 2,

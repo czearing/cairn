@@ -135,9 +135,16 @@ const isNativeSkillTool = (name: string): boolean => {
   const normalized = name.toLowerCase();
   return normalized === "skill" || normalized.endsWith("__skill");
 };
+// `contract` belongs here for a structural reason, not as a convenience: the pre-tool gate denies every
+// countsAsExecution tool until a contract is declared, and the contract tool is the ONLY instrument that
+// can declare one. Classifying it as execution therefore denies the sole exit from its own gate, so a
+// session that obeyed the demand was told to call a tool that was refused the moment it tried — a total
+// deadlock, and worse than the loop it was meant to end. Any gate that requires a tool must exempt that
+// tool from itself. The e2e test declared its contract by writing the file directly, which is why this
+// was invisible: the gate was never asked about its own instrument.
 const isCairnMcpTool = (name: string): boolean => [
   "brain_search", "brain_create", "brain_mutate", "brain_delete",
-  "skill_select", "skill_create", "skill_edit",
+  "skill_select", "skill_create", "skill_edit", "contract",
 ].some((tool) => isTool(name, tool));
 const isTask = (name: string): boolean => /^(task|agent)$/i.test(name) || name === "Task" || name === "Agent";
 
@@ -234,7 +241,7 @@ export function failedExecutionDisprovesSkill(toolName: string, succeeded: boole
 }
 
 const READ_ONLY_TOOLS = /^(read|view|glob|grep|rg|search|web_fetch|web_search|fetch_copilot_cli_documentation|list_|get_)/i;
-const SHELL_MUTATION = /(?:^|[;&|]\s*)(?:set-content|add-content|out-file|remove-item|move-item|copy-item|rename-item|new-item|stop-process|start-process)\b|\bgit\s+(?:add|commit|push|checkout|switch|reset|clean|merge|rebase|tag)\b|\baz\s+repos\s+pr\s+(?:create|update)\b|\baz\s+devops\s+invoke\b[\s\S]*?--http-method\s+(?:post|put|patch|delete)\b|(?:^|[^<])>{1,2}(?![>&])/i;
+const SHELL_MUTATION = /(?:^|[;&|]\s*)(?:set-content|add-content|out-file|remove-item|move-item|copy-item|rename-item|new-item|stop-process|start-process)\b|\bgit\s+(?:add|commit|push|checkout|switch|reset|clean|merge|rebase|tag)\b|\baz\s+repos\s+pr\s+(?:create|update)\b|\baz\s+devops\s+invoke\b[\s\S]*?--http-method\s+(?:post|put|patch|delete)\b|(?:^|[^<=])>{1,2}(?![>&])/i;
 const workflowReady = (s: WorkflowEvidence): boolean => s.skillUsed && brainWorkComplete(s);
 
 // A turn that only read the repository to answer a question is genuinely resolved by a root plus the

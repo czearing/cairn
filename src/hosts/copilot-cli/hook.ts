@@ -670,6 +670,10 @@ export async function runCopilotHook(): Promise<void> {
         // extended prior work instead of duplicating it.
         if (id && !next.brainCreatedIds.includes(id) && next.brainSearchIds.includes(id)) {
           next.brainReusedIds = [...new Set([...next.brainReusedIds, id])];
+          // The workflow states that adopting a returned node scores as new work, so a turn whose
+          // root is reused has a root. Crediting only brain_create left every reuse-only turn with
+          // an empty rootNodeId, which the Harness reads as an uncertified turn and retries forever.
+          if (!next.rootNodeId) next.rootNodeId = id;
         }
         if (typeof args.answer === "string" && args.answer.trim()) {
           if (id) next.brainAnsweredIds = [...new Set([...next.brainAnsweredIds, id])];

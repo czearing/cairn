@@ -80,6 +80,38 @@ const emit = (obj: object) => {
 export const internalContext = (text: string): string => text ? `<cairn-internal>\n${text}\n</cairn-internal>` : "";
 const complianceReceiptPath = (sessionId: string): string =>
   sessionStatePath(sessionId, "cairn-compliance.json");
+// A Harness agent holds one long-lived session, so the workflow injected on its first turn is still in
+// that session's context on turn sixty. Re-emitting the identical block every prompt only crowds the
+// window: an instruction keeps its effect for as long as it remains in context, so a verbatim repeat
+// carries no new information. Interactive sessions are deliberately left on the old per-prompt path.
+const isHarnessAgentSession = (): boolean => process.env.AGENT_HARNESS === "1";
+
+// The repeat is still owed when the block may have left the window through compaction, or when its
+// content actually changed, so the marker records which catalog it was sent for and how long ago.
+const WORKFLOW_REFRESH_TURNS = 12;
+const workflowMarkerPath = (sessionId: string): string =>
+  join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, "cairn-workflow.json");
+
+export interface WorkflowMarker { catalogVersion?: string; turnsSince?: number }
+
+export function workflowRepeatIsRedundant(marker: WorkflowMarker | undefined, catalog: string): boolean {
+  if (!marker || marker.catalogVersion !== catalog) return false;
+  return typeof marker.turnsSince === "number" && marker.turnsSince + 1 < WORKFLOW_REFRESH_TURNS;
+}
+
+const readWorkflowMarker = (sessionId: string): WorkflowMarker | undefined => {
+  try { return JSON.parse(readFileSync(workflowMarkerPath(sessionId), "utf8")) as WorkflowMarker; }
+  catch { return undefined; }
+};
+const writeWorkflowMarker = (sessionId: string, catalogVersion: string, turnsSince: number): void => {
+  try {
+    const file = workflowMarkerPath(sessionId);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ catalogVersion, turnsSince }));
+  } catch { /* marker bookkeeping must never block a turn */ }
+};
+const WORKFLOW_ALREADY_PRESENT =
+  "The full Cairn workflow is already in this conversation. Follow it: select or create a skill, resolve the brain nodes this request needs, and end with the compact Cairn receipt.";
 const COMPLETION_REMINDER = "Ensure you completed every requested task.";
 const SKILL_APPLICATION_REMINDER =
   "End with one compact **Cairn** receipt: `Root — synthesis (URL)`; `Coverage — validation and why nothing remains`; `Recall — improvement`; `Skill application — step N: action/result` for every selected or invoked skill; `Skill update — exact skill_edit change and why`, or `none — steps remained accurate and complete`. Report observable evidence, not hidden reasoning.";
@@ -538,7 +570,12 @@ export async function runCopilotHook(): Promise<void> {
     catch { /* self-update is background work and never blocks a turn */ }
     const state = resetLifecycle(stateId);
     if (emittedUsage) emittedUsage.turnSeq = state.turnSeq;
-    const wf = await workflowPrompt();
+    const catalog = catalogVersion();
+    const harnessAgent = isHarnessAgentSession();
+    const marker = harnessAgent ? readWorkflowMarker(sessionId) : undefined;
+    const redundant = workflowRepeatIsRedundant(marker, catalog);
+    const wf = redundant ? WORKFLOW_ALREADY_PRESENT : await workflowPrompt();
+    if (harnessAgent) writeWorkflowMarker(sessionId, catalog, redundant ? (marker?.turnsSince ?? 0) + 1 : 0);
     // A host reads its hook configuration once, when the session starts, so a session that began before
     // a config change runs the OLD hooks for its entire life and cannot reload them. When that change
     // added the pre-tool gate, the gate silently never fires for that session and nothing inside it can

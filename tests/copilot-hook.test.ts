@@ -22,6 +22,7 @@ import {
   reportedNonZeroExit,
   workflowActionDecision,
   failedExecutionDisprovesSkill,
+  workflowRepeatIsRedundant,
 } from "../src/hosts/copilot-cli/hook";
 
 const priorCompletionContinuation = process.env.CAIRN_FORCE_COMPLETION_CONTINUATION;
@@ -479,6 +480,7 @@ test("Harness completes without queueing a review after a durable wait resolves"
 test("Harness user prompts receive a leaner workflow than direct interactive prompts", () => {
   const id = randomUUID();
   const cairnDb = join(tmpdir(), `cairn-harness-prompt-${id}.db`);
+  const copilotHome = join(tmpdir(), `cairn-harness-home-${id}`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
   const invoke = (sessionId: string, agentHarness?: string) =>
     spawnSync(process.execPath, [hook, "user-prompt"], {
@@ -489,6 +491,7 @@ test("Harness user prompts receive a leaner workflow than direct interactive pro
         CAIRN_DB_PATH: cairnDb,
         CAIRN_MAX_LEARNERS: "0",
         CAIRN_SKILLS: "1",
+        COPILOT_HOME: copilotHome,
       },
     });
   const direct = invoke("direct-prompt-parity");
@@ -515,7 +518,30 @@ test("Harness user prompts receive a leaner workflow than direct interactive pro
     expect(output).toContain("Skill application");
     expect(output).toContain("Skill update");
   }
+
+  // A Harness session is long-lived, so the workflow delivered above is still in its context on the
+  // next prompt. Repeating it verbatim buys nothing and crowds the window, so the second turn must
+  // carry only a pointer. An interactive session is unaffected and keeps receiving it every prompt.
+  const repeat = JSON.parse(
+    invoke("harness-prompt-parity", "1").stdout.toString(),
+  ) as { additionalContext: string };
+  expect(repeat.additionalContext).not.toBe(harnessOutput.additionalContext);
+  expect(repeat.additionalContext).toContain("already in this conversation");
+  expect(repeat.additionalContext.length).toBeLessThan(harnessOutput.additionalContext.length / 4);
+  expect(
+    (JSON.parse(invoke("direct-prompt-parity").stdout.toString()) as { additionalContext: string })
+      .additionalContext,
+  ).toBe(directOutput.additionalContext);
   rmSync(cairnDb, { force: true });
+  rmSync(copilotHome, { recursive: true, force: true });
+});
+
+test("the workflow repeat is owed again only on catalog drift or after enough turns to risk compaction", () => {
+  expect(workflowRepeatIsRedundant(undefined, "v1")).toBe(false);
+  expect(workflowRepeatIsRedundant({ catalogVersion: "v1", turnsSince: 0 }, "v1")).toBe(true);
+  expect(workflowRepeatIsRedundant({ catalogVersion: "v1", turnsSince: 5 }, "v1")).toBe(true);
+  expect(workflowRepeatIsRedundant({ catalogVersion: "v1", turnsSince: 3 }, "v2")).toBe(false);
+  expect(workflowRepeatIsRedundant({ catalogVersion: "v1", turnsSince: 11 }, "v1")).toBe(false);
 });
 
 test("user-prompt reset runs only for real human prompts", () => {

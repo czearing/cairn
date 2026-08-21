@@ -336,6 +336,111 @@ test("Harness preToolUse blocks premature side effects and allows them after roo
   rmSync(copilotHome, { recursive: true, force: true });
 }, 10_000);
 
+test("with the skill layer off a Harness turn still unblocks side effects and certifies on brain work alone", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-skills-off-action-${id}.db`);
+  const copilotHome = join(tmpdir(), `cairn-skills-off-action-home-${id}`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    AGENT_HARNESS: "1",
+    CAIRN_DB_PATH: dbPath,
+    COPILOT_HOME: copilotHome,
+    CAIRN_MAX_LEARNERS: "0",
+    CAIRN_SKILLS: "0",
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const post = (toolName: string, toolArgs: object, toolResult: object = { success: true }) =>
+    invoke("post-tool", { sessionId: "skills-off-action", toolName, toolArgs, toolResult });
+
+  invoke("user-prompt", { sessionId: "skills-off-action", prompt: "Send a certification message." });
+  satisfyContract(dbPath, "the certification message is sent");
+  // No skill call anywhere in this turn: with the layer off there is no skill tool to call.
+  post("cairn-brain_search", { query: "certification" });
+  for (const nodeId of ["root", "child-1", "child-2"]) {
+    post("cairn-brain_create", { text: nodeId }, { id: nodeId });
+  }
+  post("cairn-brain_mutate", { id: "child-1", answer: "evidence one" });
+  post("cairn-brain_mutate", { id: "child-2", answer: "evidence two" });
+
+  // The brain gate is untouched: acting before the root is synthesized is still denied.
+  expect(invoke("pre-tool", {
+    sessionId: "skills-off-action",
+    toolCalls: [{ id: "send-1", name: "discord-discord_send_message", args: { content: "too early" } }],
+  }).stdout.toString()).toContain('"permissionDecision":"deny"');
+
+  post("cairn-brain_mutate", { id: "root", answer: "integrated synthesis" });
+  expect(invoke("pre-tool", {
+    sessionId: "skills-off-action",
+    toolCalls: [{ id: "send-2", name: "discord-discord_send_message", args: { content: "ready" } }],
+  }).stdout.toString()).toBe("{}");
+  expect(invoke("agent-stop", { sessionId: "skills-off-action" }).stdout.toString())
+    .toContain("completed every requested task");
+  // The turn ENDS instead of looping forever demanding a skill, and it certifies for the Harness.
+  expect(invoke("agent-stop", { sessionId: "skills-off-action" }).stdout.toString()).toBe("{}");
+  expect(JSON.parse(readFileSync(
+    join(copilotHome, "session-state", "skills-off-action", "cairn-compliance.json"),
+    "utf8",
+  )).rootNodeId).toBe("root");
+  rmSync(dbPath, { force: true });
+  rmSync(copilotHome, { recursive: true, force: true });
+}, 10_000);
+
+test("with the skill layer off neither injected workflow carries skill instructions or a catalog", () => {
+  const id = randomUUID();
+  const home = join(tmpdir(), `cairn-skills-off-home-${id}`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const inject = (skills: string, harness: boolean) => {
+    const env = {
+      ...process.env, USERPROFILE: home, HOME: home, CAIRN_SKILLS: skills,
+      AGENT_HARNESS: harness ? "1" : "",
+    };
+    const out = spawnSync(process.execPath, [hook, "user-prompt"], {
+      input: JSON.stringify({ sessionId: `skills-${skills}-${harness}-${id}`, prompt: "root work" }),
+      env,
+    });
+    expect(out.status).toBe(0);
+    return String(JSON.parse(out.stdout.toString()).additionalContext ?? "");
+  };
+
+  // Both the interactive workflow and the leaner Harness workflow have to lose the skill layer.
+  for (const harness of [false, true]) {
+    const off = inject("0", harness);
+    expect(off).toContain("earch");                       // the brain workflow still ships every turn
+    expect(off).not.toContain("skill_select");
+    expect(off).not.toContain("skill_create");
+    expect(off).not.toContain("skill_edit");
+    expect(off).not.toContain("Available skill catalog");
+    expect(off).not.toContain("Skill application");
+    expect(off).not.toContain("cairn:skills");            // the fence markers never reach the agent
+
+    // Positive control: the same prompt still carries the skill layer when it is opted back in.
+    const on = inject("1", harness);
+    expect(on).toContain("skill_select");
+    expect(on).toContain("Skill application");
+    expect(on).not.toContain("cairn:skills");
+    expect(off.length).toBeLessThan(on.length);
+  }
+});
+
+test("with the skill layer off the stop gate never demands a skill call", () => {
+  const id = randomUUID();
+  const home = join(tmpdir(), `cairn-skills-off-gate-home-${id}`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_SKILLS: "0" };
+  const invoke = (mode: string, payload: object = { sessionId: "skills-off-gate" }) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+
+  expect(invoke("user-prompt", { sessionId: "skills-off-gate", prompt: "root work" }).status).toBe(0);
+  const blocked = invoke("agent-stop").stdout.toString();
+  // Still blocked on the brain workflow — disabling skills must not disable Cairn — but a turn can no
+  // longer be held hostage by a skill tool that is not even registered.
+  expect(blocked).toContain('"decision":"block"');
+  expect(blocked).toContain("brain_search");
+  expect(blocked).not.toContain("skill_select");
+});
+
 test("stopDecision never permits submission while the mandatory workflow is incomplete", () => {
   expect(stopDecision({
     brainUsed: false,
@@ -1143,7 +1248,9 @@ test("a genuine Harness resume cannot inherit an exhausted stop cap without its 
   const id = randomUUID();
   const home = join(tmpdir(), `cairn-harness-resume-home-${id}`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, AGENT_HARNESS: "1", CAIRN_SKILLS: "0" };
+  // Skills are enabled here on purpose: the stop cap this test exercises is reached through the skill
+  // gate, and with the layer off there is no skill obligation to demand.
+  const env = { ...process.env, USERPROFILE: home, HOME: home, AGENT_HARNESS: "1", CAIRN_SKILLS: "1" };
   const invoke = (mode: string, payload: object = { sessionId: "harness-resume" }) =>
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
 

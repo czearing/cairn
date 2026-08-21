@@ -8,7 +8,7 @@ import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { config } from "../core/config";
+import { config, skillsEnabled } from "../core/config";
 import { installCrashGuard } from "../core/crash-guard";
 import { recordTelemetry } from "../core/telemetry-record";
 import { jsonChars } from "../core/telemetry-size";
@@ -22,7 +22,7 @@ import {
 import { installedReleaseVersion, runtimeMetadata } from "../core/runtime-identity";
 import { warmEngineServer } from "../core/engine-client";
 import { claimWriterRole } from "../core/writer-role";
-import { formatSkillCatalog, skillCatalogSnapshot } from "../skill/catalog";
+import { applySkillSections, formatSkillCatalog, skillCatalogSnapshot } from "../skill/catalog";
 import type { Neuron } from "../core/neurons.types";
 import { searchPayload } from "./search-payload";
 
@@ -141,9 +141,12 @@ const currentReleaseIdentity = () => {
   const version = installedReleaseVersion(releaseVersion);
   try {
     const root = process.env.CAIRN_ROOT || resolve(import.meta.dir, "..", "..");
-    const prompt = readFileSync(join(root, "prompts", "user-message.md"), "utf8").trim();
+    const prompt = applySkillSections(
+      readFileSync(join(root, "prompts", "user-message.md"), "utf8"),
+      skillsEnabled(),
+    );
     const catalog = skillCatalogSnapshot();
-    const fullPrompt = `${prompt}\n\n${formatSkillCatalog()}`;
+    const fullPrompt = skillsEnabled() ? `${prompt}\n\n${formatSkillCatalog()}` : prompt;
     return {
       releaseFingerprint: releaseFingerprint(promptFingerprint(fullPrompt), catalog.version, version),
       version,
@@ -334,6 +337,9 @@ registerTool(
   })
 );
 
+// Registered only while the skill layer is enabled: with it off the tools would be dead weight in every
+// agent's tool list, and the workflow prompt no longer asks for them.
+if (skillsEnabled()) {
 registerTool(
   "skill_select",
   "Select skills from the injected catalog and return their reusable steps.",
@@ -383,6 +389,7 @@ registerTool(
     return r.ok ? json(r) : fail(r.error || "skill_edit failed");
   })
 );
+}
 
 // The proof contract is always registered. Gating tool REGISTRATION on the same env flag that gates the
 // deny created a hard dependency ordering: with the gate on but the tool absent, pre-tool denies every

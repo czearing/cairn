@@ -28,6 +28,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { isSystemEnvelope } from "../../skill/noise";
+import { skillsEnabled } from "../../core/config";
 import { recordHostEvent } from "../../core/host-events";
 import {
   beginTelemetryRun,
@@ -37,7 +38,7 @@ import {
   recordTelemetryTool,
 } from "../../core/telemetry-record";
 import { promptFingerprint } from "../../core/release";
-import { formatSkillCatalog, selectedSkillBlock, skillCatalogSnapshot, skillIdsFromTask } from "../../skill/catalog";
+import { applySkillSections, formatSkillCatalog, selectedSkillBlock, skillCatalogSnapshot, skillIdsFromTask } from "../../skill/catalog";
 import {
   lifecycleScope,
   readLifecycle,
@@ -107,13 +108,14 @@ const readStdin = async (): Promise<string> => {
 };
 const promptText = async (file: string): Promise<string> => {
   try {
-    return (await readFile(new URL(file, PROMPTS), "utf8")).trim();
+    return applySkillSections(await readFile(new URL(file, PROMPTS), "utf8"), skillsEnabled());
   } catch {
     return "";
   }
 };
 const promptWithCatalog = async (file: string): Promise<string> => {
   const base = await promptText(file);
+  if (!skillsEnabled()) return base;
   try { return `${base}\n\n${formatSkillCatalog()}`; }
   catch { return base; }
 };
@@ -175,6 +177,8 @@ interface WorkflowEvidence {
   openCreatedCount?: number;
   rootSynthesized?: boolean;
   skillUsed: boolean;
+  /** When the skill layer is off there is no skill obligation to enforce; defaults to on. */
+  skillsEnabled?: boolean;
   pendingReviewCount?: number;
   stopNudges: number;
   strict?: boolean;
@@ -186,10 +190,10 @@ export function stopDecision(s: WorkflowEvidence): {
   file: string;
 } {
   if (s.stopNudges >= OUTAGE_CAP) return { file: "" };
-  if ((s.pendingSkillCorrections ?? 0) > 0) {
+  if ((s.skillsEnabled !== false) && (s.pendingSkillCorrections ?? 0) > 0) {
     return { file: "skill-correction-reminder.md" };
   }
-  if (!s.skillUsed) return { file: "skill-search-reminder.md" };
+  if ((s.skillsEnabled !== false) && !s.skillUsed) return { file: "skill-search-reminder.md" };
   if (s.strict && !brainWorkComplete(s)) {
     // Searching and finding nothing to reuse is a different failure from never searching, and from
     // finding prior work. Naming the actual state is what stops the agent from "fixing" a reuse turn
@@ -242,7 +246,8 @@ export function failedExecutionDisprovesSkill(toolName: string, succeeded: boole
 
 const READ_ONLY_TOOLS = /^(read|view|glob|grep|rg|search|web_fetch|web_search|fetch_copilot_cli_documentation|list_|get_)/i;
 const SHELL_MUTATION = /(?:^|[;&|]\s*)(?:set-content|add-content|out-file|remove-item|move-item|copy-item|rename-item|new-item|stop-process|start-process)\b|\bgit\s+(?:add|commit|push|checkout|switch|reset|clean|merge|rebase|tag)\b|\baz\s+repos\s+pr\s+(?:create|update)\b|\baz\s+devops\s+invoke\b[\s\S]*?--http-method\s+(?:post|put|patch|delete)\b|(?:^|[^<=])>{1,2}(?![>&])/i;
-const workflowReady = (s: WorkflowEvidence): boolean => s.skillUsed && brainWorkComplete(s);
+const workflowReady = (s: WorkflowEvidence): boolean =>
+  (s.skillsEnabled === false || s.skillUsed) && brainWorkComplete(s);
 
 // A turn that only read the repository to answer a question is genuinely resolved by a root plus the
 // children its evidence needs, so a flat floor only buys padding nodes and extra stop continuations.
@@ -587,6 +592,7 @@ export async function runCopilotHook(): Promise<void> {
           brainReusedCount: state.brainReusedIds.length,
           strict: true,
           minimumBrainNodes: requiredBrainNodes(1),
+          skillsEnabled: skillsEnabled(),
         }, args);
         if (decision.deny) {
           emit({ permissionDecision: "deny", permissionDecisionReason: decision.reason });
@@ -789,6 +795,7 @@ export async function runCopilotHook(): Promise<void> {
       stopNudges: st.stopNudges,
       strict: true,
       minimumBrainNodes: requiredBrainNodes(st.executionToolCalls),
+      skillsEnabled: skillsEnabled(),
       pendingSkillCorrections: st.invalidatedSkillIds.length,
       skillCorrectionNudges: st.skillCorrectionNudges,
     }).file;
@@ -858,7 +865,7 @@ export async function runCopilotHook(): Promise<void> {
       }));
       finishTelemetryRun({
         host: "copilot", sessionId, turnSeq: st.turnSeq, completed: false,
-        workflowPassed: st.brainUsed && st.skillUsed, skillUsed: st.skillUsed,
+        workflowPassed: st.brainUsed && (st.skillUsed || !skillsEnabled()), skillUsed: st.skillUsed,
         brainUsed: st.brainUsed, stopNudges: st.stopNudges, status: "deferred",
       });
       emit({});
@@ -903,6 +910,7 @@ export async function runCopilotHook(): Promise<void> {
       brainReusedCount: st.brainReusedIds.length,
       strict: true,
       minimumBrainNodes: requiredBrainNodes(st.executionToolCalls),
+      skillsEnabled: skillsEnabled(),
     })) {
       const receipt = complianceReceiptPath(sessionId);
       mkdirSync(dirname(receipt), { recursive: true });
@@ -915,7 +923,7 @@ export async function runCopilotHook(): Promise<void> {
     }
     finishTelemetryRun({
       host: "copilot", sessionId, turnSeq: st.turnSeq, completed: true,
-      workflowPassed: st.brainUsed && st.skillUsed, skillUsed: st.skillUsed,
+      workflowPassed: st.brainUsed && (st.skillUsed || !skillsEnabled()), skillUsed: st.skillUsed,
       brainUsed: st.brainUsed, stopNudges: st.stopNudges,
     });
     releaseDelegation(sessionId);

@@ -6,6 +6,7 @@ import { extractRun } from "../src/skill/transcript";
 import { skillsEnabled, skillCreate, skillLoad, skillSelect, skillsExist } from "../src/skill/hook";
 import { categorize, reindexSkill } from "../src/skill/match";
 import { setMasterPrompt, setSkillMetadata, skillCatalog } from "../src/skill/store";
+import { applySkillSections } from "../src/skill/catalog";
 import { db } from "../src/core/db";
 
 beforeEach(() => {
@@ -173,16 +174,41 @@ test("extractRun does not treat a tool-only assistant message as the output", ()
   expect(run!.request).toBe("write me a haiku about frost");
 });
 
-test("the skill layer is ON by default, and CAIRN_SKILLS env overrides both ways", () => {
+test("fenced skill regions are dropped when the layer is off and unfenced when it is on", () => {
+  const text = [
+    "keep one",
+    "<!-- cairn:skills -->",
+    "drop me",
+    "<!-- /cairn:skills -->",
+    "keep two",
+  ].join("\n");
+  expect(applySkillSections(text, false)).toBe("keep one\nkeep two");
+  expect(applySkillSections(text, true)).toBe("keep one\ndrop me\nkeep two");
+
+  const inline = "a<!-- cairn:skills --> and b<!-- /cairn:skills -->.";
+  expect(applySkillSections(inline, false)).toBe("a.");
+  expect(applySkillSections(inline, true)).toBe("a and b.");
+
+  // Unfenced text is never touched, and no marker survives either branch.
+  expect(applySkillSections("plain", false)).toBe("plain");
+  expect(applySkillSections(text, true)).not.toContain("cairn:skills");
+  expect(applySkillSections(text, false)).not.toContain("cairn:skills");
+});
+
+test("the skill layer is OFF by default, and CAIRN_SKILLS env overrides both ways", () => {
   const prev = process.env.CAIRN_SKILLS;
-  delete process.env.CAIRN_SKILLS;
-  expect(skillsEnabled()).toBe(true);                       // ON by default (no explicit opt-out)
-  process.env.CAIRN_SKILLS = "1";
-  expect(skillsEnabled()).toBe(true);                       // explicit opt-in
-  process.env.CAIRN_SKILLS = "0";
-  expect(skillsEnabled()).toBe(false);                      // explicit opt-out wins
-  expect(skillLoad("any-id")).toBeNull();                   // disabled -> no-op, never throws
-  if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
+  try {
+    delete process.env.CAIRN_SKILLS;
+    expect(skillsEnabled()).toBe(false);                      // OFF by default (no explicit opt-in)
+    process.env.CAIRN_SKILLS = "1";
+    expect(skillsEnabled()).toBe(true);                       // explicit opt-in
+    process.env.CAIRN_SKILLS = "0";
+    expect(skillsEnabled()).toBe(false);                      // explicit opt-out
+    expect(skillLoad("any-id")).toBeNull();                   // disabled -> no-op, never throws
+  } finally {
+    // Restore even on failure: leaking a disabled flag silently fails every later skill test.
+    if (prev === undefined) delete process.env.CAIRN_SKILLS; else process.env.CAIRN_SKILLS = prev;
+  }
 });
 
 test("the catalog exposes only title and description, and skill_load fetches one exact master", async () => {

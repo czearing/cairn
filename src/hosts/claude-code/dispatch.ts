@@ -121,16 +121,20 @@ async function main(): Promise<void> {
       const orig = typeof event.input.prompt === "string" ? event.input.prompt : "";
       if (orig.trim()) {
         const fs = await import("node:fs");
-        const { formatSkillCatalog, selectedSkillBlock, skillIdsFromTask } = await import("../../skill/catalog");
+        const { applySkillSections, formatSkillCatalog, selectedSkillBlock, skillIdsFromTask } = await import("../../skill/catalog");
+        const { skillsEnabled } = await import("../../core/config");
         const { lifecycleScope, readLifecycle, registerDelegation } = await import("../../skill/lifecycle");
         const orchestrate = await inject(event); // parent-facing disjoint-coordination reminder (or null)
         const parentScope = lifecycleScope("claude", (payload as { session_id?: string }).session_id ?? "");
         const selected = readLifecycle(parentScope).pendingReviewIds.filter((id) => !id.startsWith("__"));
         const delegated = skillIdsFromTask(event.input).filter((id) => selected.includes(id));
         const protoFile = delegated.length ? "delegated-skill-protocol.md" : "subagent-protocol.md";
-        const proto = fs.readFileSync(new URL(`../../../prompts/${protoFile}`, import.meta.url), "utf8").trim();
+        const proto = applySkillSections(
+          fs.readFileSync(new URL(`../../../prompts/${protoFile}`, import.meta.url), "utf8"),
+          skillsEnabled(),
+        );
         if (delegated.length && event.callId) registerDelegation(parentScope, event.callId, delegated);
-        const context = delegated.length ? selectedSkillBlock(delegated) : formatSkillCatalog();
+        const context = !skillsEnabled() ? "" : delegated.length ? selectedSkillBlock(delegated) : formatSkillCatalog();
         await observedContext("subagent-prompt", `${proto}\n\n${context}\n`);
         if (orchestrate) await observedContext("pre-tool:orchestrate", orchestrate);
         await emit(modifyPreTool({ ...event.input, prompt: `${proto}\n\n${context}\n${orig}` }, orchestrate ?? ""));

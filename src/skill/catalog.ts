@@ -23,6 +23,17 @@ export function formatSkillCatalog(mode: "full" | "titles" = "titles"): string {
   return `## Available skill catalog\nPass exact titles to \`skill_select\`.\n${rows.join("\n") || "(empty)"}`;
 }
 
+// Skill-only regions of the shared workflow prompts are fenced so they can be dropped wholesale when the
+// skill layer is off. Leaving them in would instruct the agent to call tools that are not registered, and
+// the dead text is the overhead that disabling the layer exists to remove.
+const SKILL_REGION = /[ \t]*<!--\s*cairn:skills\s*-->[\s\S]*?<!--\s*\/cairn:skills\s*-->\n?/g;
+const SKILL_MARKER = /[ \t]*<!--\s*\/?cairn:skills\s*-->\n?/g;
+export function applySkillSections(text: string, enabled: boolean): string {
+  return (enabled ? text.replace(SKILL_MARKER, "") : text.replace(SKILL_REGION, ""))
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function selectedSkillBlock(ids: string[]): string {
   const selected = ids.map((id) => visibleSkill(id)).filter(Boolean);
   if (selected.length !== ids.length) return "[cairn] Skill selection failed: unknown or unlearned skill id.";

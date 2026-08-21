@@ -51,10 +51,11 @@ export const config: CairnConfig = {
   duplicateCandidateLimit: Number(process.env.CAIRN_DUPLICATE_CANDIDATES || "3"),
   maxAnswerChars: Number(process.env.CAIRN_MAX_ANSWER_CHARS || "2000"), // reject insanely verbose answers
 
-  // The skill layer is ON by default now that the agent-driven learn loop is proven. Turn it OFF per-machine
-  // with "skills": false in ~/.cairn/config.json (or CAIRN_SKILLS=0). Short-lived hooks read this from the
-  // config file, since they don't inherit the MCP server's env.
-  skills: parsedFile.skills !== false,
+  // The skill layer is OFF by default. Its injected section plus the catalog is roughly a third of every
+  // turn's workflow prompt, and that bulk competes with the instructions the turn actually has to follow.
+  // Turn it ON per-machine with "skills": true in ~/.cairn/config.json (or CAIRN_SKILLS=1). Short-lived
+  // hooks read this from the config file, since they don't inherit the MCP server's env.
+  skills: parsedFile.skills === true,
   usageTelemetry: parsedFile.usageTelemetry === true,
 
   // Cairn updates itself by default so a published fix reaches every install without a manual command.

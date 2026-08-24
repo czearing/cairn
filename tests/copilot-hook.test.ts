@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   gateDecision,
   harnessTurnDeferred,
@@ -47,8 +47,14 @@ function lifecycleState(dbPath: string, scope: string): { pendingReviewIds: stri
 
 // The contract gate is unconditional, so any test that expects a turn to be RELEASED must first put a
 // satisfied contract where the `contract` MCP tool writes it: beside the database.
-function satisfyContract(dbPath: string, check = "the task is done"): void {
-  writeFileSync(join(dirname(dbPath), "contract.json"), JSON.stringify({
+function sessionContractPath(dir: string, sessionId: string): string {
+  return join(dir, "contracts", `${createHash("sha256").update(sessionId).digest("hex")}.json`);
+}
+
+function satisfyContract(dbPath: string, sessionId: string, check = "the task is done"): void {
+  const path = sessionContractPath(dirname(dbPath), sessionId);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({
     criteria: [{ check, passed: true, failedFirst: false, evidence: "verified" }], nudges: 0,
   }));
 }
@@ -72,7 +78,9 @@ function completeBrainWorkflow(
   // satisfied contract. Written as a file because the criteria live beside the database, exactly where
   // the `contract` MCP tool writes them.
   if (options.declareContract !== false) {
-    writeFileSync(join(options.contractDir ?? tmpdir(), "contract.json"), JSON.stringify({
+    const path = sessionContractPath(options.contractDir ?? tmpdir(), sessionId);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({
       criteria: [{ check: `${sessionId} is done`, passed: true, failedFirst: false, evidence: "verified" }],
       nudges: 0,
     }));
@@ -301,7 +309,7 @@ test("Harness preToolUse blocks premature side effects and allows them after roo
     invoke("post-tool", { sessionId: "strict-action", toolName, toolArgs, toolResult });
 
   invoke("user-prompt", { sessionId: "strict-action", prompt: "Send a certification message." });
-  satisfyContract(dbPath, "the certification message is sent");
+  satisfyContract(dbPath, "strict-action", "the certification message is sent");
   post("skill", { skill: "discord" });
   post("cairn-brain_search", { query: "certification" });
   for (const nodeId of ["root", "child-1", "child-2"]) {
@@ -355,7 +363,7 @@ test("with the skill layer off a Harness turn still unblocks side effects and ce
     invoke("post-tool", { sessionId: "skills-off-action", toolName, toolArgs, toolResult });
 
   invoke("user-prompt", { sessionId: "skills-off-action", prompt: "Send a certification message." });
-  satisfyContract(dbPath, "the certification message is sent");
+  satisfyContract(dbPath, "skills-off-action", "the certification message is sent");
   // No skill call anywhere in this turn: with the layer off there is no skill tool to call.
   post("cairn-brain_search", { query: "certification" });
   for (const nodeId of ["root", "child-1", "child-2"]) {
@@ -556,14 +564,14 @@ test("Harness completes without queueing a review after a durable wait resolves"
   expect(select().status).toBe(0);
   expect(searchBrain().status).toBe(0);
   completeBrain();
-  satisfyContract(cairnDb, "the feature is implemented");
+  satisfyContract(cairnDb, "harness-session", "the feature is implemented");
   expect(invoke("agent-stop", { sessionId: "harness-session", transcriptPath }).stdout.toString()).toBe("{}");
 
   expect(invoke("user-prompt", { sessionId: "harness-session", prompt: "Complete the retried task." }).status).toBe(0);
   expect(select().status).toBe(0);
   expect(searchBrain().status).toBe(0);
   completeBrain();
-  satisfyContract(cairnDb, "the retried task is complete");
+  satisfyContract(cairnDb, "harness-session", "the retried task is complete");
   const completed = new Database(harnessDb);
   completed.query("UPDATE tasks SET status='completed',completed_at=? WHERE id=?")
     .run("2026-07-17T10:02:00Z", "task-1");
@@ -785,10 +793,11 @@ test("the contract gate denies execution, loops the turn, and releases only when
     CAIRN_DB_PATH: dbPath,
     CAIRN_ENFORCE_STOP_GATES: "0",
     CAIRN_SKILLS: "0",
+    COPILOT_HOME: join(dir, "home"),
   };
   const invoke = (mode: string, payload: object) =>
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  const contractFile = join(dir, "contract.json");
+  const contractFile = sessionContractPath(dir, "contract-e2e");
   try {
     expect(invoke("user-prompt", { sessionId: "contract-e2e", prompt: "Fix the thing." }).status).toBe(0);
     // 1. Undeclared: the side effect is refused before it happens.
@@ -807,6 +816,7 @@ test("the contract gate denies execution, loops the turn, and releases only when
     }
 
     // 2. Declared: the same call is allowed through.
+    mkdirSync(dirname(contractFile), { recursive: true });
     writeFileSync(contractFile, JSON.stringify({
       criteria: [{ check: "bun test", passed: false, failedFirst: false, evidence: "" }], nudges: 0,
     }));
@@ -836,6 +846,60 @@ test("the contract gate denies execution, loops the turn, and releases only when
     // 5. A new user turn starts with no contract, so the next task must declare its own.
     expect(invoke("user-prompt", { sessionId: "contract-e2e", prompt: "Next task." }).status).toBe(0);
     expect(existsSync(contractFile)).toBe(false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("contracts remain isolated between concurrent Copilot sessions", () => {
+  const dir = join(tmpdir(), `cairn-contract-isolation-${randomUUID()}`);
+  mkdirSync(dir, { recursive: true });
+  const dbPath = join(dir, "c.db");
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_ENFORCE_STOP_GATES: "0",
+    CAIRN_SKILLS: "0",
+    COPILOT_HOME: join(dir, "home"),
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const contract = (sessionId: string) => sessionContractPath(dir, sessionId);
+  try {
+    for (const sessionId of ["session-a", "session-b"]) {
+      expect(invoke("user-prompt", { sessionId, prompt: `Task for ${sessionId}` }).status).toBe(0);
+    }
+    expect(invoke("post-tool", {
+      sessionId: "session-a",
+      toolName: "cairn-contract",
+      toolArgs: { checks: ["session A output exists"] },
+      toolResult: { success: true, accepted: true },
+    }).status).toBe(0);
+    expect(invoke("post-tool", {
+      sessionId: "session-b",
+      toolName: "cairn-contract",
+      toolArgs: { checks: ["session B output exists"] },
+      toolResult: { success: true, accepted: true },
+    }).status).toBe(0);
+
+    expect(JSON.parse(readFileSync(contract("session-a"), "utf8")).criteria.map((c: { check: string }) => c.check))
+      .toEqual(["session A output exists"]);
+    expect(JSON.parse(readFileSync(contract("session-b"), "utf8")).criteria.map((c: { check: string }) => c.check))
+      .toEqual(["session B output exists"]);
+
+    expect(invoke("post-tool", {
+      sessionId: "session-a",
+      toolName: "cairn-contract",
+      toolArgs: { satisfied: "session A output exists", evidence: "verified A" },
+      toolResult: { success: true, accepted: true },
+    }).status).toBe(0);
+    expect(JSON.parse(readFileSync(contract("session-a"), "utf8")).criteria[0].passed).toBe(true);
+    expect(JSON.parse(readFileSync(contract("session-b"), "utf8")).criteria[0].passed).toBe(false);
+
+    expect(invoke("user-prompt", { sessionId: "session-a", prompt: "Next A task" }).status).toBe(0);
+    expect(existsSync(contract("session-a"))).toBe(false);
+    expect(existsSync(contract("session-b"))).toBe(true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -930,7 +994,7 @@ test("adopting a searched node ends the turn, but an unsearched id cannot fake r
   const unsearched = "99999999-8888-7777-6666-555555555555";
 
   expect(invoke("user-prompt", { sessionId: session, prompt: "Resolve the task." }).status).toBe(0);
-  satisfyContract(dbPath, "the task is resolved");
+  satisfyContract(dbPath, session, "the task is resolved");
   expect(invoke("post-tool", {
     sessionId: session,
     toolName: "cairn-skill_select",
@@ -1303,6 +1367,8 @@ test("a queued mid-turn human message does not reset completed skill search", ()
   expect(invoke("agent-stop", { sessionId: "session-queued", transcriptPath }).stdout.toString()).toBe("{}");
 });
 
+
+
 test("an undeclared contract nudge is bounded, so a session that cannot declare one is not bricked", () => {
   // The stop gate capped itself only once a contract EXISTED. With none declared, noteContractNudge
   // no-opped, the counter never moved, and "declare your contract" repeated forever — unbounded for any

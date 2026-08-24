@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { telemetryRunId } from "../src/core/telemetry";
@@ -23,9 +23,15 @@ function completeCopilotBrain(
   dbPath?: string,
 ): void {
   // The contract gate is unconditional, so a releasable turn also needs a satisfied contract, written
-  // beside the database exactly where the `contract` MCP tool puts it.
+  // under the same session-specific path used by the Copilot hook.
   if (dbPath) {
-    writeFileSync(join(dirname(dbPath), "contract.json"), JSON.stringify({
+    const contractPath = join(
+      dirname(dbPath),
+      "contracts",
+      `${createHash("sha256").update(prefix).digest("hex")}.json`,
+    );
+    mkdirSync(dirname(contractPath), { recursive: true });
+    writeFileSync(contractPath, JSON.stringify({
       criteria: [{ check: `${prefix} is done`, passed: true, failedFirst: false, evidence: "verified" }],
       nudges: 0,
     }));

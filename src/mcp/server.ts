@@ -405,11 +405,13 @@ registerTool(
     evidence: z.string().optional().describe("What satisfies it: the artifact produced or the output observed."),
   },
   async ({ checks, satisfied, evidence }) => measured("contract", { checks, satisfied, evidence }, async () => {
-    const { declareContract, satisfyCriterion } = await import("../hosts/copilot-cli/contract");
-    const result = satisfied
-      ? satisfyCriterion(satisfied, evidence || "")
-      : declareContract(checks || []);
-    return result.error ? fail(result.error) : json(result);
+    if (satisfied && !evidence?.trim()) return fail("evidence is required: name the artifact that satisfies this");
+    if (!satisfied && !(checks?.some((check) => check.trim()))) {
+      return fail("declare at least one criterion describing what done means");
+    }
+    // The MCP process does not receive the host session id. Copilot's postToolUse hook does, so it is
+    // the authoritative writer and applies this accepted operation to that session only.
+    return json({ accepted: true });
   })
 );
 

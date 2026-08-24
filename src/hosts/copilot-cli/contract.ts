@@ -9,9 +9,8 @@
 // declare-then-satisfy loop subsumes the phrase matching (a turn cannot trail off into an offer while it
 // still owes an unmet criterion).
 //
-// One file, no session key: the MCP server (which never learns a session id) must read the same contract
-// the hooks write, so both resolve it from the brain's directory.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { config } from "../../core/config";
@@ -31,29 +30,37 @@ interface Contract {
 
 // Bounds the loop: a criterion that cannot be met must not spin forever. Mirrors STOP_CAP.
 const cap = (): number => Math.max(1, Number(process.env.CAIRN_CONTRACT_CAP || "3"));
-// Resolved per call, and CAIRN_DB_PATH is consulted directly rather than only through `config`, whose
-// value is fixed when the module is first imported. A test that redirects the env var after that import
-// would otherwise keep writing here, to the real brain directory — observed live: running the suite
-// deleted the live session's contract.json, because clearContract() in an "isolated" test was never
-// isolated at all. State that a test can reach must be addressable at call time, not at import time.
-const path = (): string => join(dirname(process.env.CAIRN_DB_PATH || config.dbPath), "contract.json");
 const normalize = (text: string): string => text.replace(/\s+/g, " ").trim();
 
-export function readContract(): Contract | null {
+/** Per-session scratch used for hook-only ledgers. */
+export const sessionStatePath = (sessionId: string, file: string): string =>
+  join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, file);
+
+// Calls without a host session id retain the legacy path for direct unit tests and non-Copilot callers.
+// Production Copilot hooks always pass sessionId and therefore never share this file.
+const path = (sessionId = ""): string => sessionId
+  ? join(
+      dirname(process.env.CAIRN_DB_PATH || config.dbPath),
+      "contracts",
+      `${createHash("sha256").update(sessionId).digest("hex")}.json`,
+    )
+  : join(dirname(process.env.CAIRN_DB_PATH || config.dbPath), "contract.json");
+
+export function readContract(sessionId = ""): Contract | null {
   try {
-    return JSON.parse(readFileSync(path(), "utf8")) as Contract;
+    return JSON.parse(readFileSync(path(sessionId), "utf8")) as Contract;
   } catch {
     return null;
   }
 }
 
-function write(contract: Contract): void {
-  mkdirSync(dirname(path()), { recursive: true });
-  writeFileSync(path(), JSON.stringify(contract));
+function write(contract: Contract, sessionId = ""): void {
+  mkdirSync(dirname(path(sessionId)), { recursive: true });
+  writeFileSync(path(sessionId), JSON.stringify(contract));
 }
 
-export function clearContract(): void {
-  rmSync(path(), { force: true });
+export function clearContract(sessionId = ""): void {
+  rmSync(path(sessionId), { force: true });
 }
 
 /**
@@ -61,15 +68,15 @@ export function clearContract(): void {
  * one. Adding only ever increases the obligation, so it cannot be used to weaken the contract — while a
  * hard freeze created a live dead end, where a turn told to produce a failing check could not declare one.
  */
-export function declareContract(checks: string[]): { error?: string; criteria?: Criterion[] } {
-  const existing = readContract();
+export function declareContract(checks: string[], sessionId = ""): { error?: string; criteria?: Criterion[] } {
+  const existing = readContract(sessionId);
   const known = new Set((existing?.criteria ?? []).map((criterion) => normalize(criterion.check)));
   const added = [...new Set(checks.map(normalize).filter(Boolean))]
     .filter((check) => !known.has(check))
     .map((check) => ({ check, passed: false, failedFirst: false, evidence: "" }));
   const criteria = [...(existing?.criteria ?? []), ...added];
   if (!criteria.length) return { error: "declare at least one criterion describing what done means" };
-  write({ criteria, nudges: existing?.nudges ?? 0 });
+  write({ criteria, nudges: existing?.nudges ?? 0 }, sessionId);
   return { criteria };
 }
 
@@ -97,8 +104,8 @@ function ranCheck(executed: string, check: string): boolean {
 // sessions proved that wrong: asked for a haiku, the agent spent six minutes manufacturing a negative
 // control, which itself counted as a durable change and fed the demand, and it never delivered the poem.
 // Falsifiability is a property of a good criterion, not something a gate can force onto every task.
-export function recordObservedRun(command: string, succeeded: boolean): void {
-  const contract = readContract();
+export function recordObservedRun(command: string, succeeded: boolean, sessionId = ""): void {
+  const contract = readContract(sessionId);
   if (!contract || !command.trim()) return;
   const executed = normalize(command);
   let changed = false;
@@ -114,14 +121,14 @@ export function recordObservedRun(command: string, succeeded: boolean): void {
     }
     return criterion;
   });
-  if (changed) write({ ...contract, criteria });
+  if (changed) write({ ...contract, criteria }, sessionId);
 }
 
 // Not every criterion can be a command — no shell decides whether a poem was written. Such a criterion is
 // closed by naming the artifact that satisfies it, which is an explicit act the turn must perform; a turn
 // cannot drift into offering to do the work while it still owes one.
-export function satisfyCriterion(check: string, evidence: string): { error?: string; remaining?: string[] } {
-  const contract = readContract();
+export function satisfyCriterion(check: string, evidence: string, sessionId = ""): { error?: string; remaining?: string[] } {
+  const contract = readContract(sessionId);
   if (!contract) return { error: "no contract is declared for this task" };
   const wanted = normalize(check);
   const match = contract.criteria.find((criterion) => normalize(criterion.check) === wanted);
@@ -129,27 +136,27 @@ export function satisfyCriterion(check: string, evidence: string): { error?: str
   if (!normalize(evidence)) return { error: "evidence is required: name the artifact that satisfies this" };
   const criteria = contract.criteria.map((criterion) =>
     criterion === match ? { ...criterion, passed: true, evidence: normalize(evidence) } : criterion);
-  write({ ...contract, criteria });
+  write({ ...contract, criteria }, sessionId);
   return { remaining: criteria.filter((criterion) => !criterion.passed).map((criterion) => criterion.check) };
 }
 
-export function noteContractNudge(): void {
-  const contract = readContract();
+export function noteContractNudge(sessionId = ""): void {
+  const contract = readContract(sessionId);
   // Count the nudge even when nothing is declared. Previously this no-opped without a contract, so the
   // "declare your contract" block below could never reach the cap and repeated forever — an unbounded
   // loop for any session that CANNOT declare one, e.g. an MCP client whose tool list was negotiated
   // before the `contract` tool existed. A gate whose instrument is absent must expire, not brick.
-  write(contract ? { ...contract, nudges: contract.nudges + 1 } : { criteria: [], nudges: 1 });
+  write(contract ? { ...contract, nudges: contract.nudges + 1 } : { criteria: [], nudges: 1 }, sessionId);
 }
 
 /** Declared means at least one criterion exists; a bare nudge counter is not a declaration. */
-export function contractDeclared(): boolean {
-  return (readContract()?.criteria.length ?? 0) > 0;
+export function contractDeclared(sessionId = ""): boolean {
+  return (readContract(sessionId)?.criteria.length ?? 0) > 0;
 }
 
 /** The turn has been asked enough times; stop denying so an unusable gate cannot brick the session. */
-export function contractExhausted(): boolean {
-  const contract = readContract();
+export function contractExhausted(sessionId = ""): boolean {
+  const contract = readContract(sessionId);
   return !!contract && contract.nudges > cap();
 }
 
@@ -158,8 +165,8 @@ export function contractExhausted(): boolean {
  * `changedDurableState` is accepted for call-site compatibility and deliberately unused — see
  * recordObservedRun for why forcing a falsifiable check onto every task made real tasks worse.
  */
-export function contractStopReason(_changedDurableState = false): string {
-  const contract = readContract();
+export function contractStopReason(_changedDurableState = false, sessionId = ""): string {
+  const contract = readContract(sessionId);
   if (contract && contract.nudges > cap()) return "";
   if (!contract?.criteria.length) {
     return "Before ending this turn, declare what done means for it: call the `contract` tool with the"
@@ -197,10 +204,6 @@ export function contractStopReason(_changedDurableState = false): string {
 // disobeying. It is then told once, so the user hears it, and released — a gate whose instrument is
 // absent must expire, not brick.
 interface NudgeLedger { nudges: number; turns: number[]; reported: boolean }
-
-/** Per-session scratch, in the host's own session-state dir so it is discarded with the session. */
-export const sessionStatePath = (sessionId: string, file: string): string =>
-  join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, file);
 
 const EMPTY_LEDGER: NudgeLedger = { nudges: 0, turns: [], reported: false };
 const ledgerPath = (sessionId: string): string => sessionStatePath(sessionId, "cairn-contract-nudges.json");

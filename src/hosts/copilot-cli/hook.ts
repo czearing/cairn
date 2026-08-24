@@ -59,6 +59,8 @@ import {
   markContractInstrumentReported,
   noteUndeclaredNudge,
   sessionStatePath,
+  declareContract,
+  satisfyCriterion,
   contractDeclared,
   contractExhausted,
   clearContract,
@@ -538,7 +540,7 @@ export async function runCopilotHook(): Promise<void> {
     const stateId = turnScope(sessionId);
     if (!shouldStartUserTurn(prompt)) return void emit({});
     rmSync(complianceReceiptPath(sessionId), { force: true });
-    clearContract();
+    clearContract(sessionId);
     try { (await import("../../core/auto-update")).maybeAutoUpdate(); }
     catch { /* self-update is background work and never blocks a turn */ }
     const state = resetLifecycle(stateId);
@@ -638,7 +640,7 @@ export async function runCopilotHook(): Promise<void> {
     // the start of every turn an instrument-less session has a fresh zero count and every execution tool
     // it needs is denied until it has stopped past the cap.
     if (!decision.deny && !isTask(toolName) && countsAsExecution(toolName, args)
-      && !contractDeclared() && !contractExhausted() && !contractInstrumentMissing(sessionId)) {
+      && !contractDeclared(sessionId) && !contractExhausted(sessionId) && !contractInstrumentMissing(sessionId)) {
       emit({ permissionDecision: "deny", permissionDecisionReason: CONTRACT_DECLARE_REASON });
       return;
     }
@@ -649,8 +651,18 @@ export async function runCopilotHook(): Promise<void> {
   if (mode === "post-tool") {
     // Record brain usage for the turn-end gate: brain_search/brain_mutate mark the turn as "used the brain".
     const stateId = turnScope(sessionId, agentId);
+    let contractResult: { error?: string; criteria?: unknown[]; remaining?: string[] } | undefined;
+    if (isTool(toolName, "contract") && toolResultSucceeded(result)) {
+      const checks = Array.isArray(args.checks)
+        ? args.checks.filter((check): check is string => typeof check === "string")
+        : [];
+      const satisfied = typeof args.satisfied === "string" ? args.satisfied : "";
+      contractResult = satisfied
+        ? satisfyCriterion(satisfied, typeof args.evidence === "string" ? args.evidence : "", sessionId)
+        : declareContract(checks, sessionId);
+    }
     if (typeof args.command === "string") {
-      recordObservedRun(args.command, toolResultSucceeded(result) && !reportedNonZeroExit(result));
+      recordObservedRun(args.command, toolResultSucceeded(result) && !reportedNonZeroExit(result), sessionId);
     }
     let correctionRequired = false;
     let correctionResolved = false;
@@ -744,6 +756,11 @@ export async function runCopilotHook(): Promise<void> {
     if (isCairnMcpTool(toolName) && !toolResultSucceeded(result)) return void emit({});
     const answer = typeof args.answer === "string" ? args.answer : "";
     const blocks = (await Promise.all(postToolFiles(toolName, answer).map(promptText))).filter((t) => t.length > 0);
+    if (contractResult) {
+      blocks.unshift(contractResult.error
+        ? `Contract update failed: ${contractResult.error}`
+        : `Contract state: ${JSON.stringify(contractResult)}`);
+    }
     const text = internalContext(blocks.join("\n\n"));
     emit(text ? { additionalContext: text } : {});
     return;
@@ -826,17 +843,17 @@ export async function runCopilotHook(): Promise<void> {
       emit({ decision: "block", reason: text });
       return;
     }
-    const contractReason = contractStopReason(st.executionToolCalls > 0);
+    const contractReason = contractStopReason(st.executionToolCalls > 0, sessionId);
     if (contractReason) {
       // Declaring even once proves the tool is reachable, so any accumulated doubt is discarded.
-      if (contractDeclared()) clearInstrumentDoubt(sessionId);
+      if (contractDeclared(sessionId)) clearInstrumentDoubt(sessionId);
       else noteUndeclaredNudge(sessionId, st.turnSeq);
-      const missing = !contractDeclared() && contractInstrumentMissing(sessionId);
+      const missing = !contractDeclared(sessionId) && contractInstrumentMissing(sessionId);
       if (!missing) {
-        noteContractNudge();
+        noteContractNudge(sessionId);
         recordTelemetryState({
           host: "copilot", sessionId, turnSeq: st.turnSeq,
-          eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:contract:${readContract()?.nudges ?? 0}`,
+          eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:contract:${readContract(sessionId)?.nudges ?? 0}`,
           kind: "contract_blocked",
         });
         emit({ decision: "block", reason: internalContext(contractReason) });

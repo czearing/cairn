@@ -33,10 +33,8 @@ const cap = (): number => Math.max(1, Number(process.env.CAIRN_CONTRACT_CAP || "
 const normalize = (text: string): string => text.replace(/\s+/g, " ").trim();
 
 /** Per-session scratch used for hook-only ledgers. */
-export const sessionStatePath = (sessionId: string, file: string): string => {
-  const safeSession = sessionId ? createHash("sha256").update(sessionId).digest("hex") : "default";
-  return join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", safeSession, file);
-};
+export const sessionStatePath = (sessionId: string, file: string): string =>
+  join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId || "default", file);
 
 // Calls without a host session id retain the legacy path for direct unit tests and non-Copilot callers.
 // Production Copilot hooks always pass sessionId and therefore never share this file.

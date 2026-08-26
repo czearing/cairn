@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  extractResultNodeId,
   gateDecision,
   harnessTurnDeferred,
   internalContext,
@@ -570,7 +571,7 @@ test("Harness user prompts receive a leaner workflow than direct interactive pro
   expect(harnessOutput.additionalContext).not.toBe(directOutput.additionalContext);
   expect(harnessOutput.additionalContext.length).toBeLessThan(directOutput.additionalContext.length);
   expect(directOutput.additionalContext).toContain("## Brain workflow");
-  expect(directOutput.additionalContext).toContain("Contract");
+  expect(directOutput.additionalContext.toLowerCase()).toContain("plan");
   for (const output of [directOutput.additionalContext, harnessOutput.additionalContext]) {
     expect(output.toLowerCase()).toContain("search");
     expect(output.toLowerCase()).toContain("create");
@@ -592,10 +593,10 @@ test("user-prompt sends detailed workflow on turn 1 and short reminder on subseq
 
   const turn1 = JSON.parse(invoke("First task.").stdout.toString()) as { additionalContext: string };
   expect(turn1.additionalContext).toContain("## Brain workflow");
-  expect(turn1.additionalContext).toContain("Contract");
+  expect(turn1.additionalContext.toLowerCase()).toContain("plan");
 
   const turn2 = JSON.parse(invoke("Second task.").stdout.toString()) as { additionalContext: string };
-  expect(turn2.additionalContext).toContain("[cairn] Maintain Cairn discipline");
+  expect(turn2.additionalContext).toContain("Maintain Cairn discipline");
   expect(turn2.additionalContext).not.toContain("## Brain workflow");
   expect(turn2.additionalContext.length).toBeLessThan(turn1.additionalContext.length);
   rmSync(dbPath, { force: true });
@@ -625,7 +626,7 @@ test("a stale model tool manifest blocks submission until a Cairn tool succeeds"
 
   expect(invoke("user-prompt", { sessionId: "stale-manifest", prompt: "Finish the task." }).status).toBe(0);
   const ignored = invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString();
-  expect(ignored).toContain("without resolving this task in the brain");
+  expect(ignored).toContain("resolve this task in the brain");
   expect(ignored).not.toContain("run `/restart` once");
   expect(telemetryKinds(dbPath)).not.toContain("visibility_failure");
   expect(invoke("post-tool", {
@@ -743,7 +744,7 @@ test("the contract gate denies execution, loops the turn, and releases only when
       sessionId: "contract-e2e", toolName: "create", toolArgs: { path: join(dir, "out.txt") },
     }).stdout.toString();
     expect(denied).toContain("deny");
-    expect(denied).toContain("Declare your contract first");
+    expect(denied).toContain("Declare your plan first");
 
     // 1b. The instrument the deny NAMES must itself be allowed, or obeying the message is impossible.
     // Both wire forms, because the host may present an MCP tool bare or server-prefixed.
@@ -910,10 +911,10 @@ test("an ignored healthy Cairn workflow remains blocked until Cairn is used", ()
 
   expect(invoke("user-prompt", { sessionId: "ignored-workflow", prompt: "Finish the task." }).status).toBe(0);
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
-    .toContain("without resolving this task in the brain");
+    .toContain("resolve this task in the brain");
   expect(telemetryKinds(dbPath)).not.toContain("visibility_failure");
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
-    .toContain("without resolving this task in the brain");
+    .toContain("resolve this task in the brain");
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
     .not.toBe("{}");
   rmSync(dbPath, { force: true });
@@ -947,7 +948,7 @@ test("adopting a searched node ends the turn, but an unsearched id cannot fake r
 
   // Searching alone must not release the turn, and must ask for reuse rather than claim nothing was recorded.
   const searched = invoke("agent-stop", { sessionId: session }).stdout.toString();
-  expect(searched).toContain("Do NOT");
+  expect(searched).toContain("Do not create duplicate nodes");
   expect(searched).not.toContain("without recording anything");
 
   // Mutating an id this turn never saw is not evidence of reuse.
@@ -1065,7 +1066,99 @@ test("an undeclared contract nudge is bounded, so a session that cannot declare 
 
   // Once exhausted the pre-tool deny lifts too, otherwise the turn could never write anything again.
   const write = invoke("pre-tool", { sessionId: session, toolName: "edit", toolArgs: { path: "a.ts" } });
-  expect(write.stdout.toString()).not.toContain("Declare your contract first");
+  expect(write.stdout.toString()).not.toContain("Declare your plan first");
+});
+
+test("extractResultNodeId extracts node ID across diverse tool result structures", () => {
+  // 1. Direct id on result object
+  expect(extractResultNodeId({ id: "node-1" })).toBe("node-1");
+
+  // 2. MCP content array with JSON text
+  expect(extractResultNodeId({
+    content: [{ type: "text", text: JSON.stringify({ id: "node-mcp-2", url: "http://localhost/node/2" }) }],
+  })).toBe("node-mcp-2");
+
+  // 3. textResultForLlm JSON string
+  expect(extractResultNodeId({
+    textResultForLlm: JSON.stringify({ id: "node-llm-3" }),
+  })).toBe("node-llm-3");
+
+  // 4. args.id fallback
+  expect(extractResultNodeId({}, { id: "node-args-4" })).toBe("node-args-4");
+
+  // 5. Empty/null safety
+  expect(extractResultNodeId(null)).toBe("");
+  expect(extractResultNodeId(undefined)).toBe("");
+  expect(extractResultNodeId({})).toBe("");
+});
+
+test("post-tool tracks MCP created nodes, mutations, and deletes without false unresolved stops", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-node-lifecycle-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_ENFORCE_STOP_GATES: "1" };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const session = `node-lifecycle-${id}`;
+
+  try {
+    // 1. Start user turn & satisfy plan
+    invoke("user-prompt", { sessionId: session, prompt: "Resolve decomposition task." });
+    satisfyContract(dbPath, session, "all nodes resolved");
+
+    // 2. Search brain
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-brain_search",
+      toolArgs: { query: "decomposition" },
+      toolResult: { success: true },
+    });
+
+    // 3. Create root and child using standard MCP content format
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-brain_create",
+      toolArgs: { text: "What is root?" },
+      toolResult: {
+        content: [{ type: "text", text: JSON.stringify({ id: "node-root-1", url: "url1" }) }],
+      },
+    });
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-brain_create",
+      toolArgs: { text: "What is child?" },
+      toolResult: {
+        content: [{ type: "text", text: JSON.stringify({ id: "node-child-2", url: "url2" }) }],
+      },
+    });
+
+    // 4. Stop should block because child and root are not yet answered
+    const stopBlocked = invoke("agent-stop", { sessionId: session }).stdout.toString();
+    expect(stopBlocked).toContain("block");
+
+    // 5. Answer child node
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-brain_mutate",
+      toolArgs: { id: "node-child-2", answer: "Child solved", citation: "https://example.com" },
+      toolResult: { success: true },
+    });
+
+    // 6. Answer root node (synthesize)
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-brain_mutate",
+      toolArgs: { id: "node-root-1", answer: "Root solved", citation: "https://example.com" },
+      toolResult: { success: true },
+    });
+
+    // 7. Stop gate should now allow turn release cleanly without complaining about unresolved nodes
+    const stopReleased = invoke("agent-stop", { sessionId: session }).stdout.toString();
+    expect(stopReleased).toContain("completed every requested task");
+    expect(invoke("agent-stop", { sessionId: session }).stdout.toString()).toBe("{}");
+  } finally {
+    rmSync(dbPath, { force: true });
+  }
 });
 
 test("the contract gate never denies delegation, so Cairn can still reach a subagent", () => {
@@ -1087,7 +1180,7 @@ test("the contract gate never denies delegation, so Cairn can still reach a suba
 
   // An ordinary write on the same undeclared turn is still denied, so the exclusion is delegation-only.
   const write = invoke("pre-tool", { sessionId: "task-gate", toolName: "edit", toolArgs: { path: "a.ts" } });
-  expect(write.stdout.toString()).toContain("Declare your contract first");
+  expect(write.stdout.toString()).toContain("Declare your plan first");
 });
 
 test("a subagent runs Cairn: it receives the full workflow and is held to the same gate", () => {

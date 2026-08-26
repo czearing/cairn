@@ -104,7 +104,7 @@ test("MCP calls record local size and latency telemetry", async () => {
   expect(event.version).toBe(releaseVersion);
   expect(event.run_class).toBe("human");
   expect(columns.map((column) => column.name)).not.toContain("content");
-  expect(schemas.tools).toBe(5);
+  expect(schemas.tools).toBe(6);
   expect(schemas.chars).toBeGreaterThan(0);
   expect(schemas.tokens).toBeGreaterThan(0);
 });

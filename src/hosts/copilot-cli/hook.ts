@@ -248,6 +248,38 @@ const toolResultSucceeded = (result: unknown): boolean => {
   return value.resultType == null || value.resultType === "success";
 };
 
+export function extractResultNodeId(result: unknown, args: Record<string, unknown> = {}): string {
+  if (typeof args.id === "string" && args.id.trim()) return args.id.trim();
+  if (!result || typeof result !== "object") return "";
+  const obj = result as Record<string, unknown>;
+  if (typeof obj.id === "string" && obj.id.trim()) return obj.id.trim();
+
+  if (Array.isArray(obj.content) && obj.content[0] && typeof obj.content[0] === "object") {
+    const text = String((obj.content[0] as { text?: unknown }).text ?? "");
+    try {
+      const parsed = JSON.parse(text) as { id?: unknown };
+      if (typeof parsed?.id === "string" && parsed.id.trim()) return parsed.id.trim();
+    } catch {
+      const match = text.match(/"id"\s*:\s*"([^"]+)"/);
+      if (match && match[1]) return match[1];
+    }
+  }
+
+  const textVal = typeof obj.textResultForLlm === "string" ? obj.textResultForLlm
+    : typeof obj.text === "string" ? obj.text : "";
+  if (textVal) {
+    try {
+      const parsed = JSON.parse(textVal) as { id?: unknown };
+      if (typeof parsed?.id === "string" && parsed.id.trim()) return parsed.id.trim();
+    } catch {
+      const match = textVal.match(/"id"\s*:\s*"([^"]+)"/);
+      if (match && match[1]) return match[1];
+    }
+  }
+
+  return "";
+}
+
 interface Payload {
   sessionId: string;
   agentId: string;
@@ -484,8 +516,7 @@ export async function runCopilotHook(): Promise<void> {
         next.searched = true;
       }
       if (isTool(toolName, "brain_create") && succeeded) {
-        const resObj = result && typeof result === "object" ? result as { id?: string } : {};
-        const id = typeof resObj.id === "string" ? resObj.id : "";
+        const id = extractResultNodeId(result, args);
         if (id) {
           next.createdNodeIds = [...new Set([...next.createdNodeIds, id])];
           next.openCreatedNodeIds = [...new Set([...next.openCreatedNodeIds, id])];
@@ -493,7 +524,7 @@ export async function runCopilotHook(): Promise<void> {
         }
       }
       if (isTool(toolName, "brain_mutate") && succeeded) {
-        const id = typeof args.id === "string" ? args.id : "";
+        const id = extractResultNodeId(result, args);
         if (id && !next.createdNodeIds.includes(id)) {
           next.reusedNodeIds = [...new Set([...next.reusedNodeIds, id])];
           next.reusedCount = next.reusedNodeIds.length;
@@ -504,6 +535,16 @@ export async function runCopilotHook(): Promise<void> {
             next.openCreatedNodeIds = next.openCreatedNodeIds.filter((nodeId) => nodeId !== id);
           }
           next.rootSynthesized = true;
+        }
+      }
+      if (isTool(toolName, "brain_delete") && succeeded) {
+        const id = extractResultNodeId(result, args);
+        if (id) {
+          next.createdNodeIds = next.createdNodeIds.filter((nodeId) => nodeId !== id);
+          next.openCreatedNodeIds = next.openCreatedNodeIds.filter((nodeId) => nodeId !== id);
+          next.reusedNodeIds = next.reusedNodeIds.filter((nodeId) => nodeId !== id);
+          next.createdCount = next.createdNodeIds.length;
+          next.reusedCount = next.reusedNodeIds.length;
         }
       }
       return next;

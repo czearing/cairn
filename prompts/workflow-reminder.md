@@ -1,7 +1,7 @@
-[cairn] Maintain Cairn discipline:
-- Declare or update your plan (`plan` tool) defining what done means.
-- Search brain before writing; reuse and mutate covering nodes instead of duplicating.
-- Create atomic open questions for unresolved claims, resolve depth-first with citations, mutate root last.
-- Mark plan items completed as you finish them.
+Maintain Cairn discipline:
+- Keep your plan updated (`plan` tool) with tasks defining done.
+- Search before writing (`brain_search`); reuse and mutate covering nodes instead of duplicating.
+- Create open questions for unresolved claims; resolve depth-first with citations; synthesize root last.
+- Mark plan items completed with evidence as you finish them.
 
 

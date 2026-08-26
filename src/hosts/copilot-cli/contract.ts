@@ -268,6 +268,14 @@ export const CONTRACT_UNAVAILABLE_REASON =
   + " evidence directly in your reply instead. Tell the user, in your reply, that this session predates the"
   + " `contract` tool and that a new session is required for the completion gate to apply.";
 
+export function formatPlanSummary(sessionId = ""): string {
+  const contract = readContract(sessionId);
+  if (!contract || !contract.criteria.length) return "No active plan.";
+  return contract.criteria
+    .map((c) => `- [${c.passed ? "x" : " "}] ${c.check}${c.evidence ? ` (Evidence: ${c.evidence})` : ""}`)
+    .join("\n");
+}
+
 export const CONTRACT_DECLARE_REASON =
-  "Declare your contract first: call the `contract` tool with the criteria that define done for this task."
+  "Declare your plan first: call the `plan` (or `contract`) tool with the tasks defining done for this task."
   + " The requested side effect was not executed.";

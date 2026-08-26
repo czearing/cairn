@@ -42,9 +42,9 @@ const call = (name: string, args: Record<string, unknown>) =>
   }>;
 const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.text);
 
-test("exposes only the agent-owned brain and contract tools", async () => {
+test("exposes only the agent-owned brain, plan, and contract tools", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "contract"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "contract", "plan"]);
 });
 
 test("tool results expose content-free MCP runtime identity", async () => {

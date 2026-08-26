@@ -192,7 +192,7 @@ test("hook enforces hard-block when no contract is declared and allows execution
       toolArgs: { path: "src/index.ts", old_str: "a", new_str: "b" },
     });
     expect(writeProbe.stdout.toString()).toContain('"permissionDecision":"deny"');
-    expect(writeProbe.stdout.toString()).toContain("Declare your contract first");
+    expect(writeProbe.stdout.toString()).toContain("Declare your plan first");
 
     // Declare contract via post-tool
     invoke("post-tool", {
@@ -295,6 +295,78 @@ test("contract tool handles simultaneous append and satisfy in a single call", (
     expect(contract?.criteria.length).toBe(2);
     expect(contract?.criteria.find((c) => c.check === "build pass")?.passed).toBe(true);
     expect(contract?.criteria.find((c) => c.check === "deploy pass")?.passed).toBe(false);
+  } finally {
+    clearContract(session);
+    rmSync(dbPath, { force: true });
+  }
+});
+
+test("plan tool provides interactive todo checklist workflow and formatted summaries", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-plan-tool-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const session = `plan-workflow-${id}`;
+
+  try {
+    invoke("user-prompt", { sessionId: session, prompt: "Create a feature." });
+
+    // Initial plan declaration using 'tasks'
+    const planDeclared = invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-plan",
+      toolArgs: { tasks: ["Write tests", "Implement logic", "Verify build"] },
+      toolResult: { accepted: true },
+    });
+    expect(planDeclared.status).toBe(0);
+    const planSummary = planDeclared.stdout.toString();
+    expect(planSummary).toContain("Plan state:");
+    expect(planSummary).toContain("- [ ] Write tests");
+    expect(planSummary).toContain("- [ ] Implement logic");
+    expect(planSummary).toContain("- [ ] Verify build");
+
+    // Complete item 1 with evidence
+    const item1Done = invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-plan",
+      toolArgs: { completed: "Write tests", evidence: "tests/feature.test.ts created" },
+      toolResult: { accepted: true },
+    });
+    expect(item1Done.stdout.toString()).toContain("- [x] Write tests (Evidence: tests/feature.test.ts created)");
+    expect(item1Done.stdout.toString()).toContain("- [ ] Implement logic");
+
+    // Append a newly discovered task while completing item 2
+    const item2Done = invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-plan",
+      toolArgs: {
+        tasks: ["Update documentation"],
+        completed: "Implement logic",
+        evidence: "src/feature.ts implemented",
+      },
+      toolResult: { accepted: true },
+    });
+    expect(item2Done.stdout.toString()).toContain("- [x] Implement logic");
+    expect(item2Done.stdout.toString()).toContain("- [ ] Update documentation");
+
+    // Close remaining items
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-plan",
+      toolArgs: { completed: "Verify build", evidence: "bun test passed" },
+      toolResult: { accepted: true },
+    });
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-plan",
+      toolArgs: { completed: "Update documentation", evidence: "docs updated" },
+      toolResult: { accepted: true },
+    });
+
+    const contract = readContract(session);
+    expect(contract?.criteria.every((c) => c.passed)).toBe(true);
   } finally {
     clearContract(session);
     rmSync(dbPath, { force: true });

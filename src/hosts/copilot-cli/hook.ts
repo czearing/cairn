@@ -48,6 +48,7 @@ import {
   noteContractNudge,
   readContract,
   recordObservedRun,
+  formatPlanSummary,
 } from "./contract";
 
 const PROMPTS = new URL("../../../prompts/", import.meta.url);
@@ -99,7 +100,7 @@ export const isTool = (name: string, want: string): boolean =>
   name === want || name.endsWith(want) || name.includes(want);
 
 const isCairnMcpTool = (name: string): boolean => [
-  "brain_search", "brain_create", "brain_mutate", "brain_delete", "contract",
+  "brain_search", "brain_create", "brain_mutate", "brain_delete", "contract", "plan",
 ].some((tool) => isTool(name, tool));
 const isTask = (name: string): boolean => /^(task|agent)$/i.test(name) || name === "Task" || name === "Agent";
 
@@ -456,16 +457,17 @@ export async function runCopilotHook(): Promise<void> {
   if (mode === "post-tool") {
     const stateId = turnScope(sessionId, agentId);
     let contractResult: { error?: string; criteria?: unknown[]; remaining?: string[] } | undefined;
-    if (isTool(toolName, "contract") && toolResultSucceeded(result)) {
-      const checks = Array.isArray(args.checks)
-        ? args.checks.filter((check): check is string => typeof check === "string")
-        : [];
-      const satisfied = typeof args.satisfied === "string" ? args.satisfied : "";
+    if ((isTool(toolName, "contract") || isTool(toolName, "plan")) && toolResultSucceeded(result)) {
+      const checks = (Array.isArray(args.tasks) ? args.tasks : Array.isArray(args.checks) ? args.checks : [])
+        .filter((check): check is string => typeof check === "string");
+      const satisfied = typeof args.completed === "string" ? args.completed
+        : typeof args.satisfied === "string" ? args.satisfied : "";
+      const evidence = typeof args.evidence === "string" ? args.evidence : "";
       if (checks.length > 0) {
         contractResult = declareContract(checks, sessionId);
       }
       if (satisfied) {
-        contractResult = satisfyCriterion(satisfied, typeof args.evidence === "string" ? args.evidence : "", sessionId);
+        contractResult = satisfyCriterion(satisfied, evidence, sessionId);
       }
     }
     if (typeof args.command === "string") {
@@ -518,8 +520,8 @@ export async function runCopilotHook(): Promise<void> {
     const blocks = (await Promise.all(postToolFiles(toolName, answer).map(promptText))).filter((t) => t.length > 0);
     if (contractResult) {
       blocks.unshift(contractResult.error
-        ? `Contract update failed: ${contractResult.error}`
-        : `Contract state: ${JSON.stringify(contractResult)}`);
+        ? `Plan update failed: ${contractResult.error}`
+        : `Plan state:\n${formatPlanSummary(sessionId)}`);
     }
     const text = internalContext(blocks.join("\n\n"));
     emit(text ? { additionalContext: text } : {});

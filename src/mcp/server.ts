@@ -325,21 +325,47 @@ registerTool(
 // execution tool while the agent has no way to declare a contract, locking the session. Registering it
 // unconditionally makes the tool's presence independent of whether the gate is currently enforcing.
 registerTool(
+  "plan",
+  "Declare and manage the task plan / todo checklist. Define what done means with actionable tasks, append new items as you discover work, and mark items completed with evidence.",
+  {
+    tasks: z.array(z.string()).min(1).optional()
+      .describe("List of planned tasks/todo items defining done. Append anytime."),
+    checks: z.array(z.string()).min(1).optional()
+      .describe("Alias for tasks."),
+    completed: z.string().optional().describe("A planned task/todo item to mark as done."),
+    satisfied: z.string().optional().describe("Alias for completed."),
+    evidence: z.string().optional().describe("What satisfies it: the artifact produced, test command run, or observed output."),
+  },
+  async ({ tasks, checks, completed, satisfied, evidence }) => measured("plan", { tasks, checks, completed, satisfied, evidence }, async () => {
+    const itemToClose = completed || satisfied;
+    const itemsToAdd = tasks || checks;
+    if (itemToClose && !evidence?.trim()) return fail("evidence is required: describe what satisfies this task");
+    if (!itemToClose && !(itemsToAdd?.some((item) => item.trim()))) {
+      return fail("provide at least one planned task item");
+    }
+    return json({ accepted: true });
+  })
+);
+
+registerTool(
   "contract",
-  "Declare what done means for this task, then close each criterion. Criteria are yours to choose: runnable commands where the work is verifiable by running something, otherwise the concrete artifact that must exist. Frozen once declared.",
+  "Alias for plan. Declare what done means for this task and close criteria with evidence.",
   {
     checks: z.array(z.string()).min(1).optional()
-      .describe("Declare the criteria that define done. Prefer commands that FAIL while the task is unfinished."),
+      .describe("Declare the criteria that define done."),
+    tasks: z.array(z.string()).min(1).optional()
+      .describe("Alias for checks."),
     satisfied: z.string().optional().describe("A declared criterion to close."),
+    completed: z.string().optional().describe("Alias for satisfied."),
     evidence: z.string().optional().describe("What satisfies it: the artifact produced or the output observed."),
   },
-  async ({ checks, satisfied, evidence }) => measured("contract", { checks, satisfied, evidence }, async () => {
-    if (satisfied && !evidence?.trim()) return fail("evidence is required: name the artifact that satisfies this");
-    if (!satisfied && !(checks?.some((check) => check.trim()))) {
+  async ({ checks, tasks, satisfied, completed, evidence }) => measured("contract", { checks, tasks, satisfied, completed, evidence }, async () => {
+    const itemToClose = satisfied || completed;
+    const itemsToAdd = checks || tasks;
+    if (itemToClose && !evidence?.trim()) return fail("evidence is required: name the artifact that satisfies this");
+    if (!itemToClose && !(itemsToAdd?.some((check) => check.trim()))) {
       return fail("declare at least one criterion describing what done means");
     }
-    // The MCP process does not receive the host session id. Copilot's postToolUse hook does, so it is
-    // the authoritative writer and applies this accepted operation to that session only.
     return json({ accepted: true });
   })
 );

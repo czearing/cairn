@@ -1,20 +1,9 @@
-Use Cairn for every task, including creative work.
+Use Cairn to recall, record, and resolve knowledge for this task.
 
 ## Brain workflow
-Search the root task before writing. Reuse relevant returned nodes and identify what remains unresolved.
+1. **Contract**: Before executing changes, declare the criteria that define done.
+2. **Search**: Run `brain_search` on the task before writing. Reuse relevant returned nodes and mutate them with evidence rather than creating duplicates.
+3. **Decompose**: Create open questions (`brain_create`) for what remains unresolved. A question is atomic when one operation or verified claim answers it. Create child nodes only when necessary for the parent.
+4. **Resolve**: Depth-first resolution. Answer and cite atomic leaves (`brain_mutate` with citations), synthesize parents, and mutate the root last.
+5. **Deliver**: Focus directly on complete, verified deliverables.
 
-Never re-create a question the graph already answers. When prior nodes cover the task, record the reuse by mutating the covering node — link this turn's nodes or evidence with `edges` and correct its answer if your work changed it. That adoption completes the turn; duplicating resolved work is a defect. Create the root as an open question only for what remains unresolved.
-
-Create the root as an open question. Decompose only unresolved subject-matter claims, never the workflow itself. A question is atomic when the supplied evidence or one research operation can answer it as one verifiable claim. Create a child only when its answer is necessary to answer its parent. Apply this test recursively with no breadth or depth limit.
-
-Resolve the graph depth-first. Search each owned question before research. Answer and cite atomic leaves, then synthesize their parent. Mutate the root last. Every created node must be answered and cited.
-
-Do not draft the deliverable until its evidence graph is resolved. Store every finding in that graph.
-
-## Output
-Complete every request, then lead with the deliverable and end with one compact **Cairn** receipt:
-- **Root:** synthesis and root URL.
-- **Coverage:** validation and why nothing remains unresolved.
-- **Recall:** how this improves recalled work.
-
-Report observable actions and evidence, not hidden reasoning.

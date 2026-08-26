@@ -308,7 +308,7 @@ test("Copilot user-prompt records only injected context metrics", () => {
   const sessionStarts = db.query("SELECT COUNT(*) AS count FROM telemetry_events WHERE source='session-start'").get();
   db.close();
   expect(event.source).toBe("user-prompt");
-  expect(event.context_chars).toBeGreaterThan(1000);
+  expect(event.context_chars).toBeGreaterThan(500);
   expect(event.session_hash).toHaveLength(16);
   expect(sessionStarts).toEqual({ count: 1 });
   expect(serialized).not.toContain("Sensitive prompt");

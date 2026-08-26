@@ -97,6 +97,17 @@ async function main(): Promise<void> {
     }
   }
 
+  let turnSeq = 0;
+  if (event.kind === "user_message") {
+    try {
+      const { lifecycleScope, resetLifecycle, readLifecycle } = await import("../../core/lifecycle");
+      const scope = lifecycleScope("claude", payloadSession);
+      resetLifecycle(scope);
+      turnSeq = readLifecycle(scope).turnSeq;
+      event.turnSeq = turnSeq;
+    } catch { /* lifecycle tracking is best-effort */ }
+  }
+
   const stopHookActive = hookName === "Stop" && (payload as { stop_hook_active?: unknown }).stop_hook_active === true;
   let content = stopHookActive ? null : await inject(event);
   if (hookName === "Stop" && !stopHookActive && process.env.CAIRN_ENFORCE_STOP_GATES === "0") {
@@ -116,11 +127,12 @@ async function main(): Promise<void> {
 
   try {
     const telemetry = await import("../../core/telemetry");
-    const { lifecycleScope, readLifecycle, resetLifecycle, updateLifecycle } = await import("../../core/lifecycle");
+    const { lifecycleScope, readLifecycle } = await import("../../core/lifecycle");
     const scope = lifecycleScope("claude", payloadSession);
-    if (event.kind === "user_message") resetLifecycle(scope);
-    const life = readLifecycle(scope);
-    const turnSeq = life.turnSeq;
+    if (!turnSeq) {
+      const life = readLifecycle(scope);
+      turnSeq = life.turnSeq;
+    }
 
     if (event.kind === "user_message") {
       try { (await import("../../core/auto-update")).maybeAutoUpdate(); }

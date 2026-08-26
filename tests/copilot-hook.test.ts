@@ -570,13 +570,35 @@ test("Harness user prompts receive a leaner workflow than direct interactive pro
   expect(harnessOutput.additionalContext).not.toBe(directOutput.additionalContext);
   expect(harnessOutput.additionalContext.length).toBeLessThan(directOutput.additionalContext.length);
   expect(directOutput.additionalContext).toContain("## Brain workflow");
-  expect(directOutput.additionalContext).toContain("no breadth or depth limit");
+  expect(directOutput.additionalContext).toContain("Contract");
   for (const output of [directOutput.additionalContext, harnessOutput.additionalContext]) {
     expect(output.toLowerCase()).toContain("search");
     expect(output.toLowerCase()).toContain("create");
     expect(output.toLowerCase()).toContain("mutate");
   }
   rmSync(cairnDb, { force: true });
+});
+
+test("user-prompt sends detailed workflow on turn 1 and short reminder on subsequent turns", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-multi-turn-prompt-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath };
+  const invoke = (prompt: string) =>
+    spawnSync(process.execPath, [hook, "user-prompt"], {
+      input: JSON.stringify({ sessionId: `multi-turn-${id}`, prompt }),
+      env,
+    });
+
+  const turn1 = JSON.parse(invoke("First task.").stdout.toString()) as { additionalContext: string };
+  expect(turn1.additionalContext).toContain("## Brain workflow");
+  expect(turn1.additionalContext).toContain("Contract");
+
+  const turn2 = JSON.parse(invoke("Second task.").stdout.toString()) as { additionalContext: string };
+  expect(turn2.additionalContext).toContain("[cairn] Maintain Cairn discipline");
+  expect(turn2.additionalContext).not.toContain("## Brain workflow");
+  expect(turn2.additionalContext.length).toBeLessThan(turn1.additionalContext.length);
+  rmSync(dbPath, { force: true });
 });
 
 test("user-prompt reset runs only for real human prompts", () => {

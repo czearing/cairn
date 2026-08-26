@@ -88,8 +88,12 @@ const promptText = async (file: string): Promise<string> => {
     return "";
   }
 };
-const workflowPrompt = (): Promise<string> =>
-  promptText(process.env.AGENT_HARNESS === "1" ? "harness-workflow.md" : "user-message.md");
+const workflowPrompt = (turnSeq = 1): Promise<string> => {
+  if (process.env.AGENT_HARNESS === "1") {
+    return promptText("harness-workflow.md");
+  }
+  return promptText(turnSeq <= 1 ? "user-message.md" : "workflow-reminder.md");
+};
 
 export const isTool = (name: string, want: string): boolean =>
   name === want || name.endsWith(want) || name.includes(want);
@@ -363,7 +367,7 @@ export async function runCopilotHook(): Promise<void> {
   };
 
   if (mode === "session-start") {
-    const text = await workflowPrompt();
+    const text = await workflowPrompt(1);
     emit(text ? { additionalContext: internalContext(text) } : {});
     return;
   }
@@ -394,7 +398,7 @@ export async function runCopilotHook(): Promise<void> {
     resetLifecycle(stateId);
     const state = readLifecycle(stateId);
     if (emittedUsage) emittedUsage.turnSeq = state.turnSeq;
-    const wf = await workflowPrompt();
+    const wf = await workflowPrompt(state.turnSeq);
     beginTelemetryRun({
       host: "copilot", sessionId, turnSeq: state.turnSeq,
       promptHash: promptFingerprint(wf),

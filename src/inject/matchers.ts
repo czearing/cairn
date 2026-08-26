@@ -10,7 +10,9 @@ function isTool(tool: string, name: string): boolean {
 }
 
 export function matchEvent(event: NormalizedEvent): Match {
-  if (event.kind === "user_message") return { promptFile: "user-message.md" };
+  if (event.kind === "user_message") {
+    return { promptFile: (event.turnSeq && event.turnSeq > 1) ? "workflow-reminder.md" : "user-message.md" };
+  }
   if (event.kind === "turn_finished") {
     if (!event.usedBrain) return { promptFile: "turn-reminder.md" };
     return null;

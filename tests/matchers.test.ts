@@ -4,8 +4,10 @@ import { matchEvent } from "../src/inject/matchers";
 const tool = (t: string) =>
   matchEvent({ kind: "tool_completed", tool: t, input: {}, output: null });
 
-test("user message → user-message.md", () => {
+test("user message → user-message.md on first turn, workflow-reminder.md on subsequent turns", () => {
   expect(matchEvent({ kind: "user_message", text: "hi" })).toEqual({ promptFile: "user-message.md" });
+  expect(matchEvent({ kind: "user_message", text: "hi", turnSeq: 1 })).toEqual({ promptFile: "user-message.md" });
+  expect(matchEvent({ kind: "user_message", text: "hi", turnSeq: 2 })).toEqual({ promptFile: "workflow-reminder.md" });
 });
 
 test("brain_search → search-results.md", () => {

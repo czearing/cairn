@@ -4,7 +4,7 @@
  * is the only place the core needs to change.
  */
 export type NormalizedEvent =
-  | { kind: "user_message"; text: string }
+  | { kind: "user_message"; text: string; turnSeq?: number }
   /** A tool is ABOUT to run (PreToolUse) — fires before the write hits the db. */
   | { kind: "tool_pending"; tool: string; input: Record<string, unknown>; callId?: string }
   | {

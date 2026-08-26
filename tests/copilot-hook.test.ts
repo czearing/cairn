@@ -347,6 +347,7 @@ test("with the skill layer off a Harness turn still unblocks side effects and ce
     sessionId: "skills-off-action",
     toolCalls: [{ id: "send-2", name: "discord-discord_send_message", args: { content: "ready" } }],
   }).stdout.toString()).toBe("{}");
+  post("discord-discord_send_message", { content: "ready" });
   expect(invoke("agent-stop", { sessionId: "skills-off-action" }).stdout.toString())
     .toContain("completed every requested task");
   // The turn ENDS instead of looping forever demanding a skill, and it certifies for the Harness.
@@ -397,7 +398,8 @@ test("with the skill layer off the stop gate never demands a skill call", () => 
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
 
   expect(invoke("user-prompt", { sessionId: "skills-off-gate", prompt: "root work" }).status).toBe(0);
-  const blocked = invoke("agent-stop").stdout.toString();
+  invoke("post-tool", { sessionId: "skills-off-gate", toolName: "edit", toolArgs: { path: "a.ts" }, toolResult: { success: true } });
+  const blocked = invoke("agent-stop", { sessionId: "skills-off-gate" }).stdout.toString();
   // Still blocked on the brain workflow — disabling skills must not disable Cairn — but a turn can no
   // longer be held hostage by a skill tool that is not even registered.
   expect(blocked).toContain('"decision":"block"');
@@ -625,6 +627,7 @@ test("a stale model tool manifest blocks submission until a Cairn tool succeeds"
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
 
   expect(invoke("user-prompt", { sessionId: "stale-manifest", prompt: "Finish the task." }).status).toBe(0);
+  invoke("post-tool", { sessionId: "stale-manifest", toolName: "edit", toolArgs: { path: "a.ts" }, toolResult: { success: true } });
   const ignored = invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString();
   expect(ignored).toContain("resolve this task in the brain");
   expect(ignored).not.toContain("run `/restart` once");
@@ -643,6 +646,7 @@ test("a stale model tool manifest blocks submission until a Cairn tool succeeds"
     .toContain("run `/restart` once");
 
   expect(invoke("user-prompt", { sessionId: "stale-manifest", prompt: "Try again." }).status).toBe(0);
+  invoke("post-tool", { sessionId: "stale-manifest", toolName: "edit", toolArgs: { path: "a.ts" }, toolResult: { success: true } });
   expect(invoke("post-tool", {
     sessionId: "stale-manifest",
     toolName: "cairn-brain_search",
@@ -754,11 +758,28 @@ test("the contract gate denies execution, loops the turn, and releases only when
       }).stdout.toString()).not.toContain("deny");
     }
 
-    // 2. Declared: the same call is allowed through.
+    // 2. Declared: after contract is declared, research and root node in Cairn are checked
     mkdirSync(dirname(contractFile), { recursive: true });
     writeFileSync(contractFile, JSON.stringify({
       criteria: [{ check: "bun test", passed: false, failedFirst: false, evidence: "" }], nudges: 0,
     }));
+    expect(invoke("pre-tool", {
+      sessionId: "contract-e2e", toolName: "create", toolArgs: { path: join(dir, "out.txt") },
+    }).stdout.toString()).toContain("Research in Cairn first");
+
+    expect(invoke("post-tool", {
+      sessionId: "contract-e2e",
+      toolName: "cairn-brain_search",
+      toolArgs: { query: "contract-e2e" },
+      toolResult: { success: true },
+    }).status).toBe(0);
+    expect(invoke("post-tool", {
+      sessionId: "contract-e2e",
+      toolName: "cairn-brain_create",
+      toolArgs: { text: "How to fix contract-e2e?" },
+      toolResult: { success: true, id: "contract-e2e-root" },
+    }).status).toBe(0);
+
     expect(invoke("pre-tool", {
       sessionId: "contract-e2e", toolName: "create", toolArgs: { path: join(dir, "out.txt") },
     }).stdout.toString()).not.toContain("deny");
@@ -767,7 +788,28 @@ test("the contract gate denies execution, loops the turn, and releases only when
     expect(invoke("post-tool", {
       sessionId: "contract-e2e", toolName: "cairn-skill_select", toolArgs: { ids: ["skill-e2e"] },
     }).status).toBe(0);
-    completeBrainWorkflow(invoke, "contract-e2e", { declareContract: false });
+    // Create child and leaf, then mutate leaf, child, root
+    const child = "contract-e2e-child";
+    const leaf = "contract-e2e-leaf";
+    for (const [id, edges] of [
+      [child, ["contract-e2e-root"]],
+      [leaf, [child]],
+    ] as const) {
+      expect(invoke("post-tool", {
+        sessionId: "contract-e2e",
+        toolName: "cairn-brain_create",
+        toolArgs: { text: `How is ${id} resolved?`, edges },
+        toolResult: { success: true, id },
+      }).status).toBe(0);
+    }
+    for (const id of [leaf, child, "contract-e2e-root"]) {
+      expect(invoke("post-tool", {
+        sessionId: "contract-e2e",
+        toolName: "cairn-brain_mutate",
+        toolArgs: { id, answer: `Resolved ${id}.`, citation: "https://example.com/evidence" },
+        toolResult: { success: true, id },
+      }).status).toBe(0);
+    }
     expect(invoke("post-tool", {
       sessionId: "contract-e2e", timestamp: 30, toolName: "cairn-skill_review", toolArgs: { id: "skill-e2e" },
     }).status).toBe(0);
@@ -910,6 +952,7 @@ test("an ignored healthy Cairn workflow remains blocked until Cairn is used", ()
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
 
   expect(invoke("user-prompt", { sessionId: "ignored-workflow", prompt: "Finish the task." }).status).toBe(0);
+  invoke("post-tool", { sessionId: "ignored-workflow", toolName: "edit", toolArgs: { path: "a.ts" }, toolResult: { success: true } });
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
     .toContain("resolve this task in the brain");
   expect(telemetryKinds(dbPath)).not.toContain("visibility_failure");
@@ -1018,21 +1061,23 @@ test("system reminder prompts preserve the turn and a genuine user prompt resets
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
 
   expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "first" }).status).toBe(0);
-  expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
+  invoke("post-tool", { sessionId: "session-cap", toolName: "edit", toolArgs: { path: "a.ts" }, toolResult: { success: true } });
+  expect(invoke("agent-stop", { sessionId: "session-cap" }).stdout.toString()).toContain('"decision":"block"');
   expect(invoke("user-prompt", {
     sessionId: "session-cap",
     prompt: "<cairn-internal>continue required workflow</cairn-internal>",
   }).stdout.toString()).toBe("{}");
-  expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
+  expect(invoke("agent-stop", { sessionId: "session-cap" }).stdout.toString()).toContain('"decision":"block"');
   expect(invoke("user-prompt", {
     sessionId: "session-cap",
     prompt: "<system_reminder>continue required workflow</system_reminder>",
   }).stdout.toString()).toBe("{}");
-  expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
-  expect(invoke("agent-stop").stdout.toString()).not.toBe("{}");
+  expect(invoke("agent-stop", { sessionId: "session-cap" }).stdout.toString()).toContain('"decision":"block"');
+  expect(invoke("agent-stop", { sessionId: "session-cap" }).stdout.toString()).not.toBe("{}");
 
   expect(invoke("user-prompt", { sessionId: "session-cap", prompt: "second" }).status).toBe(0);
-  expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
+  invoke("post-tool", { sessionId: "session-cap", toolName: "edit", toolArgs: { path: "a.ts" }, toolResult: { success: true } });
+  expect(invoke("agent-stop", { sessionId: "session-cap" }).stdout.toString()).toContain('"decision":"block"');
 });
 
 test("an undeclared contract nudge is bounded, so a session that cannot declare one is not bricked", () => {
@@ -1049,6 +1094,7 @@ test("an undeclared contract nudge is bounded, so a session that cannot declare 
   const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
   const session = "contract-bound";
   expect(invoke("user-prompt", { sessionId: session, prompt: "Do the task." }).status).toBe(0);
+  invoke("post-tool", { sessionId: session, toolName: "edit", toolArgs: { path: "a.ts" }, toolResult: { success: true } });
   completeBrainWorkflow(invoke, session, { declareContract: false });
 
   // Never declaring anything: the gate asks, but only while it can still be acted on.
@@ -1131,12 +1177,34 @@ test("post-tool tracks MCP created nodes, mutations, and deletes without false u
         content: [{ type: "text", text: JSON.stringify({ id: "node-child-2", url: "url2" }) }],
       },
     });
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-brain_create",
+      toolArgs: { text: "What is leaf?" },
+      toolResult: {
+        content: [{ type: "text", text: JSON.stringify({ id: "node-leaf-3", url: "url3" }) }],
+      },
+    });
 
-    // 4. Stop should block because child and root are not yet answered
+    // Run an execution tool in the turn
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "edit",
+      toolArgs: { path: "a.ts" },
+      toolResult: { success: true },
+    });
+
+    // 4. Stop should block because created nodes are not yet answered
     const stopBlocked = invoke("agent-stop", { sessionId: session }).stdout.toString();
     expect(stopBlocked).toContain("block");
 
-    // 5. Answer child node
+    // 5. Answer child and leaf nodes
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-brain_mutate",
+      toolArgs: { id: "node-leaf-3", answer: "Leaf solved", citation: "https://example.com" },
+      toolResult: { success: true },
+    });
     invoke("post-tool", {
       sessionId: session,
       toolName: "cairn-brain_mutate",
@@ -1192,6 +1260,7 @@ test("a subagent runs Cairn: it receives the full workflow and is held to the sa
   for (const sessionId of ["toolu_01BJn8LTK5VRTyb8CGjzhAmS", `call_${randomUUID()}`]) {
     const start = invoke("user-prompt", { sessionId, prompt: "Search the repo for the retry policy." });
     expect(start.stdout.toString()).toContain("Brain workflow");
+    invoke("post-tool", { sessionId, toolName: "edit", toolArgs: { path: "a.ts" }, toolResult: { success: true } });
     expect(invoke("agent-stop", { sessionId, transcriptPath: "" }).stdout.toString())
       .toContain("block");
   }
@@ -1269,18 +1338,18 @@ test("the contract loop blocks until declared criteria are met, whatever shape t
   try {
     const contract = require("../src/hosts/copilot-cli/contract") as typeof import("../src/hosts/copilot-cli/contract");
 
-    // 1. A turn that declared nothing is never released, whatever it was asked to do.
+    // 1. A turn with durable changes that declared nothing is never released.
     contract.clearContract();
-    expect(contract.contractStopReason(false)).toContain("declare what done means");
+    expect(contract.contractStopReason(true)).toContain("declare what done means");
 
-    // 2. Non-executable work (no shell can decide it) closes by naming the artifact.
+    // 2. Non-executable work closes by naming the artifact.
     expect(contract.declareContract(["a three-line poem is written in the reply"]).criteria).toHaveLength(1);
-    expect(contract.contractStopReason(false)).toContain("unmet");
+    expect(contract.contractStopReason(true)).toContain("unmet");
     expect(contract.satisfyCriterion("a three-line poem is written in the reply", "").error)
       .toContain("evidence is required");
     expect(contract.satisfyCriterion("a three-line poem is written in the reply", "3 lines in the reply").remaining)
       .toEqual([]);
-    expect(contract.contractStopReason(false)).toBe("");
+    expect(contract.contractStopReason(true)).toBe("");
 
     // 3. Executable work: an observed successful run of the declared check closes it.
     contract.clearContract();
@@ -1320,11 +1389,37 @@ test("the contract loop blocks until declared criteria are met, whatever shape t
     contract.declareContract(["an impossible thing"]);
     const cap = Number(process.env.CAIRN_CONTRACT_CAP || "3");
     for (let i = 0; i < cap; i += 1) contract.noteContractNudge();
-    expect(contract.contractStopReason(false)).toContain("decision it needs from the user");
+    expect(contract.contractStopReason(true)).toContain("decision it needs from the user");
     contract.noteContractNudge();
-    expect(contract.contractStopReason(false)).toBe("");
+    expect(contract.contractStopReason(true)).toBe("");
   } finally {
     if (prior == null) delete process.env.CAIRN_DB_PATH; else process.env.CAIRN_DB_PATH = prior;
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("conversational turn with no execution tools allows fast response without stop-gate blocks", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-fast-path-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_ENFORCE_STOP_GATES: "1" };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const session = `fast-path-${id}`;
+
+  try {
+    // Conversational prompt (e.g. user asks a quick question)
+    expect(invoke("user-prompt", { sessionId: session, prompt: "What is Cairn?" }).status).toBe(0);
+
+    // Read-only tools like view, grep, glob can be used freely
+    expect(invoke("pre-tool", { sessionId: session, toolName: "view", toolArgs: { path: "README.md" } }).stdout.toString()).toBe("{}");
+    expect(invoke("post-tool", { sessionId: session, toolName: "view", toolArgs: { path: "README.md" }, toolResult: { content: "Cairn docs" } }).status).toBe(0);
+
+    // Turn with no execution/mutation tools completes cleanly without stop-gate nagging
+    const stopResponse = invoke("agent-stop", { sessionId: session }).stdout.toString();
+    expect(stopResponse).toBe("{}");
+  } finally {
+    rmSync(dbPath, { force: true });
+  }
+});
+

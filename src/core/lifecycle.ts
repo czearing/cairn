@@ -79,6 +79,33 @@ function ensureLifecycleSchema(db: Database): void {
     stop_blocked INTEGER NOT NULL DEFAULT 0,
     completion_nudged INTEGER NOT NULL DEFAULT 0
   )`);
+
+  const cols = new Set(
+    (db.query("PRAGMA table_info(lifecycle_turns)").all() as { name: string }[]).map((c) => c.name)
+  );
+  const expectedCols: [string, string][] = [
+    ["searched", "INTEGER NOT NULL DEFAULT 0"],
+    ["searched_node_ids", "TEXT NOT NULL DEFAULT '[]'"],
+    ["created_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["answered_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["reused_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["reused_node_ids", "TEXT NOT NULL DEFAULT '[]'"],
+    ["created_node_ids", "TEXT NOT NULL DEFAULT '[]'"],
+    ["open_created_node_ids", "TEXT NOT NULL DEFAULT '[]'"],
+    ["root_synthesized", "INTEGER NOT NULL DEFAULT 0"],
+    ["cairn_tool_attempted", "INTEGER NOT NULL DEFAULT 0"],
+    ["cairn_tool_observed", "INTEGER NOT NULL DEFAULT 0"],
+    ["cairn_visibility_nudged", "INTEGER NOT NULL DEFAULT 0"],
+    ["execution_tool_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["stop_nudges", "INTEGER NOT NULL DEFAULT 0"],
+    ["stop_blocked", "INTEGER NOT NULL DEFAULT 0"],
+    ["completion_nudged", "INTEGER NOT NULL DEFAULT 0"],
+  ];
+  for (const [name, def] of expectedCols) {
+    if (!cols.has(name)) {
+      db.run(`ALTER TABLE lifecycle_turns ADD COLUMN ${name} ${def}`);
+    }
+  }
 }
 
 function parseJsonArray(val: unknown): string[] {

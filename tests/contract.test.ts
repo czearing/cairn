@@ -202,21 +202,33 @@ test("hook enforces hard-block when no contract is declared and allows execution
       toolResult: { accepted: true },
     });
 
-    // Mutation tool is now permitted
-    const writeAllowed = invoke("pre-tool", {
+    // Before editing, research and root node declaration in Cairn are required
+    const writeWithoutResearch = invoke("pre-tool", {
       sessionId: session,
       toolName: "edit",
       toolArgs: { path: "src/index.ts", old_str: "a", new_str: "b" },
     });
-    expect(writeAllowed.stdout.toString()).toBe("{}");
+    expect(writeWithoutResearch.stdout.toString()).toContain('"permissionDecision":"deny"');
+    expect(writeWithoutResearch.stdout.toString()).toContain("Research in Cairn first");
 
-    // Simulate brain search and mutations so brain gate passes
+    // Perform brain search
     invoke("post-tool", {
       sessionId: session,
       toolName: "cairn-brain_search",
       toolArgs: { query: "refactor" },
       toolResult: { success: true },
     });
+
+    // Still blocked until root node is created
+    const writeWithoutNode = invoke("pre-tool", {
+      sessionId: session,
+      toolName: "edit",
+      toolArgs: { path: "src/index.ts", old_str: "a", new_str: "b" },
+    });
+    expect(writeWithoutNode.stdout.toString()).toContain('"permissionDecision":"deny"');
+    expect(writeWithoutNode.stdout.toString()).toContain("Decompose your task in Cairn first");
+
+    // Create and answer nodes
     invoke("post-tool", {
       sessionId: session,
       toolName: "cairn-brain_create",
@@ -225,15 +237,55 @@ test("hook enforces hard-block when no contract is declared and allows execution
     });
     invoke("post-tool", {
       sessionId: session,
+      toolName: "cairn-brain_create",
+      toolArgs: { text: "What is subtask 1?" },
+      toolResult: { success: true, id: "child1" },
+    });
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-brain_create",
+      toolArgs: { text: "What is subtask 2?" },
+      toolResult: { success: true, id: "child2" },
+    });
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-brain_mutate",
+      toolArgs: { id: "child1", answer: "Done 1", citation: "https://example.com" },
+      toolResult: { success: true, id: "child1" },
+    });
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "cairn-brain_mutate",
+      toolArgs: { id: "child2", answer: "Done 2", citation: "https://example.com" },
+      toolResult: { success: true, id: "child2" },
+    });
+    invoke("post-tool", {
+      sessionId: session,
       toolName: "cairn-brain_mutate",
       toolArgs: { id: "root", answer: "Done", citation: "https://example.com" },
       toolResult: { success: true, id: "root" },
     });
 
+    // Mutation tool is now permitted
+    const writeAllowed = invoke("pre-tool", {
+      sessionId: session,
+      toolName: "edit",
+      toolArgs: { path: "src/index.ts", old_str: "a", new_str: "b" },
+    });
+    expect(writeAllowed.stdout.toString()).toBe("{}");
+
+    // Execute the edit tool
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "edit",
+      toolArgs: { path: "src/index.ts", old_str: "a", new_str: "b" },
+      toolResult: { success: true },
+    });
+
     // Turn completion is blocked because contract criteria are still unmet
     const stopBlocked = invoke("agent-stop", { sessionId: session });
     expect(stopBlocked.stdout.toString()).toContain('"decision":"block"');
-    expect(stopBlocked.stdout.toString()).toContain("These declared criteria are unmet");
+    expect(stopBlocked.stdout.toString()).toContain("These declared items are unmet");
 
     // Close one criterion via command run, and one via explicit evidence in single call
     invoke("post-tool", {

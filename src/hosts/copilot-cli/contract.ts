@@ -175,22 +175,23 @@ export function contractExhausted(sessionId = ""): boolean {
  * `changedDurableState` is accepted for call-site compatibility and deliberately unused — see
  * recordObservedRun for why forcing a falsifiable check onto every task made real tasks worse.
  */
-export function contractStopReason(_changedDurableState = false, sessionId = ""): string {
+export function contractStopReason(changedDurableState = false, sessionId = ""): string {
+  if (!changedDurableState) return "";
   const contract = readContract(sessionId);
   if (contract && contract.nudges > cap()) return "";
   if (!contract?.criteria.length) {
-    return "Before ending this turn, declare what done means for it: call the `contract` tool with the"
-      + " criteria this task must meet, then satisfy each one. Do not end by offering to do the work.";
+    return "Before ending this turn, declare what done means for it: call the `plan` (or `contract`) tool with the"
+      + " tasks this task must meet, then satisfy each one. Do not end by offering to do the work.";
   }
   const unmet = contract.criteria.filter((criterion) => !criterion.passed).map((criterion) => criterion.check);
   const atCap = contract.nudges === cap();
   if (unmet.length) {
     // At the cap an unmeetable criterion leaves as named evidence rather than as a vague "I could not".
     return atCap
-      ? `Your contract still has unmet criteria after ${cap()} attempts: ${unmet.join(" | ")}. For each one,`
+      ? `Your plan still has unmet items after ${cap()} attempts: ${unmet.join(" | ")}. For each one,`
         + " report exactly what you did, its output, and the specific decision it needs from the user."
-      : `Not done. These declared criteria are unmet: ${unmet.join(" | ")}. Do the work that meets them,`
-        + " then record each with the `contract` tool. Do not ask whether to continue.";
+      : `Not done. These declared items are unmet: ${unmet.join(" | ")}. Do the work that meets them,`
+        + " then record each with the `plan` tool. Do not ask whether to continue.";
   }
   return "";
 }

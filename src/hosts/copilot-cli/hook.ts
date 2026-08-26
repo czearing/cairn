@@ -122,10 +122,12 @@ export interface WorkflowEvidence {
   stopNudges: number;
   strict?: boolean;
   minimumBrainNodes?: number;
+  executionToolCount?: number;
 }
 
 export function stopDecision(s: WorkflowEvidence): { file: string } {
   if (s.stopNudges >= OUTAGE_CAP) return { file: "" };
+  if (s.executionToolCount === 0) return { file: "" };
   if (s.strict && !brainWorkComplete(s)) {
     return { file: (s.brainSearched && (s.brainCreatedCount ?? 0) === 0)
       ? "brain-reuse-reminder.md"
@@ -477,10 +479,26 @@ export async function runCopilotHook(): Promise<void> {
       decision = { deny: false };
     }
 
-    if (!decision.deny && !isTask(toolName) && countsAsExecution(toolName, args)
-      && !contractDeclared(sessionId) && !contractExhausted(sessionId) && !contractInstrumentMissing(sessionId)) {
-      emit({ permissionDecision: "deny", permissionDecisionReason: CONTRACT_DECLARE_REASON });
-      return;
+    if (!decision.deny && !isTask(toolName) && countsAsExecution(toolName, args)) {
+      if (!contractDeclared(sessionId) && !contractExhausted(sessionId) && !contractInstrumentMissing(sessionId)) {
+        emit({ permissionDecision: "deny", permissionDecisionReason: CONTRACT_DECLARE_REASON });
+        return;
+      }
+      const st = readLifecycle(turnScope(sessionId, agentId));
+      if (!st.searched) {
+        emit({
+          permissionDecision: "deny",
+          permissionDecisionReason: "Research in Cairn first: call `brain_search` to check for relevant prior knowledge before modifying files or executing changes.",
+        });
+        return;
+      }
+      if (st.createdCount === 0 && st.reusedCount === 0) {
+        emit({
+          permissionDecision: "deny",
+          permissionDecisionReason: "Decompose your task in Cairn first: declare your root question with `brain_create` (or reuse a covering node with `brain_mutate`) before modifying files or executing changes.",
+        });
+        return;
+      }
     }
     emit(decision.deny ? { permissionDecision: "deny", permissionDecisionReason: decision.reason } : {});
     return;
@@ -607,6 +625,7 @@ export async function runCopilotHook(): Promise<void> {
       stopNudges: st.stopNudges,
       strict: true,
       minimumBrainNodes: requiredBrainNodes(st.executionToolCount),
+      executionToolCount: st.executionToolCount,
     }).file;
 
     const deficit = file === "turn-reminder.md"
@@ -666,7 +685,7 @@ export async function runCopilotHook(): Promise<void> {
       return;
     }
 
-    if (completionContinuationEnabled() && !st.completionNudged) {
+    if (completionContinuationEnabled() && st.executionToolCount > 0 && !st.completionNudged) {
       updateLifecycle(stateId, (current) => ({ ...current, completionNudged: true }));
       recordTelemetryState({
         host: "copilot", sessionId, turnSeq: st.turnSeq,

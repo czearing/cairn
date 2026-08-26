@@ -42,9 +42,9 @@ const call = (name: string, args: Record<string, unknown>) =>
   }>;
 const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.text);
 
-test("exposes only the agent-owned brain and skill tools", async () => {
+test("exposes only the agent-owned brain and contract tools", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "contract", "skill_create", "skill_edit", "skill_select"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "contract"]);
 });
 
 test("tool results expose content-free MCP runtime identity", async () => {
@@ -104,7 +104,7 @@ test("MCP calls record local size and latency telemetry", async () => {
   expect(event.version).toBe(releaseVersion);
   expect(event.run_class).toBe("human");
   expect(columns.map((column) => column.name)).not.toContain("content");
-  expect(schemas.tools).toBe(8);
+  expect(schemas.tools).toBe(5);
   expect(schemas.chars).toBeGreaterThan(0);
   expect(schemas.tokens).toBeGreaterThan(0);
 });
@@ -257,63 +257,4 @@ test("brain_delete removes a thought", async () => {
   const n = parse(await call("brain_create", { text: "to delete" }));
   expect(parse(await call("brain_delete", { id: n.id })).deleted).toBe(true);
   expect(parse(await call("brain_delete", { id: n.id })).deleted).toBe(false);
-});
-
-test("skill_create mints a new skill and remains idempotent", async () => {
-  const metadata = {
-    title: "Flash Fiction",
-    description: "Use for writing complete 500-word stories and compact fictional scenes with a clear turn and deliberate ending.",
-    plan: "1. Define the dramatic turn\n2. Draft the complete scene\n3. Revise the ending",
-    whyExistingSkillsDoNotFit: "The current catalog has no general short-fiction writing capability.",
-  };
-  const created = parse(await call("skill_create", metadata));
-  expect(created).toMatchObject({ created: true, title: "Flash Fiction" });
-  expect(typeof created.id).toBe("string");
-  expect(created.id.length).toBeGreaterThan(0);
-  const again = parse(await call("skill_create", { ...metadata, title: "flash fiction" }));
-  expect(again).toMatchObject({ created: false, id: created.id }); // idempotent: same normalized label -> same id
-
-});
-
-test("skill_create rejects narrow or unjustified capabilities", async () => {
-  const narrowDescription = await call("skill_create", {
-    title: "upset user response",
-    description: "Reply to one upset user.",
-    plan: "1. Reply politely\n2. Check tone",
-    whyExistingSkillsDoNotFit: "The catalog does not contain this exact emotional response.",
-  });
-  expect(narrowDescription.isError).toBe(true);
-
-  const noCatalogReason = await call("skill_create", {
-    title: "debugging",
-    description: "Use for debugging failing APIs and broken builds through evidence, hypotheses, and direct validation across reusable software failures.",
-    plan: "1. Reproduce the failure\n2. Test one causal hypothesis",
-    whyExistingSkillsDoNotFit: "none",
-  });
-  expect(noCatalogReason.isError).toBe(true);
-});
-
-test("skill_edit rewrites a skill's master directly (agent-driven fix, no grader needed)", async () => {
-  const created = parse(await call("skill_create", {
-    title: "flash edit",
-    description: "Use for editing short paragraphs and tightening concise interface copy while preserving intent and improving clarity.",
-    plan: "1. Identify the intended meaning\n2. Tighten the prose\n3. Verify the meaning remains",
-    whyExistingSkillsDoNotFit: "No existing catalog entry handles compact prose editing.",
-  }));
-  const ok = parse(await call("skill_edit", { id: created.id, master: "1. do the thing better\n2. verify the result" }));
-  expect(ok).toMatchObject({ ok: true, id: created.id, task: "flash edit" });
-  const bad = await call("skill_edit", { id: "no-such-id", master: "1. x" });
-  expect(bad.isError).toBe(true); // unknown id rejected
-  const selected = parse(await call("skill_select", { ids: ["flash edit"] }));
-  expect(selected).toEqual({
-    selected: [{ id: created.id, steps: expect.stringContaining("do the thing better") }],
-    catalogSize: expect.any(Number),
-  });
-  // The catalog was delivered and simply held no fit, which must never look like an absent catalog.
-  expect(parse(await call("skill_select", { ids: ["none"] }))).toEqual({
-    selected: [],
-    catalogSize: expect.any(Number),
-    noMatch: true,
-    reason: "no_match_in_catalog",
-  });
 });

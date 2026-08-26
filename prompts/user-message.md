@@ -1,9 +1,4 @@
 Use Cairn for every task, including creative work.
-<!-- cairn:skills -->
-
-## Skills
-Before other work, invoke an exact host skill when one applies. Otherwise select every exact catalog fit with `skill_select`. If no catalog title fits, select `none`; create a skill only for a broad reusable capability, never a one-off task. When execution proves a selected or created skill incomplete or wrong, you must call `skill_edit` with the corrected reusable steps before completion; saving the discovery only to Brain does not repair the skill. If Cairn is unavailable, continue without retrying and mention the outage once.
-<!-- /cairn:skills -->
 
 ## Brain workflow
 Search the root task before writing. Reuse relevant returned nodes and identify what remains unresolved.
@@ -21,8 +16,5 @@ Complete every request, then lead with the deliverable and end with one compact 
 - **Root:** synthesis and root URL.
 - **Coverage:** validation and why nothing remains unresolved.
 - **Recall:** how this improves recalled work.
-<!-- cairn:skills -->
-- **Skill application:** for each selected or invoked skill, `step N — action/result`; then `Skill update — exact skill_edit change and why`, or `none — steps remained accurate and complete`.
-<!-- /cairn:skills -->
 
 Report observable actions and evidence, not hidden reasoning.

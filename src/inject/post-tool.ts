@@ -8,6 +8,5 @@ export function postToolPromptFiles(tool: string, _answer = ""): string[] {
   if (matches(tool, "brain_search")) return ["search-results.md"];
   if (matches(tool, "brain_create")) return ["node-created.md"];
   if (matches(tool, "brain_mutate")) return [];
-  if (task(tool)) return ["orchestrate.md", "subtask-spawned.md"];
   return [];
 }

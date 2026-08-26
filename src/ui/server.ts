@@ -26,26 +26,6 @@ async function handler(req: Request): Promise<Response> {
   if (pathname === "/api/search") return Response.json({
     results: await engineSearch(searchParams.get("q") || ""),
   });
-  // Skill store viewer: what skills exist, their master prompts, and the score of each run over time.
-  if (pathname === "/api/skills" && m === "GET") {
-    const { listSkills } = await import("../skill/store");
-    const all = listSkills();
-    const q = searchParams.get("q");
-    if (q && q.trim()) {
-      // Semantic search: rank skills by relevance, then keep only the RELEVANT ones (drop the anisotropy-floor
-      // tail so "how to write code" stops surfacing "audio ref selection"). Floor at 0.25; if nothing clears it,
-      // fall back to the single best match so a vague query still returns something.
-      const { rankSkillIds } = await import("../skill/retrieve");
-      const order = await rankSkillIds(q);
-      const FLOOR = Number(process.env.CAIRN_SKILL_SEARCH_FLOOR || "0.25");
-      const kept = order.filter((o) => o.score >= FLOOR);
-      const chosen = kept.length ? kept : order.slice(0, 1);
-      const byId = new Map(all.map((s) => [s.id, s]));
-      const ranked = chosen.map((o) => { const s = byId.get(o.id); return s ? { ...s, score: o.score } : null; }).filter(Boolean);
-      return Response.json({ skills: ranked, query: q });
-    }
-    return Response.json({ skills: all });
-  }
   if ((pathname === "/api/telemetry" || pathname === "/api/usage") && m === "GET") {
     const days = Math.max(1, Number(searchParams.get("days") || "7"));
     const { telemetrySummary } = await import("../core/telemetry");
@@ -53,17 +33,6 @@ async function handler(req: Request): Promise<Response> {
     return Response.json({ usage: report, quality: report.quality });
   }
   if (pathname === "/usage") return asset("usage.html", "text/html; charset=utf-8");
-  // Delete a skill (and its runs + version history) by id, for the /skills page delete button.
-  if (pathname.startsWith("/api/skills/") && m === "DELETE") {
-    const id = decodeURIComponent(pathname.slice("/api/skills/".length));
-    const { deleteSkill } = await import("../skill/store");
-    return Response.json({ deleted: deleteSkill(id) });
-  }
-  if (pathname === "/skills") return asset("skills.html", "text/html; charset=utf-8");
-  // Live activity feed data, consumed by the unified /skills dashboard (newest first).
-  if (pathname === "/api/activity" && m === "GET") { const { readActivity } = await import("../skill/activity"); return Response.json({ activity: readActivity().slice(-100).reverse() }); }
-  // /activity converged into /skills (one dashboard: skills + live feed). Redirect old links there.
-  if (pathname === "/activity") return new Response(null, { status: 302, headers: { location: "/skills" } });
 
   if (pathname === "/api/neurons" && m === "POST") {
     const b = (await req.json()) as Body;

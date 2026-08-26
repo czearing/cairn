@@ -12,7 +12,6 @@ import {
   installCopilotHook,
   copilotMcpPath,
 } from "./hosts/copilot-cli/setup";
-import { libsqlEnv } from "./libsql-env";
 import {
   buildMcpBundle,
   mcpLaunchArgs,
@@ -85,7 +84,7 @@ async function installHooks(dryRun: boolean): Promise<{ added: string[]; bak: bo
 function registerMcp(dryRun: boolean): "registered" | "updated" | "already" | "failed" | "no-cli" | "would-register" {
   const claude = Bun.which("claude");
   if (!claude) return "no-cli";
-  const env = { ...libsqlEnv(), ...mcpRuntimeEnv() };
+  const env = mcpRuntimeEnv();
   const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
   const launch = mcpLaunchArgs();
   const runtime = launch[launch.length - 1]!.replace(/\\/g, "/");
@@ -139,23 +138,6 @@ function linkCommand(dryRun: boolean): { path: string; created: boolean; onBunPa
   return { path: target, created: true, onBunPath };
 }
 
-// Persist the cloud-sync settings to ~/.cairn/config.json when they are present in the environment.
-// This is the shared source of truth that lets the short-lived hook processes (which don't inherit
-// the MCP server's env) see that sync is on and read the same replica the server maintains. The
-// secret lives only in this local file, never in the repo.
-function writeSyncConfig(dryRun: boolean): "written" | "would-write" | "none" {
-  const env = libsqlEnv();
-  if (!env.CAIRN_LIBSQL_URL || !env.CAIRN_LIBSQL_TOKEN) return "none";
-  if (dryRun) return "would-write";
-  const path = process.env.CAIRN_CONFIG_PATH || join(homedir(), ".cairn", "config.json");
-  const libsql: Record<string, string | number> = { url: env.CAIRN_LIBSQL_URL, token: env.CAIRN_LIBSQL_TOKEN };
-  if (env.CAIRN_LIBSQL_SYNC_PERIOD) libsql.syncPeriod = Number(env.CAIRN_LIBSQL_SYNC_PERIOD);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify({ libsql }, null, 2)}\n`, "utf8");
-  chmodSync(path, 0o600);
-  return "written";
-}
-
 // Install a `cairn` subagent definition so spawned subagents AND agent-team teammates run under the
 // SAME injected brain prompts. Its frontmatter hooks run this same dispatch (SessionStart injects the
 // workflow, PostToolUse the state-specific reminders, Stop→SubagentStop the completion gate);
@@ -201,10 +183,6 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  if (!dryRun) {
-    const { skillCatalog } = await import("./skill/store");
-    skillCatalog();
-  }
 
   // ── Phase 2: hooks ────────────────────────────────────────────────────────────────────────
   line(c.dim("\n2/7  Claude Code prompt-injection hooks"));
@@ -217,8 +195,8 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
   const mcp = process.env.CAIRN_SKIP_MCP ? "skipped" : registerMcp(dryRun);
   const manual = `claude mcp add ${mcpName()} --scope user -- "${bun()}" ${mcpLaunchArgs().map((a) => `"${a}"`).join(" ")}`;
   if (mcp === "skipped") step(`${sym.dot} Skipped (CAIRN_SKIP_MCP set).`);
-  else if (mcp === "registered") step(`${sym.ok} Registered '${mcpName()}' at user scope.${Object.keys(libsqlEnv()).length ? c.dim(" (cloud sync wired in)") : ""}`);
-  else if (mcp === "updated") step(`${sym.ok} Updated '${mcpName()}' with cloud-sync credentials.`);
+  else if (mcp === "registered") step(`${sym.ok} Registered '${mcpName()}' at user scope.`);
+  else if (mcp === "updated") step(`${sym.ok} Updated '${mcpName()}'.`);
   else if (mcp === "would-register") step(`${sym.dot} Would register '${mcpName()}' at user scope.`);
   else if (mcp === "already") step(`${sym.dot} Already registered. No change.`);
   else if (mcp === "no-cli") {
@@ -228,10 +206,6 @@ export async function install(opts: { dryRun?: boolean } = {}): Promise<void> {
     step(`${sym.warn} Auto-register failed. Run it manually:`);
     step(`    ${c.cyan(manual)}`);
   }
-  const synced = writeSyncConfig(dryRun);
-  if (synced === "written") step(`${sym.ok} Cloud sync enabled — wrote ${c.dim("~/.cairn/config.json")} ${c.dim("(shared by the server + hooks)")}.`);
-  else if (synced === "would-write") step(`${sym.dot} Would write cloud-sync config to ~/.cairn/config.json.`);
-  else step(`${sym.dot} Cloud sync ${c.bold("off")} ${c.dim("(local brain). Set CAIRN_LIBSQL_URL + CAIRN_LIBSQL_TOKEN and re-run to share one brain across devices.")}`);
 
   const agent = await installSubagent(dryRun);
   if (agent === "written") step(`${sym.ok} Installed the ${c.cyan("cairn")} subagent ${c.dim("(~/.claude/agents/cairn.md — same brain prompts for spawned agents/teams)")}.`);

@@ -20,12 +20,7 @@ interface VerifyResult {
 export async function smokeMain(): Promise<VerifyResult> {
   const dir = mkdtempSync(join(tmpdir(), "cairn-verify-"));
   process.env.CAIRN_DB_PATH = join(dir, "verify.db");
-  // Isolate from cloud: point config at a nonexistent file so config.json's libsql creds aren't read.
-  // The smoke test proves the brain MECHANICS (model + store + recall) on a throwaway LOCAL db — it
-  // must never depend on, hang on, or write a test neuron into the cloud sync.
-  process.env.CAIRN_CONFIG_PATH = join(dir, "no-cloud.json");
-  delete process.env.CAIRN_LIBSQL_URL;
-  delete process.env.CAIRN_LIBSQL_TOKEN;
+  process.env.CAIRN_CONFIG_PATH = join(dir, "no-config.json");
   let warmMs = 0;
   let smokeMs = 0;
   try {

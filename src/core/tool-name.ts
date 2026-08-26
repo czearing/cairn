@@ -4,7 +4,7 @@
  *  Written as an explicit scan rather than a pattern. This sits under every graded metric and every
  *  telemetry attribution, and a pattern that silently fails to match reports each dependent count as
  *  zero, which is indistinguishable from real non-compliance. */
-const cairnToolPrefixes = ["brain_", "skill_"];
+const cairnToolPrefixes = ["brain_"];
 
 export function normalizeToolName(value: string): string {
   const lower = value.toLowerCase();

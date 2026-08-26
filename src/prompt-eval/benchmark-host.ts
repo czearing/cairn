@@ -1,10 +1,62 @@
 import { Database } from "bun:sqlite";
-import { existsSync, readFileSync } from "node:fs";
-import { cairnMcpConfigPath } from "../skill/cairn-mcp";
-import { runClaude } from "../skill/claude";
-import { runCopilot } from "../skill/copilot";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import type { Assertion } from "./assertions";
 import type { PromptHost } from "./types";
+
+const ROOT = resolve(import.meta.dir, "..", "..");
+const CLI = join(ROOT, "src", "cli.ts");
+
+export function cairnMcpConfigPath(): string {
+  const configPath = join(tmpdir(), "cairn-benchmark-mcp.json");
+  writeFileSync(configPath, JSON.stringify({
+    mcpServers: {
+      cairn: {
+        command: Bun.which("bun") || "bun",
+        args: [CLI, "mcp"],
+      },
+    },
+  }, null, 2));
+  return configPath;
+}
+
+export async function runClaude(
+  task: string,
+  opts: { system?: string; allowedTools?: string[]; mcpConfigPath?: string; env?: Record<string, string>; model?: string; cwd?: string },
+) {
+  const args = ["claude", "-p", task];
+  if (opts.system) args.push("--system-prompt", opts.system);
+  if (opts.model) args.push("--model", opts.model);
+  const proc = Bun.spawn(args, {
+    cwd: opts.cwd,
+    env: { ...process.env, ...opts.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+  return { ok: exitCode === 0, stdout, stderr, error: exitCode !== 0 ? stderr : undefined, exitCode };
+}
+
+export async function runCopilot(
+  task: string,
+  opts: { system?: string; allowedTools?: string[]; mcpConfigPath?: string; env?: Record<string, string>; model?: string; cwd?: string },
+) {
+  const args = ["copilot", "-p", task];
+  if (opts.model) args.push("--model", opts.model);
+  const proc = Bun.spawn(args, {
+    cwd: opts.cwd,
+    env: { ...process.env, ...opts.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+  return { ok: exitCode === 0, stdout, stderr, error: exitCode !== 0 ? stderr : undefined, exitCode };
+}
 
 interface BenchmarkCase {
   id: string;

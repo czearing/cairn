@@ -12,7 +12,6 @@ import { existsSync, mkdirSync } from "node:fs";
 import { readFile, writeFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { libsqlEnv } from "../../libsql-env";
 import { releaseVersion } from "../../core/release";
 import {
   buildMcpBundle,
@@ -55,7 +54,7 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   const cfg: McpConfig = existsSync(path) ? JSON.parse(await readFile(path, "utf8")) : {};
   const servers = cfg.mcpServers ?? (cfg.mcpServers = {});
   if (!dryRun) await buildMcpBundle();
-  const env = { ...libsqlEnv(), ...mcpRuntimeEnv() };
+  const env = mcpRuntimeEnv();
   const wantArgs = mcpLaunchArgs();
   const existing = servers[mcpName()] as {
     command?: string;
@@ -83,7 +82,7 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
     type: "local", // Copilot CLI's name for a local stdio server
     command: bunExe(),
     args: wantArgs,
-    env, // CAIRN_LIBSQL_* if set (cloud sync), else {} — CAIRN_DB_PATH is still inherited from the env
+    env,
     deferTools: "never", // Cairn is required every turn; deferred schemas can disappear after compaction
     tools: ["*"], // required by Copilot CLI to enable the server's tools
   };

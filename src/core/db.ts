@@ -6,18 +6,11 @@ import { getLoadablePath } from "sqlite-vec";
 import { config } from "./config";
 import { ensureEngineSchema } from "./schema";
 import { configureSqliteLibrary } from "./sqlite";
-import { startBackgroundSync } from "./sync";
 
 // The brain is opened in one of two modes, decided at open time:
-//   • writer (default)         — bun:sqlite on a local file. Instant local reads/writes; what every
-//                                test uses. When CAIRN_LIBSQL_URL + TOKEN are set, cloud sync runs in
-//                                the BACKGROUND over libSQL's HTTP query API (sync.ts) — never as an
-//                                embedded replica. The embedded replica was removed deliberately: its
-//                                sync() ships DB frames and bills Turso "bytes synced" (which blew our
-//                                quota), and it wedged its WAL under concurrent hook access. HTTP sync
-//                                bills per-row instead and never blocks the read path.
+//   • writer (default)         — bun:sqlite on a local file. Instant local reads/writes; what every test uses.
 //   • reader (CAIRN_READONLY=1) — a read-only consumer (the Claude Code hooks, read-only CLI). Opens
-//                                the current brain file with bun:sqlite read-only: no sync, no write.
+//                                the current brain file with bun:sqlite read-only.
 // Both expose the same prepared-statement surface (all/get/run), so the rest of core (neurons,
 // search) is mode-agnostic.
 
@@ -230,7 +223,5 @@ export function db(): Db {
   // (sync.ts), never on this path — so a slow/broken/unreachable cloud can't hang or corrupt the brain,
   // and cairn never opens a libSQL embedded replica (whose sync() would bill Turso "bytes synced").
   _db = openBun();
-  const { url, token } = config.libsql;
-  if (url && token) { try { startBackgroundSync(_db, url, token); } catch { /* sync is best-effort, never fatal */ } }
   return _db;
 }

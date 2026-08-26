@@ -173,8 +173,6 @@ test("extracts quality from structured isolated events without reading prose", (
     taskAssertionsTotal: 2,
   })).toMatchObject({
     promptTokens: 500,
-    skillSelected: true,
-    selectedSkillIds: ["skill-a"],
     searchBeforeWrite: true,
     rootSynthesizedLast: true,
     createdNodes: 2,
@@ -402,8 +400,8 @@ test("executes exact hashed task assertions instead of accepting a claimed score
 
 test("strips host namespaces from tool names without pattern matching", () => {
   expect(normalizeToolName("mcp__cairn__brain_search")).toBe("brain_search");
-  expect(normalizeToolName("cairn-skill_select")).toBe("skill_select");
-  expect(normalizeToolName("mcp__cairn__skill_create")).toBe("skill_create");
+  expect(normalizeToolName("cairn-brain_create")).toBe("brain_create");
+  expect(normalizeToolName("mcp__cairn__brain_delete")).toBe("brain_delete");
   expect(normalizeToolName("brain_mutate")).toBe("brain_mutate");
   expect(normalizeToolName("Bash")).toBe("bash");
   expect(normalizeToolName("mcp__other__brain_search")).toBe("brain_search");

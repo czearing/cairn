@@ -217,7 +217,7 @@ test("quality telemetry derives reuse and excludes mixed-runtime release compari
   expect(serialized).not.toContain(marker);
   expect(serialized).not.toContain("node-a");
   expect(serialized).not.toContain("skill-a");
-  expect(unknownRuntime).toEqual({ count: 6 });
+  expect(unknownRuntime).toEqual({ count: 3 });
 });
 
 test("cross-session reuse includes prior releases and active stalls use event inactivity", () => {

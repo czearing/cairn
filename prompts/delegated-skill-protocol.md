@@ -1,1 +1,0 @@
-[cairn] Execute the parent-selected skill below. Return the deliverable plus `Skill application — step N: action/result` for each step and `Reusable correction — ...` or `none`. Report evidence, not hidden reasoning; the parent owns skill edits. Cairn tools may be unavailable here.

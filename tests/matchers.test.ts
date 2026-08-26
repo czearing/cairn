@@ -24,10 +24,6 @@ test("namespaced MCP tool names match", () => {
   expect(tool("mcp__cairn__brain_create")).toEqual({ promptFile: "node-created.md" });
 });
 
-test("Task → subtask-spawned.md", () => {
-  expect(tool("Task")).toEqual({ promptFile: "subtask-spawned.md" });
-});
-
 test("unrelated tool → no match", () => {
   expect(tool("Read")).toBeNull();
 });

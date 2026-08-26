@@ -11,7 +11,6 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { config } from "../core/config";
 import { estimatedTokens } from "../core/telemetry";
-import { formatSkillCatalog } from "../skill/catalog";
 import { runAssertions } from "./assertions";
 import {
   databaseSnapshot,
@@ -99,11 +98,9 @@ async function runPrompt(
   promptPath: string,
   snapshot: Uint8Array,
   root: string,
-  catalogMode: "full" | "titles",
   hookPromptDir?: string,
 ): Promise<PromptBenchmark> {
-  const base = readFileSync(promptPath, "utf8").trim();
-  const fullPrompt = `${base}\n\n${formatSkillCatalog(catalogMode)}`;
+  const fullPrompt = readFileSync(promptPath, "utf8").trim();
   const promptHash = hash(`${fullPrompt}\n${promptProfile(hookPromptDir)}`);
   const runs: PromptBenchmark["runs"] = [];
   for (const host of plan.hosts) {
@@ -190,11 +187,9 @@ export async function runPromptComparison(input: {
     const snapshot = databaseSnapshot(resolve(input.sourceDatabase || config.dbPath));
     const baseline = await runPrompt(
       plan, "baseline", resolve(input.baselinePromptPath), snapshot, root,
-      plan.baselineCatalogMode || "full",
       plan.baselineHookPromptDir ? resolve(plan.baselineHookPromptDir) : undefined);
     const candidate = await runPrompt(
       plan, "candidate", resolve(input.candidatePromptPath), snapshot, root,
-      plan.candidateCatalogMode || "full",
       plan.candidateHookPromptDir ? resolve(plan.candidateHookPromptDir) : undefined);
     writeFileSync(join(output, "baseline.json"), JSON.stringify(baseline, null, 2));
     writeFileSync(join(output, "candidate.json"), JSON.stringify(candidate, null, 2));

@@ -58,7 +58,7 @@ export function recordTelemetry(input: TelemetryEvent): boolean {
 
 export function beginTelemetryRun(input: TelemetryRunIdentity & {
   promptHash: string;
-  catalogVersion: string;
+  catalogVersion?: string;
   injectedChars: number;
   model?: string;
   ts?: number;
@@ -67,7 +67,8 @@ export function beginTelemetryRun(input: TelemetryRunIdentity & {
     const db = telemetryDatabase();
     if (!db || !input.sessionId) return false;
     const runId = telemetryRunId(input);
-    const release = releaseFingerprint(input.promptHash, input.catalogVersion);
+    const catalogVersion = input.catalogVersion || "";
+    const release = releaseFingerprint(input.promptHash, catalogVersion);
     const version = process.env.CAIRN_RELEASE || releaseVersion;
     const runClass = telemetryRunClass();
     const startedTs = input.ts ?? Date.now();
@@ -85,7 +86,7 @@ export function beginTelemetryRun(input: TelemetryRunIdentity & {
       injected_tokens=excluded.injected_tokens`).run(
       runId, input.host, sessionHash(input.sessionId), input.turnSeq,
       release, version, input.model?.trim() || "unknown", input.promptHash,
-      input.catalogVersion, runClass, startedTs,
+      catalogVersion, runClass, startedTs,
       estimatedTokens(input.injectedChars),
     );
     db.query(`UPDATE telemetry_events SET run_id=?,
@@ -211,13 +212,13 @@ export function recordTelemetryState(input: TelemetryRunIdentity & {
 }
 
 export function finishTelemetryRun(input: TelemetryRunIdentity & {
-  completed: boolean; workflowPassed: boolean; skillUsed: boolean;
+  completed: boolean; workflowPassed: boolean; skillUsed?: boolean;
   brainUsed: boolean; stopNudges: number; status?: string;
 }): void {
   try {
     telemetryDatabase()?.query(`UPDATE telemetry_runs SET ended_ts=?,completed=?,
       workflow_passed=?,skill_used=?,brain_used=?,stop_nudges=?,status=? WHERE run_id=?`).run(
-      Date.now(), Number(input.completed), Number(input.workflowPassed), Number(input.skillUsed),
+      Date.now(), Number(input.completed), Number(input.workflowPassed), Number(Boolean(input.skillUsed)),
       Number(input.brainUsed), input.stopNudges, input.status || "completed", telemetryRunId(input),
     );
   } catch { /* telemetry never blocks the host */ }

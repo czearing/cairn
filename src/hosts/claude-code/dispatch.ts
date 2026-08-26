@@ -18,17 +18,11 @@ process.env.CAIRN_READONLY = "1";
 
 const isBrainCreate = (t: string) => t === "brain_create" || t.endsWith("__brain_create");
 
-// Fired once per turn (PreToolUse) if the agent reaches for an action tool without having selected a skill.
-const SKILL_REMINDER =
-  "Before acting, read the injected catalog and call skill_select with every skill id you will use, or skill_create with a broad description and initial numbered plan. You will not be reminded again this turn.";
+// Fired once per turn (PreToolUse) if needed.
 const COMPLETION_REMINDER =
   "Ensure you completed every requested task.";
-const SKILL_APPLICATION_REMINDER =
-  "End with one compact **Cairn** receipt: `Root — synthesis (URL)`; `Coverage — validation and why nothing remains`; `Recall — improvement`; `Skill application — step N: action/result` for every selected or invoked skill; `Skill update — exact skill_edit change and why`, or `none — steps remained accurate and complete`. Report observable evidence, not hidden reasoning.";
-const SKILL_CORRECTION_REMINDER =
-  "Cairn recorded a failed execution after selecting a reusable skill. Before completing, call skill_edit for every affected selected skill and fold the corrected reusable steps into its master prompt. Saving the discovery only to Brain does not repair the skill.";
 const CAIRN_VISIBILITY_REMINDER =
-  "Cairn's required brain and skill tools were not visible in this session. The host may have cached an earlier MCP startup failure. Do not retry unavailable tools or block the user's task; finish it and clearly report the Cairn quality outage so the MCP connection can be restarted.";
+  "Cairn's required brain tools were not visible in this session. The host may have cached an earlier MCP startup failure. Do not retry unavailable tools or block the user's task; finish it and clearly report the Cairn quality outage so the MCP connection can be restarted.";
 
 // Awaited write so the buffer is fully flushed before we force-exit (a bare process.exit() right
 // after process.stdout.write() can truncate piped output).
@@ -39,7 +33,7 @@ async function main(): Promise<void> {
   // rather than crashing the process before it can exit cleanly.
   const { inject } = await import("../../inject/inject");
   const { getEventName, normalizeClaudeCode } = await import("./normalize");
-  const { respond, denyPreTool, modifyPreTool } = await import("./respond");
+  const { respond, denyPreTool } = await import("./respond");
   const { rootId, openBranchExists } = await import("../../core/audit");
 
   const raw = await Bun.stdin.text();
@@ -65,13 +59,11 @@ async function main(): Promise<void> {
   const observedContext = async (source: string, text: string): Promise<string> => {
     try {
       const { recordTelemetry } = await import("../../core/telemetry");
-      const { lifecycleScope, readLifecycle } = await import("../../skill/lifecycle");
       recordTelemetry({
         kind: "context",
         source,
         host: "claude",
         sessionId: payloadSession,
-        turnSeq: readLifecycle(lifecycleScope("claude", payloadSession)).turnSeq,
         contextChars: text.length,
         eventKey: hostEventKey ? `${hostEventKey}:${source}` : undefined,
       });
@@ -79,11 +71,7 @@ async function main(): Promise<void> {
     return text;
   };
 
-  // Subagent lifecycle: a spawned subagent runs this same dispatch via its definition's frontmatter
-  // hooks, so it gets the identical injected prompts. Two events need mapping. SessionStart is the
-  // subagent's first-prompt moment (UserPromptSubmit never fires for a subagent), so inject the same
-  // workflow prompt the main agent gets. A subagent's Stop arrives as SubagentStop — treat it exactly
-  // like Stop so the same record/split-leaves enforcement runs (the response shape is identical).
+  // Subagent lifecycle: SessionStart injects the workflow prompt.
   const hookName = (payload as { hook_event_name?: unknown }).hook_event_name;
   if (hookName === "SessionStart") {
     const content = await inject({ kind: "user_message", text: "" });
@@ -91,8 +79,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  // A subagent (Task tool) finished. SubagentStop is a PARENT-session event, so skip the
-  // Stop-shaped nudge that would otherwise fire back into a finished subagent.
   if (hookName === "SubagentStop") return;
 
   const event = await normalizeClaudeCode(payload);
@@ -111,68 +97,15 @@ async function main(): Promise<void> {
     }
   }
 
-  // Subagent prompt injection. A subagent does NOT inherit the cairn prompt (SessionStart does not fire for
-  // subagents, tested 2026-06-29). The ONE channel that reaches a subagent's own context is its Task prompt, so
-  // when the parent spawns a Task we rewrite the prompt (PreToolUse updatedInput) to prepend the cairn protocol,
-  // giving every subagent the skill_select + brain behavior. The orchestrate.md reminder still rides
-  // back to the parent as additionalContext. Best-effort: on any failure, fall through to normal handling.
-  if (event.kind === "tool_pending" && (event.tool === "Task" || event.tool === "Agent")) {
-    try {
-      const orig = typeof event.input.prompt === "string" ? event.input.prompt : "";
-      if (orig.trim()) {
-        const fs = await import("node:fs");
-        const { applySkillSections, formatSkillCatalog, selectedSkillBlock, skillIdsFromTask } = await import("../../skill/catalog");
-        const { skillsEnabled } = await import("../../core/config");
-        const { lifecycleScope, readLifecycle, registerDelegation } = await import("../../skill/lifecycle");
-        const orchestrate = await inject(event); // parent-facing disjoint-coordination reminder (or null)
-        const parentScope = lifecycleScope("claude", (payload as { session_id?: string }).session_id ?? "");
-        const selected = readLifecycle(parentScope).pendingReviewIds.filter((id) => !id.startsWith("__"));
-        const delegated = skillIdsFromTask(event.input).filter((id) => selected.includes(id));
-        const protoFile = delegated.length ? "delegated-skill-protocol.md" : "subagent-protocol.md";
-        const proto = applySkillSections(
-          fs.readFileSync(new URL(`../../../prompts/${protoFile}`, import.meta.url), "utf8"),
-          skillsEnabled(),
-        );
-        if (delegated.length && event.callId) registerDelegation(parentScope, event.callId, delegated);
-        const context = !skillsEnabled() ? "" : delegated.length ? selectedSkillBlock(delegated) : formatSkillCatalog();
-        await observedContext("subagent-prompt", `${proto}\n\n${context}\n`);
-        if (orchestrate) await observedContext("pre-tool:orchestrate", orchestrate);
-        await emit(modifyPreTool({ ...event.input, prompt: `${proto}\n\n${context}\n${orig}` }, orchestrate ?? ""));
-        return;
-      }
-    } catch { /* fall through to normal handling */ }
-  }
-
   const stopHookActive = hookName === "Stop" && (payload as { stop_hook_active?: unknown }).stop_hook_active === true;
-  const session = payloadSession;
-  const { lifecycleScope, readLifecycle, updateLifecycle } = await import("../../skill/lifecycle");
-  const lifecycleId = lifecycleScope("claude", session);
-  const lifecycleState = readLifecycle(lifecycleId);
-  const observed = lifecycleState.cairnToolObserved;
-  const enforceWorkflow = process.env.CAIRN_ENFORCE_STOP_GATES === "1"
-    || observed;
-  let visibilityReminder = "";
-  if (
-    event.kind === "turn_finished"
-    && !enforceWorkflow
-    && !stopHookActive
-    && !lifecycleState.cairnToolAttempted
-    && !lifecycleState.cairnVisibilityNudged
-  ) {
-    updateLifecycle(lifecycleId, (state) => ({
-      ...state,
-      cairnVisibilityNudged: true,
-      stopBlocked: true,
-    }));
-    visibilityReminder = CAIRN_VISIBILITY_REMINDER;
+  let content = stopHookActive ? null : await inject(event);
+  if (hookName === "Stop" && !stopHookActive && process.env.CAIRN_ENFORCE_STOP_GATES === "0") {
+    content = `${CAIRN_VISIBILITY_REMINDER}\n${COMPLETION_REMINDER}`;
   }
-  const content = stopHookActive || (event.kind === "turn_finished" && !enforceWorkflow)
-    ? null
-    : await inject(event);
 
   // Reward depth, not count: praise a new node ONLY when it was linked under a non-root parent
   // (genuine descent). Flat root-children earn no praise.
-  let out = [content, visibilityReminder].filter(Boolean).join("\n\n");
+  let out = content ?? "";
   if (content && event.kind === "tool_completed" && isBrainCreate(event.tool)) {
     const edges = Array.isArray(event.input.edges) ? (event.input.edges as string[]) : [];
     const root = rootId();
@@ -183,149 +116,36 @@ async function main(): Promise<void> {
 
   try {
     const telemetry = await import("../../core/telemetry");
-    const turngate = await import("../../skill/turngate");
+    const { lifecycleScope, readLifecycle, resetLifecycle, updateLifecycle } = await import("../../core/lifecycle");
+    const scope = lifecycleScope("claude", payloadSession);
+    if (event.kind === "user_message") resetLifecycle(scope);
+    const life = readLifecycle(scope);
+    const turnSeq = life.turnSeq;
+
     if (event.kind === "user_message") {
-      turngate.resetSkillTurn(session);
       try { (await import("../../core/auto-update")).maybeAutoUpdate(); }
       catch { /* self-update is background work and never blocks a turn */ }
-      let catalogVersion = "";
-      try {
-        catalogVersion = (await import("../../skill/catalog")).skillCatalogSnapshot().version;
-      } catch { /* a fresh read-only hook database has no skill table yet */ }
-      const state = turngate.skillTurnState(session);
       telemetry.beginTelemetryRun({
-        host: "claude", sessionId: session, turnSeq: state.turnSeq,
-        promptHash: telemetry.promptFingerprint(content || ""), catalogVersion,
+        host: "claude", sessionId: payloadSession, turnSeq,
+        promptHash: telemetry.promptFingerprint(content || ""),
         injectedChars: content?.length || 0,
         model: String((payload as { model?: unknown }).model ?? ""),
       });
     } else if (event.kind === "tool_completed") {
-      const state = turngate.skillTurnState(session);
       telemetry.recordTelemetryTool({
-        host: "claude", sessionId: session, turnSeq: state.turnSeq,
+        host: "claude", sessionId: payloadSession, turnSeq,
         eventKey: qualityEventKey, toolName: event.tool, args: event.input,
         result: event.output, success: telemetry.telemetryResultSucceeded(event.output),
         durationMs: Number((payload as { duration_ms?: unknown }).duration_ms ?? 0),
       });
+    } else if (event.kind === "turn_finished") {
+      telemetry.finishTelemetryRun({
+        host: "claude", sessionId: payloadSession, turnSeq,
+        completed: true, workflowPassed: Boolean(event.usedBrain),
+        brainUsed: event.usedBrain, stopNudges: 0,
+      });
     }
   } catch { /* quality telemetry never blocks the host */ }
-
-  // Skill layer, ON by default (turn off with "skills": false in ~/.cairn/config.json or CAIRN_SKILLS=0). The
-  // agent selects skills ITSELF from the injected catalog via skill_select rather than via a cosine
-  // auto-injection that mispicks near-duplicates. We enforce that with one per-turn reminder: record
-  // when the agent selects, and remind ONCE if it reaches for an action tool first. The latch is
-  // cleared at BOTH turn boundaries — the user_message that starts a normal turn AND the turn_finished that
-  // ends any turn — so the next turn starts clean even when it is a resume after compaction, which fires no
-  // user_message (that gap left a stale searched=true latch and silently suppressed the reminder all session).
-  // On turn end, clear the turn state after all reminders have been satisfied.
-  if ((await import("../../core/config")).skillsEnabled()) {
-    try {
-      const { skillsExist } = await import("../../skill/hook");
-      const {
-        noteCairnToolObserved, noteFailedSkillExecution, noteSkillCorrectionNudge,
-        noteSkillEdit, noteSkillSelection, skillTurnState, claimSkillReminder,
-        isActionTool, isCairnTool, isSkillEdit, isSkillSelection,
-      } = await import("../../skill/turngate");
-      if (event.kind === "tool_completed") {
-        const succeeded = (await import("../../core/telemetry")).telemetryResultSucceeded(event.output);
-        if (isCairnTool(event.tool)) noteCairnToolObserved(session);
-        if (isSkillSelection(event.tool)) {
-          noteSkillSelection(session, event.tool, event.input, event.output);
-        }
-        if (isActionTool(event.tool) && !succeeded && noteFailedSkillExecution(session)) {
-          const telemetry = await import("../../core/telemetry");
-          telemetry.recordTelemetryState({
-            host: "claude", sessionId: session, turnSeq: skillTurnState(session).turnSeq,
-            eventKey: `${qualityEventKey}:skill-correction-required`,
-            kind: "skill_correction_required",
-          });
-        }
-        if (isSkillEdit(event.tool)) {
-          const id = typeof event.input.id === "string" ? event.input.id : "";
-          if (noteSkillEdit(session, id, succeeded)) {
-            const telemetry = await import("../../core/telemetry");
-            telemetry.recordTelemetryState({
-              host: "claude", sessionId: session, turnSeq: skillTurnState(session).turnSeq,
-              eventKey: `${qualityEventKey}:skill-correction-resolved`,
-              kind: "skill_correction_resolved",
-            });
-          }
-        }
-      } else if (
-        event.kind === "tool_pending"
-        && isActionTool(event.tool)
-        && skillsExist()
-        && (process.env.CAIRN_ENFORCE_STOP_GATES === "1" || skillTurnState(session).cairnToolObserved)
-        && claimSkillReminder(session)
-      ) {
-        out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
-      }
-      if (event.kind === "turn_finished") {
-        const skillState = skillTurnState(session);
-        const canEnforce = process.env.CAIRN_ENFORCE_STOP_GATES === "1"
-          || skillState.cairnToolObserved;
-        if (canEnforce && !skillState.selected && !stopHookActive) {
-          out = out ? `${out}\n\n${SKILL_REMINDER}` : SKILL_REMINDER;
-        }
-        if (canEnforce && skillState.invalidatedSkillIds.length
-          && skillState.skillCorrectionNudges < 2 && !stopHookActive) {
-          noteSkillCorrectionNudge(session);
-          out = out ? `${out}\n\n${SKILL_CORRECTION_REMINDER}` : SKILL_CORRECTION_REMINDER;
-        }
-        if (!stopHookActive) {
-          const completion = skillState.selected
-            ? `${COMPLETION_REMINDER}\n\n${SKILL_APPLICATION_REMINDER}`
-            : COMPLETION_REMINDER;
-          out = out ? `${out}\n\n${completion}` : completion;
-        }
-      }
-    } catch { /* skills are best-effort */ }
-  }
-
-  if (event.kind === "turn_finished") {
-    try {
-      const telemetry = await import("../../core/telemetry");
-      const turngate = await import("../../skill/turngate");
-      const state = turngate.skillTurnState(session);
-      if (out) {
-        const correctionBlocked = state.invalidatedSkillIds.length > 0
-          && state.skillCorrectionNudges > 0;
-        telemetry.recordTelemetryState({
-          host: "claude", sessionId: session, turnSeq: state.turnSeq,
-          eventKey: qualityEventKey,
-          kind: visibilityReminder
-            ? "visibility_failure"
-            : correctionBlocked ? "skill_correction_blocked" : "stop_blocked",
-        });
-      } else {
-        const transcriptPath = String((payload as { transcript_path?: unknown }).transcript_path ?? "");
-        if (transcriptPath) {
-          try {
-            const { extractRun } = await import("../../skill/transcript");
-            const { analyzeSkillReceipt, receiptScope, requiredStepCitations } = await import("../../core/skill-receipt");
-            const { recordSkillReceiptTelemetry } = await import("../../core/skill-receipt-telemetry");
-            // The receipt belongs to a reply, not to the whole turn. See receiptScope for why.
-            const run = extractRun(transcriptPath);
-            const output = run ? receiptScope(run.replies, run.output) : "";
-            if (output) {
-              const receipt = analyzeSkillReceipt(output, requiredStepCitations(state.pendingReviewIds));
-              await recordSkillReceiptTelemetry({
-                host: "claude", sessionId: session, turnSeq: state.turnSeq,
-                receiptKey: `${qualityEventKey}:skill-receipt`,
-                receipt, selectedSkillIds: state.pendingReviewIds,
-              });
-            }
-          } catch { /* receipt telemetry never blocks completion */ }
-        }
-        telemetry.finishTelemetryRun({
-          host: "claude", sessionId: session, turnSeq: state.turnSeq,
-          completed: true, workflowPassed: Boolean(event.usedBrain && state.selected),
-          skillUsed: state.selected, brainUsed: event.usedBrain, stopNudges: 0,
-        });
-        turngate.resetSkillTurn(session);
-      }
-    } catch { /* quality telemetry never blocks the host */ }
-  }
 
   if (!out) return;
   const eventName = getEventName(payload);

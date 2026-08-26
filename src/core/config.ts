@@ -6,14 +6,11 @@ import type { SearchOptions } from "./search.types";
 
 const uiPort = Number(process.env.CAIRN_UI_PORT || "3737");
 
-// Sync settings persist to ~/.cairn/config.json so EVERY Cairn process agrees on whether cloud sync
-// is on and where the replica lives — including the short-lived hook processes, which don't inherit
-// the MCP server's env. Environment variables still win when set (tests, migration/CLI scripts). The
-// file path is overridable (CAIRN_CONFIG_PATH) so tests never read the real file.
+// Configuration settings persist to ~/.cairn/config.json so EVERY Cairn process agrees on runtime options
+// — including the short-lived hook processes, which don't inherit the MCP server's env. Environment variables
+// still win when set (tests, CLI scripts). The file path is overridable (CAIRN_CONFIG_PATH) so tests never read the real file.
 const configFilePath = process.env.CAIRN_CONFIG_PATH || join(homedir(), ".cairn", "config.json");
 function fileConfig(): {
-  libsql?: { url?: string; token?: string; localPath?: string; syncPeriod?: number };
-  skills?: boolean;
   usageTelemetry?: boolean;
   autoUpdate?: boolean;
 } {
@@ -26,16 +23,9 @@ function fileConfig(): {
   }
 }
 const parsedFile = fileConfig();
-const fileCfg = parsedFile.libsql && typeof parsedFile.libsql === "object" ? parsedFile.libsql : {};
 
 export const config: CairnConfig = {
   dbPath: process.env.CAIRN_DB_PATH || join(homedir(), ".cairn", "cairn.db"),
-  libsql: {
-    url: process.env.CAIRN_LIBSQL_URL || fileCfg.url || "",
-    token: process.env.CAIRN_LIBSQL_TOKEN || fileCfg.token || "",
-    localPath: process.env.CAIRN_LIBSQL_LOCAL || fileCfg.localPath || join(homedir(), ".cairn", "cairn-replica.db"),
-    syncPeriod: Number(process.env.CAIRN_LIBSQL_SYNC_PERIOD || fileCfg.syncPeriod || "60"),
-  },
   embed: {
     provider: (process.env.CAIRN_EMBED_PROVIDER || "local") as EmbedProvider,
     model: process.env.CAIRN_EMBED_MODEL || "",
@@ -50,12 +40,6 @@ export const config: CairnConfig = {
   duplicateThreshold: Number(process.env.CAIRN_DUPLICATE_THRESHOLD || "0.92"),
   duplicateCandidateLimit: Number(process.env.CAIRN_DUPLICATE_CANDIDATES || "3"),
   maxAnswerChars: Number(process.env.CAIRN_MAX_ANSWER_CHARS || "2000"), // reject insanely verbose answers
-
-  // The skill layer is OFF by default. Its injected section plus the catalog is roughly a third of every
-  // turn's workflow prompt, and that bulk competes with the instructions the turn actually has to follow.
-  // Turn it ON per-machine with "skills": true in ~/.cairn/config.json (or CAIRN_SKILLS=1). Short-lived
-  // hooks read this from the config file, since they don't inherit the MCP server's env.
-  skills: parsedFile.skills === true,
   usageTelemetry: parsedFile.usageTelemetry === true,
 
   // Cairn updates itself by default so a published fix reaches every install without a manual command.
@@ -76,12 +60,6 @@ export const searchOptionsFromConfig = (): SearchOptions => ({
   expandSubtree: config.expandSubtree,
   vectorIndexThreshold: config.vectorIndexThreshold,
 });
-
-/** Is the skill-learning layer active? ON by default; CAIRN_SKILLS env wins (1 on / 0 off), else the
- *  per-machine `skills` flag in ~/.cairn/config.json (on unless explicitly set to false). Evaluated live
- *  so an env toggle takes effect at once. */
-export const skillsEnabled = (): boolean =>
-  process.env.CAIRN_SKILLS === "1" ? true : process.env.CAIRN_SKILLS === "0" ? false : config.skills;
 
 /** Privacy-safe usage telemetry is local-only and OFF by default. Environment overrides are primarily
  * for tests and temporary diagnostics; persistent opt-in lives in ~/.cairn/config.json. */

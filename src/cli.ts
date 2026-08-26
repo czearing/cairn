@@ -104,13 +104,6 @@ switch (cmd) {
     console.log(`Cairn viewer → http://localhost:${server.port}`);
     break;
   }
-  case "skills": {
-    // A persistent window that narrates the background skill learner (which skill, the quality score,
-    // whether the master was rewritten), so it isn't a black box. Open it once and leave it running.
-    const { runMonitor } = await import("./skill/monitor");
-    await runMonitor({ once: process.argv.includes("--once") });
-    break;
-  }
   case "telemetry":
   case "usage": {
     const daysArg = process.argv.find((arg) => arg.startsWith("--days="))?.slice(7);

@@ -8,7 +8,7 @@ import { z } from "zod";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { config, skillsEnabled } from "../core/config";
+import { config } from "../core/config";
 import { installCrashGuard } from "../core/crash-guard";
 import { recordTelemetry } from "../core/telemetry-record";
 import { jsonChars } from "../core/telemetry-size";
@@ -22,7 +22,6 @@ import {
 import { installedReleaseVersion, runtimeMetadata } from "../core/runtime-identity";
 import { warmEngineServer } from "../core/engine-client";
 import { claimWriterRole } from "../core/writer-role";
-import { applySkillSections, formatSkillCatalog, skillCatalogSnapshot } from "../skill/catalog";
 import type { Neuron } from "../core/neurons.types";
 import { searchPayload } from "./search-payload";
 
@@ -141,14 +140,9 @@ const currentReleaseIdentity = () => {
   const version = installedReleaseVersion(releaseVersion);
   try {
     const root = process.env.CAIRN_ROOT || resolve(import.meta.dir, "..", "..");
-    const prompt = applySkillSections(
-      readFileSync(join(root, "prompts", "user-message.md"), "utf8"),
-      skillsEnabled(),
-    );
-    const catalog = skillCatalogSnapshot();
-    const fullPrompt = skillsEnabled() ? `${prompt}\n\n${formatSkillCatalog()}` : prompt;
+    const prompt = readFileSync(join(root, "prompts", "user-message.md"), "utf8");
     return {
-      releaseFingerprint: releaseFingerprint(promptFingerprint(fullPrompt), catalog.version, version),
+      releaseFingerprint: releaseFingerprint(promptFingerprint(prompt), "local", version),
       version,
       runClass: telemetryRunClass(),
     };
@@ -225,17 +219,6 @@ const measured = async <T>(
 // Attach a viewer deep-link so callers can show/cite the thought in the UI.
 const nodeUrl = (id: string): string => `${config.uiUrl}/node/${id}`;
 const mutationAck = ({ id }: Neuron) => ({ id, url: nodeUrl(id) });
-const skillSelectionAck = (result: {
-  selected: { id: string; steps: string }[];
-  noMatch?: boolean;
-  catalogSize?: number;
-  reason?: string;
-}) => ({
-  selected: result.selected.map(({ id, steps }) => ({ id, steps })),
-  ...(result.catalogSize == null ? {} : { catalogSize: result.catalogSize }),
-  ...(result.noMatch ? { noMatch: true } : {}),
-  ...(result.reason ? { reason: result.reason } : {}),
-});
 
 // Optional hard cap on the agent-facing result set, OFF by default (0): the breadth is controlled by
 // the adaptive relevance floor in core search() (CAIRN_RELATIVE_FLOOR), a relevance bar rather than a
@@ -336,60 +319,6 @@ registerTool(
     return json({ deleted: await engineDelete(id, activeReleaseIdentity()) });
   })
 );
-
-// Registered only while the skill layer is enabled: with it off the tools would be dead weight in every
-// agent's tool list, and the workflow prompt no longer asks for them.
-if (skillsEnabled()) {
-registerTool(
-  "skill_select",
-  "Select skills from the injected catalog and return their reusable steps.",
-  {
-    ids: z.array(z.string()).min(1).max(4).describe("Exact skill titles, durable ids, or [`none`] after confirming no catalog skill fits."),
-  },
-  async ({ ids }) => measured("skill_select", { ids }, async () => {
-    const { skillSelect } = await import("../skill/hook");
-    const result = skillSelect(ids);
-    return result.error ? fail(JSON.stringify(result)) : json(skillSelectionAck(result));
-  })
-);
-
-registerTool(
-  "skill_create",
-  "Create a reusable capability not covered by the current catalog.",
-  {
-    title: z.string().describe("Broad capability title, 1-4 words."),
-    description: z.string().describe("When this reusable capability should be used, including its method and boundaries."),
-    plan: z.string().describe("Initial reusable master plan: numbered imperative steps only."),
-    whyExistingSkillsDoNotFit: z.string().describe("Why none of the catalog entries covers this method."),
-  },
-  async ({ title, description, plan, whyExistingSkillsDoNotFit }) => measured(
-    "skill_create",
-    { title, description, plan, whyExistingSkillsDoNotFit },
-    async () => {
-    const { skillCreate } = await import("../skill/hook");
-    const result = await skillCreate(title, description, plan, whyExistingSkillsDoNotFit);
-    return result.error ? fail(result.error) : json(result);
-  })
-);
-
-// Agent-facing DIRECT refinement. Lets the agent fix a skill's master the moment it learns a better way —
-// classically, the user says "that was wrong, do X next time" — so the correction lands in the master
-// immediately and the very next run uses it.
-registerTool(
-  "skill_edit",
-  "Refine a selected or created skill's reusable steps.",
-  {
-    id: z.string().describe("The exact selected or created skill id."),
-    master: z.string().describe("The rewritten master: numbered imperative steps only, no rationale/preamble."),
-    explanation: z.string().optional().describe("Optional maintenance note explaining why the revised method is better."),
-  },
-  async ({ id, master, explanation }) => measured("skill_edit", { id, master, explanation }, async () => {
-    const { skillEdit } = await import("../skill/hook");
-    const r = await skillEdit(id, master, explanation);
-    return r.ok ? json(r) : fail(r.error || "skill_edit failed");
-  })
-);
-}
 
 // The proof contract is always registered. Gating tool REGISTRATION on the same env flag that gates the
 // deny created a hard dependency ordering: with the gate on but the tool absent, pre-tool denies every

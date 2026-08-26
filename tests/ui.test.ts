@@ -34,19 +34,6 @@ test("serves the app.js asset", async () => {
   expect(res.headers.get("content-type")).toContain("javascript");
 });
 
-test("/api/skills hides pending skills", async () => {
-  const { deleteSkill, putSkill, setSkillMetadata } = await import("../src/skill/store");
-  putSkill({ id: "ui-learned", task: "learned", masterPrompt: "1. do the work", ts: 1 }, [1, 0]);
-  setSkillMetadata("ui-learned", "learned", "Use for testing that curated learned skills appear in the skill viewer API.");
-  putSkill({ id: "ui-pending", task: "pending", masterPrompt: "", ts: 2 }, [0, 1]);
-  const res = await fetch(`http://localhost:${server.port}/api/skills`);
-  const data = (await res.json()) as { skills: { id: string }[] };
-  expect(data.skills.some((skill) => skill.id === "ui-learned")).toBe(true);
-  expect(data.skills.some((skill) => skill.id === "ui-pending")).toBe(false);
-  deleteSkill("ui-learned");
-  deleteSkill("ui-pending");
-});
-
 test("/usage serves the local telemetry dashboard and API", async () => {
   const page = await fetch(`http://localhost:${server.port}/usage`);
   expect(page.status).toBe(200);

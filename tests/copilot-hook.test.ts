@@ -21,7 +21,6 @@ import {
   scratchOnlyShellCommand,
   reportedNonZeroExit,
   workflowActionDecision,
-  failedExecutionDisprovesSkill,
 } from "../src/hosts/copilot-cli/hook";
 
 const priorCompletionContinuation = process.env.CAIRN_FORCE_COMPLETION_CONTINUATION;
@@ -143,49 +142,20 @@ test("postToolFiles emits only state-specific graph reminders", () => {
   expect(postToolFiles("cairn-brain_mutate", "")).toEqual([]);
 });
 
-test("postToolFiles delivers orchestrate BEFORE subtask-spawned for a subagent spawn", () => {
-  expect(postToolFiles("task", "")).toEqual(["orchestrate.md", "subtask-spawned.md"]);
-  expect(postToolFiles("Task", "")).toEqual(["orchestrate.md", "subtask-spawned.md"]);
-  expect(postToolFiles("Agent", "")).toEqual(["orchestrate.md", "subtask-spawned.md"]);
-});
-
 test("postToolFiles is empty for unrelated tools", () => {
+  expect(postToolFiles("task", "")).toEqual([]);
   expect(postToolFiles("view", "")).toEqual([]);
   expect(postToolFiles("bash", "")).toEqual([]);
 });
 
 // ── stopDecision: the fail-closed agentStop workflow gate ─────────────────────────────────────────
 
-test("stopDecision requires skill selection before brain use", () => {
-  expect(stopDecision({ brainUsed: false, skillUsed: false, stopNudges: 0 })).toEqual({ file: "skill-search-reminder.md" });
+test("stopDecision requires brain use", () => {
+  expect(stopDecision({ brainUsed: false, stopNudges: 0 })).toEqual({ file: "turn-reminder.md" });
 });
 
-test("stopDecision allows a completed skill and brain workflow to finish", () => {
-  expect(stopDecision({ brainUsed: true, skillUsed: true, stopNudges: 0 })).toEqual({ file: "" });
-});
-
-test("stopDecision requires skill_edit after selected-skill execution fails", () => {
-  expect(failedExecutionDisprovesSkill("powershell", false)).toBe(true);
-  expect(failedExecutionDisprovesSkill("view", false)).toBe(false);
-  expect(failedExecutionDisprovesSkill("cairn-skill_edit", false)).toBe(false);
-  expect(stopDecision({
-    brainUsed: true,
-    skillUsed: true,
-    stopNudges: STOP_CAP,
-    pendingSkillCorrections: 1,
-    skillCorrectionNudges: 0,
-  })).toEqual({ file: "skill-correction-reminder.md" });
-  expect(stopDecision({
-    brainUsed: true,
-    skillUsed: true,
-    stopNudges: 0,
-    pendingSkillCorrections: 0,
-    skillCorrectionNudges: 0,
-  })).toEqual({ file: "" });
-});
-
-test("stopDecision requires skill selection even when the brain was used", () => {
-  expect(stopDecision({ brainUsed: true, skillUsed: false, stopNudges: 0 })).toEqual({ file: "skill-search-reminder.md" });
+test("stopDecision allows a completed brain workflow to finish", () => {
+  expect(stopDecision({ brainUsed: true, stopNudges: 0 })).toEqual({ file: "" });
 });
 
 test("strict stopDecision requires ordered decomposition and root synthesis", () => {
@@ -195,8 +165,6 @@ test("strict stopDecision requires ordered decomposition and root synthesis", ()
     brainCreatedCount: 3,
     brainAnsweredCount: 2,
     rootSynthesized: true,
-    skillUsed: true,
-    pendingReviewCount: 0,
     stopNudges: 0,
     strict: true,
     minimumBrainNodes: 3,
@@ -207,8 +175,6 @@ test("strict stopDecision requires ordered decomposition and root synthesis", ()
     brainCreatedCount: 3,
     brainAnsweredCount: 3,
     rootSynthesized: true,
-    skillUsed: true,
-    pendingReviewCount: 0,
     stopNudges: 0,
     strict: true,
     minimumBrainNodes: 3,
@@ -221,7 +187,6 @@ test("reusing prior work completes the turn instead of forcing duplicate nodes",
     brainSearched: true,
     brainCreatedCount: 0,
     brainAnsweredCount: 0,
-    skillUsed: true,
     stopNudges: 0,
     strict: true,
     minimumBrainNodes: 3,
@@ -244,7 +209,6 @@ test("reused nodes count toward the decomposition minimum for a partially covere
     brainCreatedCount: 1,
     brainAnsweredCount: 1,
     rootSynthesized: true,
-    skillUsed: true,
     stopNudges: 0,
     strict: true,
     minimumBrainNodes: 3,
@@ -264,7 +228,6 @@ test("Harness side effects are denied until the strict workflow is complete", ()
     brainCreatedCount: 3,
     brainAnsweredCount: 2,
     rootSynthesized: false,
-    skillUsed: true,
     pendingReviewCount: 0,
     stopNudges: 0,
     strict: true,
@@ -395,40 +358,32 @@ test("with the skill layer off a Harness turn still unblocks side effects and ce
   rmSync(copilotHome, { recursive: true, force: true });
 }, 10_000);
 
-test("with the skill layer off neither injected workflow carries skill instructions or a catalog", () => {
+test("neither injected workflow carries skill instructions or a catalog", () => {
   const id = randomUUID();
   const home = join(tmpdir(), `cairn-skills-off-home-${id}`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const inject = (skills: string, harness: boolean) => {
+  const inject = (harness: boolean) => {
     const env = {
-      ...process.env, USERPROFILE: home, HOME: home, CAIRN_SKILLS: skills,
+      ...process.env, USERPROFILE: home, HOME: home,
       AGENT_HARNESS: harness ? "1" : "",
     };
     const out = spawnSync(process.execPath, [hook, "user-prompt"], {
-      input: JSON.stringify({ sessionId: `skills-${skills}-${harness}-${id}`, prompt: "root work" }),
+      input: JSON.stringify({ sessionId: `skills-${harness}-${id}`, prompt: "root work" }),
       env,
     });
     expect(out.status).toBe(0);
     return String(JSON.parse(out.stdout.toString()).additionalContext ?? "");
   };
 
-  // Both the interactive workflow and the leaner Harness workflow have to lose the skill layer.
   for (const harness of [false, true]) {
-    const off = inject("0", harness);
-    expect(off).toContain("earch");                       // the brain workflow still ships every turn
-    expect(off).not.toContain("skill_select");
-    expect(off).not.toContain("skill_create");
-    expect(off).not.toContain("skill_edit");
-    expect(off).not.toContain("Available skill catalog");
-    expect(off).not.toContain("Skill application");
-    expect(off).not.toContain("cairn:skills");            // the fence markers never reach the agent
-
-    // Positive control: the same prompt still carries the skill layer when it is opted back in.
-    const on = inject("1", harness);
-    expect(on).toContain("skill_select");
-    expect(on).toContain("Skill application");
-    expect(on).not.toContain("cairn:skills");
-    expect(off.length).toBeLessThan(on.length);
+    const prompt = inject(harness);
+    expect(prompt).toContain("earch");                       // the brain workflow still ships every turn
+    expect(prompt).not.toContain("skill_select");
+    expect(prompt).not.toContain("skill_create");
+    expect(prompt).not.toContain("skill_edit");
+    expect(prompt).not.toContain("Available skill catalog");
+    expect(prompt).not.toContain("Skill application");
+    expect(prompt).not.toContain("cairn:skills");            // the fence markers never reach the agent
   }
 });
 
@@ -456,7 +411,6 @@ test("stopDecision never permits submission while the mandatory workflow is inco
     brainCreatedCount: 0,
     brainAnsweredCount: 0,
     rootSynthesized: false,
-    skillUsed: true,
     stopNudges: STOP_CAP,
     strict: true,
     minimumBrainNodes: 3,
@@ -617,16 +571,10 @@ test("Harness user prompts receive a leaner workflow than direct interactive pro
   expect(harnessOutput.additionalContext.length).toBeLessThan(directOutput.additionalContext.length);
   expect(directOutput.additionalContext).toContain("## Brain workflow");
   expect(directOutput.additionalContext).toContain("no breadth or depth limit");
-  // Both prompts must still require the same enforceable rules the pre-tool/agent-stop gates check for,
-  // even though the two prompts use different wording (the harness prompt is intentionally condensed).
   for (const output of [directOutput.additionalContext, harnessOutput.additionalContext]) {
-    expect(output).toContain("skill_select");
-    expect(output).toContain("skill_edit");
-    expect(output).toContain("none");
-    expect(output.toLowerCase()).toContain("one-off");
+    expect(output.toLowerCase()).toContain("search");
+    expect(output.toLowerCase()).toContain("create");
     expect(output.toLowerCase()).toContain("mutate");
-    expect(output).toContain("Skill application");
-    expect(output).toContain("Skill update");
   }
   rmSync(cairnDb, { force: true });
 });
@@ -641,37 +589,6 @@ test("user-prompt reset runs only for real human prompts", () => {
   )).toBe(false);
 });
 
-test("a host-native skill invocation satisfies the skill gate without creating a review obligation", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-native-skill-${id}.db`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object) =>
-    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-
-  expect(invoke("user-prompt", { sessionId: "native-skill", prompt: "Check Harness reliability." }).status).toBe(0);
-  expect(invoke("post-tool", {
-    sessionId: "native-skill",
-    toolName: "skill",
-    toolArgs: { skill: "cairn-harness" },
-    toolResult: { ok: true },
-  }).status).toBe(0);
-  expect(invoke("post-tool", {
-    sessionId: "native-skill",
-    toolName: "cairn-brain_search",
-    toolArgs: { query: "Harness reliability" },
-  }).status).toBe(0);
-  completeBrainWorkflow(invoke, "native-skill");
-
-  const stop = invoke("agent-stop", { sessionId: "native-skill" }).stdout.toString();
-  expect(stop).toContain("completed every requested task");
-  expect(stop).toContain("one compact **Cairn** receipt");
-  expect(stop).toContain("step N: action/result");
-  expect(stop).toContain("none — steps remained accurate and complete");
-  expect(stop).not.toContain("skill_select");
-  expect(lifecycleState(dbPath, "copilot:native-skill").pendingReviewIds).toEqual([]);
-});
-
 test("a stale model tool manifest blocks submission until a Cairn tool succeeds", () => {
   const id = randomUUID();
   const dbPath = join(tmpdir(), `cairn-stale-manifest-${id}.db`);
@@ -680,14 +597,13 @@ test("a stale model tool manifest blocks submission until a Cairn tool succeeds"
     ...process.env,
     CAIRN_DB_PATH: dbPath,
     CAIRN_ENFORCE_STOP_GATES: "0",
-    CAIRN_SKILLS: "1",
   };
   const invoke = (mode: string, payload: object) =>
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
 
   expect(invoke("user-prompt", { sessionId: "stale-manifest", prompt: "Finish the task." }).status).toBe(0);
   const ignored = invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString();
-  expect(ignored).toContain("recorded no successful host");
+  expect(ignored).toContain("without resolving this task in the brain");
   expect(ignored).not.toContain("run `/restart` once");
   expect(telemetryKinds(dbPath)).not.toContain("visibility_failure");
   expect(invoke("post-tool", {
@@ -710,7 +626,7 @@ test("a stale model tool manifest blocks submission until a Cairn tool succeeds"
     toolArgs: { query: "task" },
     toolResult: { success: true },
   }).status).toBe(0);
-  expect(invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString()).toContain("skill_select");
+  expect(invoke("agent-stop", { sessionId: "stale-manifest" }).stdout.toString()).toContain("brain_create");
 });
 
 // Ownership, not arithmetic: answering a node the turn did NOT create must never discharge the obligation
@@ -966,17 +882,16 @@ test("an ignored healthy Cairn workflow remains blocked until Cairn is used", ()
     ...process.env,
     CAIRN_DB_PATH: dbPath,
     CAIRN_ENFORCE_STOP_GATES: "0",
-    CAIRN_SKILLS: "1",
   };
   const invoke = (mode: string, payload: object) =>
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
 
   expect(invoke("user-prompt", { sessionId: "ignored-workflow", prompt: "Finish the task." }).status).toBe(0);
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
-    .toContain("recorded no successful host");
+    .toContain("without resolving this task in the brain");
   expect(telemetryKinds(dbPath)).not.toContain("visibility_failure");
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
-    .toContain("recorded no successful host");
+    .toContain("without resolving this task in the brain");
   expect(invoke("agent-stop", { sessionId: "ignored-workflow" }).stdout.toString())
     .not.toBe("{}");
   rmSync(dbPath, { force: true });
@@ -1071,222 +986,11 @@ test("internalContext gives injected reminders one structural envelope", () => {
   expect(internalContext("")).toBe("");
 });
 
-test("subagentStop clears its lifecycle without queueing skill reviews", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-review-hook-${id}.db`);
-  const home = join(tmpdir(), `cairn-review-hook-home-${id}`);
-  const transcriptPath = join(tmpdir(), `cairn-review-hook-${id}.jsonl`);
-  writeFileSync(transcriptPath, [
-    JSON.stringify({ type: "subagent.started", agentId: "agent-1", timestamp: 10, data: { agentName: "code-review", agentDisplayName: "Reviewer" } }),
-    JSON.stringify({ type: "assistant.message", agentId: "agent-1", timestamp: 11, data: { content: "Finished review." } }),
-    JSON.stringify({ type: "tool.execution_start", agentId: "agent-1", timestamp: 12, data: { toolCallId: "review-1", toolName: "cairn-skill_review", arguments: { id: "skill-1" } } }),
-    JSON.stringify({ type: "tool.execution_complete", agentId: "agent-1", timestamp: 13, data: { toolCallId: "review-1", success: true } }),
-    JSON.stringify({ type: "tool.execution_start", agentId: "agent-1", timestamp: 14, data: { toolCallId: "review-2", toolName: "cairn-skill_review", arguments: { id: "skill-2" } } }),
-    JSON.stringify({ type: "tool.execution_complete", agentId: "agent-1", timestamp: 15, data: { toolCallId: "review-2", success: true } }),
-  ].join("\n"));
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_MAX_LEARNERS: "0", CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  expect(invoke("post-tool", { sessionId: "session-1", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
-  expect(invoke("post-tool", { sessionId: "session-1", toolName: "cairn-skill_select", toolArgs: { ids: ["parent-skill"] } }).status).toBe(0);
-  expect(invoke("post-tool", { sessionId: "session-1", agentId: "agent-1", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
-  expect(invoke("post-tool", { sessionId: "session-1", agentId: "agent-1", toolName: "cairn-skill_select", toolArgs: { ids: ["skill-1", "skill-2"] } }).status).toBe(0);
-  expect(invoke("post-tool", { sessionId: "session-1", agentId: "agent-1", timestamp: 12, toolName: "cairn-skill_review", toolArgs: { id: "skill-1" } }).status).toBe(0);
-  expect(invoke("post-tool", { sessionId: "session-1", agentId: "agent-1", timestamp: 14, toolName: "cairn-skill_review", toolArgs: { id: "skill-2" } }).status).toBe(0);
-  const run = invoke("subagent-stop", { sessionId: "session-1", agentName: "code-review", transcriptPath });
-  expect(run.status).toBe(0);
-  const parentState = lifecycleState(dbPath, "copilot:session-1");
-  expect(parentState.pendingReviewIds).toEqual(["parent-skill"]);
-  expect(invoke("agent-stop", { sessionId: "session-1" }).stdout.toString()).toContain('"decision":"block"');
-});
-
-test("subagentStop never queues a reviewer for same-name agents", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-review-identity-${id}.db`);
-  const home = join(tmpdir(), `cairn-review-identity-home-${id}`);
-  const transcriptPath = join(tmpdir(), `cairn-review-identity-${id}.jsonl`);
-  writeFileSync(transcriptPath, [
-    JSON.stringify({ type: "subagent.started", agentId: "agent-a", timestamp: 10, data: { agentName: "code-review" } }),
-    JSON.stringify({ type: "subagent.started", agentId: "agent-b", timestamp: 11, data: { agentName: "code-review" } }),
-    JSON.stringify({ type: "tool.execution_start", agentId: "agent-a", timestamp: 12, data: { toolCallId: "review-a", toolName: "cairn-skill_review", arguments: { id: "skill-a" } } }),
-    JSON.stringify({ type: "tool.execution_complete", agentId: "agent-a", timestamp: 13, data: { toolCallId: "review-a", success: true } }),
-    JSON.stringify({ type: "tool.execution_start", agentId: "agent-b", timestamp: 14, data: { toolCallId: "review-b", toolName: "cairn-skill_review", arguments: { id: "skill-b" } } }),
-    JSON.stringify({ type: "tool.execution_complete", agentId: "agent-b", timestamp: 15, data: { toolCallId: "review-b", success: true } }),
-    JSON.stringify({ type: "assistant.message", agentId: "agent-a", timestamp: 16, data: { content: "Agent A finished." } }),
-  ].join("\n"));
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_MAX_LEARNERS: "0", CAIRN_SKILLS: "1" };
-  const invoke = (payload: object) => spawnSync(process.execPath, [hook, "post-tool"], { input: JSON.stringify(payload), env });
-  expect(invoke({ sessionId: "session-identity", agentId: "agent-a", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
-  expect(invoke({ sessionId: "session-identity", agentId: "agent-a", toolName: "cairn-skill_select", toolArgs: { ids: ["skill-a"] } }).status).toBe(0);
-  expect(invoke({ sessionId: "session-identity", agentId: "agent-a", timestamp: 12, toolName: "cairn-skill_review", toolArgs: { id: "skill-a" } }).status).toBe(0);
-  const run = spawnSync(process.execPath, [hook, "subagent-stop"], {
-    input: JSON.stringify({ sessionId: "session-identity", agentName: "code-review", transcriptPath }),
-    env,
-  });
-  expect(run.status).toBe(0);
-});
-
-test("preToolUse prepends the Cairn protocol for general-purpose agents", () => {
-  const id = randomUUID();
-  const home = join(tmpdir(), `cairn-general-purpose-home-${id}`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const run = spawnSync(process.execPath, [hook, "pre-tool"], {
-    input: JSON.stringify({
-      sessionId: "session-general",
-      toolName: "task",
-      toolArgs: { agent_type: "general-purpose", prompt: "Review this change." },
-    }),
-    env: { ...process.env, USERPROFILE: home, HOME: home },
-  });
-  expect(run.status).toBe(0);
-  const output = JSON.parse(run.stdout.toString()) as { modifiedArgs: { prompt: string } };
-  expect(output.modifiedArgs.prompt).toContain("CAIRN_SKILL_IDS");
-  expect(output.modifiedArgs.prompt).toEndWith("Review this change.");
-});
-
-test("preToolUse injects parent-selected skill steps into a delegated Task prompt", () => {
-  const id = randomUUID();
-  const skillId = randomUUID();
-  const home = join(tmpdir(), `cairn-delegated-skill-home-${id}`);
-  const dbPath = join(tmpdir(), `cairn-delegated-skill-${id}.db`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const seed = spawnSync(process.execPath, ["-e", `
-      import { putSkill } from ${JSON.stringify(join(import.meta.dir, "..", "src", "skill", "store.ts"))};
-      putSkill({ id: ${JSON.stringify(skillId)}, task: "poetry writing", masterPrompt: "1. Draft three lines\\n2. Verify the form", description: "Use for poems.", ts: 1 }, [1, 0]);
-    `], { env: { ...process.env, CAIRN_DB_PATH: dbPath } });
-  expect(seed.status).toBe(0);
-  expect(spawnSync(process.execPath, [hook, "post-tool"], {
-    input: JSON.stringify({ sessionId: "session-delegated", toolName: "cairn-skill_select", toolArgs: { ids: [skillId] } }),
-    env: { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath },
-  }).status).toBe(0);
-  const run = spawnSync(process.execPath, [hook, "pre-tool"], {
-    input: JSON.stringify({
-      sessionId: "session-delegated",
-      toolCallId: "call-delegated",
-      toolName: "task",
-      toolArgs: {
-        agent_type: "explore",
-        prompt: `CAIRN_SKILL_IDS: ${skillId}\nWrite a haiku.`,
-      },
-    }),
-    env: { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath },
-  });
-  expect(run.status).toBe(0);
-  const output = JSON.parse(run.stdout.toString()) as { modifiedArgs: { prompt: string } };
-  expect(output.modifiedArgs.prompt).toContain(`## Selected skill: poetry writing (${skillId})`);
-  expect(output.modifiedArgs.prompt).toContain("1. Draft three lines");
-  expect(output.modifiedArgs.prompt).toEndWith("Write a haiku.");
-});
-
-test("preToolUse parses Copilot's real toolCalls batch payload", () => {
-  const id = randomUUID();
-  const skillId = randomUUID();
-  const home = join(tmpdir(), `cairn-tool-calls-home-${id}`);
-  const dbPath = join(tmpdir(), `cairn-tool-calls-${id}.db`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const seed = spawnSync(process.execPath, ["-e", `
-    import { putSkill } from ${JSON.stringify(join(import.meta.dir, "..", "src", "skill", "store.ts"))};
-    putSkill({ id: ${JSON.stringify(skillId)}, task: "poetry writing", masterPrompt: "1. Draft three lines", description: "Use for poems.", ts: 1 }, [1, 0]);
-  `], { env: { ...process.env, CAIRN_DB_PATH: dbPath } });
-  expect(seed.status).toBe(0);
-  expect(spawnSync(process.execPath, [hook, "post-tool"], {
-    input: JSON.stringify({ sessionId: "session-batch", toolName: "cairn-skill_select", toolArgs: { ids: [skillId] } }),
-    env: { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath },
-  }).status).toBe(0);
-  const args = { agent_type: "explore", prompt: `CAIRN_SKILL_IDS: ${skillId}\nWrite a haiku.` };
-  const run = spawnSync(process.execPath, [hook, "pre-tool"], {
-    input: JSON.stringify({
-      sessionId: "session-batch",
-      toolCalls: [{ id: "call-1", name: "task", args: JSON.stringify(args) }],
-    }),
-    env: { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath },
-  });
-  const output = JSON.parse(run.stdout.toString()) as { modifiedArgs: { prompt: string } };
-  expect(output.modifiedArgs.prompt).toContain("## Selected skill: poetry writing");
-});
-
-test("skill_select preserves selected ids for delegation and ignores removed review calls", () => {
-  const id = randomUUID();
-  const home = join(tmpdir(), `cairn-multi-skill-home-${id}`);
-  const dbPath = join(tmpdir(), `cairn-multi-skill-${id}.db`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
-  const invoke = (payload: object) => spawnSync(process.execPath, [hook, "post-tool"], { input: JSON.stringify(payload), env });
-
-  expect(invoke({ sessionId: "session-multi", toolName: "cairn-skill_select", toolArgs: { ids: ["skill-a", "skill-b"] } }).status).toBe(0);
-  expect(lifecycleState(dbPath, "copilot:session-multi").pendingReviewIds).toEqual(["skill-a", "skill-b"]);
-  expect(invoke({ sessionId: "session-multi", timestamp: 20, toolName: "cairn-skill_review", toolArgs: { id: "skill-a" } }).status).toBe(0);
-  expect(lifecycleState(dbPath, "copilot:session-multi").pendingReviewIds).toEqual(["skill-a", "skill-b"]);
-  expect(invoke({ sessionId: "session-multi", timestamp: 21, toolName: "cairn-skill_review", toolArgs: { id: "skill-b" } }).status).toBe(0);
-  const state = lifecycleState(dbPath, "copilot:session-multi");
-  expect(state.pendingReviewIds).toEqual(["skill-a", "skill-b"]);
-  expect(state.pendingReviews).toHaveLength(0);
-});
-
-test("a removed legacy skill tool creates no review obligation", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-legacy-reminder-${id}.db`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object) =>
-    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  expect(invoke("post-tool", {
-    sessionId: "legacy-reminder",
-    toolName: "cairn-skill_search",
-    toolArgs: { task: "legacy" },
-  }).status).toBe(0);
-  const reminder = invoke("agent-stop", { sessionId: "legacy-reminder" }).stdout.toString();
-  expect(reminder).toContain("skill_select");
-  expect(reminder).not.toContain("__legacy__");
-});
-
-test("postToolUse records the exact created skill id from the tool result", () => {
-  const id = randomUUID();
-  const home = join(tmpdir(), `cairn-created-skill-home-${id}`);
-  const dbPath = join(tmpdir(), `cairn-created-skill-${id}.db`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const run = spawnSync(process.execPath, [hook, "post-tool"], {
-    input: JSON.stringify({
-      sessionId: "session-created",
-      toolName: "cairn-skill_create",
-      toolArgs: { title: "api debugging" },
-      toolResult: { textResultForLlm: '{"created":true,"id":"created-skill"}' },
-    }),
-    env: { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" },
-  });
-  expect(run.status).toBe(0);
-  const state = lifecycleState(dbPath, "copilot:session-created");
-  expect(state.pendingReviewIds).toEqual(["created-skill"]);
-});
-
-test("a failed skill_review does not clear the pending lifecycle obligation", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-failed-review-state-${id}.db`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object) =>
-    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  expect(invoke("post-tool", {
-    sessionId: "failed-review-state",
-    toolName: "cairn-skill_select",
-    toolArgs: { ids: ["skill-failed"] },
-  }).status).toBe(0);
-  expect(invoke("post-tool", {
-    sessionId: "failed-review-state",
-    timestamp: 20,
-    toolName: "cairn-skill_review",
-    toolArgs: { id: "skill-failed" },
-    toolResult: { resultType: "failure" },
-  }).status).toBe(0);
-  expect(lifecycleState(dbPath, "copilot:failed-review-state").pendingReviewIds).toEqual(["skill-failed"]);
-});
-
 test("system reminder prompts preserve the turn and a genuine user prompt resets it", () => {
   const id = randomUUID();
   const home = join(tmpdir(), `cairn-stop-cap-home-${id}`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_SKILLS: "0" };
+  const env = { ...process.env, USERPROFILE: home, HOME: home };
   const invoke = (mode: string, payload: object = { sessionId: "session-cap" }) =>
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
 
@@ -1308,71 +1012,7 @@ test("system reminder prompts preserve the turn and a genuine user prompt resets
   expect(invoke("agent-stop").stdout.toString()).toContain('"decision":"block"');
 });
 
-test("a genuine Harness resume cannot inherit an exhausted stop cap without its workflow state", () => {
-  const id = randomUUID();
-  const home = join(tmpdir(), `cairn-harness-resume-home-${id}`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  // Skills are enabled here on purpose: the stop cap this test exercises is reached through the skill
-  // gate, and with the layer off there is no skill obligation to demand.
-  const env = { ...process.env, USERPROFILE: home, HOME: home, AGENT_HARNESS: "1", CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object = { sessionId: "harness-resume" }) =>
-    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-
-  expect(invoke("user-prompt", { sessionId: "harness-resume", prompt: "root work" }).status).toBe(0);
-  expect(invoke("agent-stop").stdout.toString()).toContain("skill_select");
-  expect(invoke("post-tool", {
-    sessionId: "harness-resume",
-    toolName: "cairn-skill_select",
-    toolArgs: { ids: ["remediation"] },
-  }).status).toBe(0);
-  expect(invoke("agent-stop").stdout.toString()).toContain("brain_search");
-
-  expect(invoke("user-prompt", {
-    sessionId: "harness-resume",
-    prompt: "Role: Editor. Resume the root after delegated work completed.",
-  }).status).toBe(0);
-  expect(invoke("agent-stop").stdout.toString()).toContain("skill_select");
-});
-
-test("a queued mid-turn human message does not reset completed skill search", () => {
-  const id = randomUUID();
-  const home = join(tmpdir(), `cairn-queued-message-home-${id}`);
-  const transcriptPath = join(home, ".copilot", "session-state", "session-queued", "events.jsonl");
-  mkdirSync(join(home, ".copilot", "session-state", "session-queued"), { recursive: true });
-  writeFileSync(transcriptPath, [
-    JSON.stringify({ type: "user.message", id: "user-1", data: { content: "inspect skills" } }),
-    JSON.stringify({ type: "user.message", id: "user-2", data: { content: "and test it" } }),
-    JSON.stringify({ type: "tool.execution_start", timestamp: 30, data: {
-      toolCallId: "queued-review",
-      toolName: "cairn-skill_review",
-      arguments: { id: "skill-queued" },
-    } }),
-    JSON.stringify({ type: "tool.execution_complete", timestamp: 31, data: {
-      toolCallId: "queued-review",
-      success: true,
-    } }),
-    JSON.stringify({ type: "assistant.message", timestamp: 32, data: { content: "Inspection complete." } }),
-  ].join("\n"));
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-
-  expect(invoke("user-prompt", { sessionId: "session-queued", prompt: "inspect skills" }).status).toBe(0);
-  expect(invoke("post-tool", { sessionId: "session-queued", toolName: "cairn-skill_select", toolArgs: { ids: ["skill-queued"] } }).status).toBe(0);
-  expect(invoke("post-tool", { sessionId: "session-queued", toolName: "cairn-brain_search", toolArgs: {} }).status).toBe(0);
-  completeBrainWorkflow(invoke, "session-queued");
-  expect(invoke("post-tool", { sessionId: "session-queued", timestamp: 30, toolName: "cairn-skill_review", toolArgs: { id: "skill-queued" } }).status).toBe(0);
-  expect(invoke("agent-stop", { sessionId: "session-queued", transcriptPath }).stdout.toString())
-    .toContain("completed every requested task");
-  expect(invoke("agent-stop", { sessionId: "session-queued", transcriptPath }).stdout.toString()).toBe("{}");
-});
-
-
-
 test("an undeclared contract nudge is bounded, so a session that cannot declare one is not bricked", () => {
-  // The stop gate capped itself only once a contract EXISTED. With none declared, noteContractNudge
-  // no-opped, the counter never moved, and "declare your contract" repeated forever — unbounded for any
-  // client whose tool list was negotiated before the `contract` tool existed and so cannot declare at all.
   const id = randomUUID();
   const home = join(tmpdir(), `cairn-contract-bound-home-${id}`);
   const dir = join(tmpdir(), `cairn-contract-bound-${id}`);
@@ -1381,7 +1021,7 @@ test("an undeclared contract nudge is bounded, so a session that cannot declare 
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
   const env = {
     ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath,
-    CAIRN_SKILLS: "1", CAIRN_CONTRACT_CAP: "2",
+    CAIRN_CONTRACT_CAP: "2",
   };
   const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
   const session = "contract-bound";
@@ -1407,19 +1047,14 @@ test("an undeclared contract nudge is bounded, so a session that cannot declare 
 });
 
 test("the contract gate never denies delegation, so Cairn can still reach a subagent", () => {
-  // The deny sits after the delegation branches, but those branches only return early when they actually
-  // inject a protocol. A plain `task` fell through and was denied, which silently severed delegation for
-  // every turn that had not yet declared a contract. Spawning a subagent changes nothing durable on its
-  // own and the child is now gated for its own execution tools, so delegation is excluded outright.
   const id = randomUUID();
   const home = join(tmpdir(), `cairn-task-gate-home-${id}`);
   const dbPath = join(tmpdir(), `cairn-task-gate-${id}.db`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
+  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath };
   const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
   expect(invoke("user-prompt", { sessionId: "task-gate", prompt: "Delegate some research." }).status).toBe(0);
 
-  // A plain delegation carrying no skills hits neither injection branch: it must still be allowed.
   const spawned = invoke("pre-tool", {
     sessionId: "task-gate",
     toolCallId: "child-1",
@@ -1433,221 +1068,18 @@ test("the contract gate never denies delegation, so Cairn can still reach a suba
   expect(write.stdout.toString()).toContain("Declare your contract first");
 });
 
-test("a parent-delegated subagent still runs Cairn instead of inheriting a satisfied gate", () => {
-  // Previously the parent's delegation row let the child skip Cairn entirely: its lifecycle was reset
-  // with brainUsed/skillUsed already true and three fabricated `delegated:` node ids standing in for a
-  // real graph. That is Cairn switched off for the subagent, so it is gone. The parent still passes its
-  // selected skills down, but the child does its own skill and brain work and is gated like any agent.
-  const id = randomUUID();
-  const skillId = randomUUID();
-  const home = join(tmpdir(), `cairn-delegated-session-home-${id}`);
-  const dbPath = join(tmpdir(), `cairn-delegated-session-${id}.db`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, USERPROFILE: home, HOME: home, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object) => spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  expect(spawnSync(process.execPath, ["-e", `
-    import { putSkill } from ${JSON.stringify(join(import.meta.dir, "..", "src", "skill", "store.ts"))};
-    putSkill({ id: ${JSON.stringify(skillId)}, task: "poetry writing", masterPrompt: "1. Draft three lines", description: "Use for poems.", ts: 1 }, [1, 0]);
-  `], { env }).status).toBe(0);
-  expect(invoke("post-tool", { sessionId: "parent-session", toolName: "cairn-skill_select", toolArgs: { ids: [skillId] } }).status).toBe(0);
-  const delegated = invoke("pre-tool", {
-    sessionId: "parent-session",
-    toolCallId: "subagent-session",
-    toolName: "task",
-    toolArgs: { agent_type: "explore", prompt: `CAIRN_SKILL_IDS: ${skillId}\nWrite a haiku.` },
-  });
-  expect(delegated.status).toBe(0);
-  // The child receives the workflow, not a free pass, and its stop is gated on its own Cairn work.
-  const prompt = `<cairn-internal>\nDelegated protocol.\n</cairn-internal>\n\nWrite a haiku.`;
-  const start = invoke("user-prompt", { sessionId: "subagent-session", prompt });
-  expect(start.status).toBe(0);
-  expect(invoke("agent-stop", { sessionId: "subagent-session" }).stdout.toString())
-    .toContain('"decision":"block"');
-});
-
 test("a subagent runs Cairn: it receives the full workflow and is held to the same gate", () => {
-  // Subagents are NOT exempt. The old carve-outs identified a subagent by the SHAPE of its session id
-  // and then pre-satisfied its lifecycle (brainUsed/skillUsed true, fabricated `delegated:` node ids),
-  // which is Cairn silently switched off for that agent. Both are gone: there is one path for every
-  // session, so a subagent gets the same injected workflow and the same agent-stop gate.
   const dbPath = join(tmpdir(), `cairn-subagent-runs-cairn-${randomUUID()}.db`);
   const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath };
   const invoke = (mode: string, payload: object) =>
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  // The exact host id that looped in production, and an OpenAI-style one: neither is special-cased now.
   for (const sessionId of ["toolu_01BJn8LTK5VRTyb8CGjzhAmS", `call_${randomUUID()}`]) {
     const start = invoke("user-prompt", { sessionId, prompt: "Search the repo for the retry policy." });
-    expect(start.stdout.toString()).toContain("skill_select");
+    expect(start.stdout.toString()).toContain("Brain workflow");
     expect(invoke("agent-stop", { sessionId, transcriptPath: "" }).stdout.toString())
       .toContain("block");
   }
-});
-test("a user-controlled delegated marker cannot satisfy the stop gate", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-untrusted-delegation-${id}.db`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_SKILLS: "1" };
-  const invoke = (mode: string, payload: object) =>
-    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  const prompt = `<cairn-internal>protocol</cairn-internal>\nCAIRN_SKILL_IDS: ${randomUUID()}`;
-  expect(invoke("user-prompt", { sessionId: "untrusted-child", prompt }).stdout.toString()).toBe("{}");
-  expect(invoke("agent-stop", { sessionId: "untrusted-child" }).stdout.toString()).toContain("skill_select");
-});
-
-test("agentStop requires a successful skill_edit after selected-skill execution fails", () => {
-  const marker = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-skill-correction-${marker}.db`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = {
-    ...process.env,
-    CAIRN_DB_PATH: dbPath,
-    CAIRN_SKILLS: "1",
-  };
-  const invoke = (mode: string, payload: object) =>
-    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  const post = (toolName: string, toolArgs: object, toolResult: object) =>
-    invoke("post-tool", {
-      sessionId: marker,
-      toolName,
-      toolArgs,
-      toolResult,
-      toolCallId: randomUUID(),
-    });
-
-  invoke("user-prompt", { sessionId: marker, prompt: "Run the reusable startup procedure." });
-  post(
-    "cairn-skill_select",
-    { ids: ["s1"] },
-    { content: [{ text: '{"selected":[{"id":"startup-skill"}]}' }] },
-  );
-  post("cairn-brain_search", { query: "startup procedure" }, { success: true });
-  post("powershell", { command: "start-service missing" }, { success: false });
-
-  const blocked = invoke("agent-stop", { sessionId: marker }).stdout.toString();
-  expect(blocked).toContain('"decision":"block"');
-  expect(blocked).toContain("call `skill_edit`");
-  const before = new Database(dbPath, { readonly: true });
-  expect(JSON.parse((before.query(
-    "SELECT invalidated_skill_ids ids FROM lifecycle_turns WHERE scope=?",
-  ).get(`copilot:${marker}`) as { ids: string }).ids)).toEqual(["startup-skill"]);
-  before.close();
-
-  post(
-    "cairn-skill_edit",
-    { id: "startup-skill", master: "1. install prerequisites\n2. start the service" },
-    { success: true, content: [{ text: '{"ok":true,"id":"startup-skill"}' }] },
-  );
-  const after = new Database(dbPath, { readonly: true });
-  expect(JSON.parse((after.query(
-    "SELECT invalidated_skill_ids ids FROM lifecycle_turns WHERE scope=?",
-  ).get(`copilot:${marker}`) as { ids: string }).ids)).toEqual([]);
-  after.close();
-  expect(invoke("agent-stop", { sessionId: marker }).stdout.toString())
-    .not.toContain("call `skill_edit`");
-
-  rmSync(dbPath, { force: true });
-});
-
-test("agentStop clears selected skill state after the visible deliverable", () => {
-  const id = randomUUID();
-  const dbPath = join(tmpdir(), `cairn-fallback-review-${id}.db`);
-  const home = join(tmpdir(), `cairn-fallback-review-home-${id}`);
-  const transcriptPath = join(home, ".copilot", "session-state", "fallback-session", "events.jsonl");
-  mkdirSync(join(home, ".copilot", "session-state", "fallback-session"), { recursive: true });
-  writeFileSync(transcriptPath, [
-    JSON.stringify({ type: "user.message", timestamp: 1, data: { content: "Finish this task." } }),
-    JSON.stringify({ type: "assistant.message", timestamp: 2, data: { content: "Finished deliverable." } }),
-    JSON.stringify({ type: "user.message", timestamp: 3, data: { content: "Injected unrelated task." } }),
-  ].join("\n"));
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = {
-    ...process.env,
-    USERPROFILE: home,
-    HOME: home,
-    CAIRN_DB_PATH: dbPath,
-    CAIRN_MAX_LEARNERS: "0",
-    CAIRN_SKILLS: "1",
-  };
-  const invoke = (mode: string, payload: object) =>
-    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-  expect(invoke("user-prompt", { sessionId: "fallback-session", prompt: "Finish this task." }).status).toBe(0);
-  expect(invoke("post-tool", {
-    sessionId: "fallback-session",
-    toolName: "cairn-skill_select",
-    toolArgs: { ids: ["selected-skill"] },
-  }).status).toBe(0);
-  expect(invoke("post-tool", {
-    sessionId: "fallback-session",
-    toolName: "cairn-brain_search",
-    toolArgs: {},
-  }).status).toBe(0);
-  completeBrainWorkflow(invoke, "fallback-session");
-  const completion = invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString();
-  expect(completion).toContain('"decision":"block"');
-  expect(completion).toContain("completed every requested task");
-  expect(invoke("agent-stop", { sessionId: "fallback-session", transcriptPath }).stdout.toString()).toBe("{}");
-  const database = new Database(dbPath);
-  const state = database.query("SELECT pending_review_ids AS pending FROM lifecycle_turns WHERE scope = ?")
-    .get("copilot:fallback-session") as { pending: string };
-  expect(JSON.parse(state.pending)).toEqual([]);
-  database.close();
-});
-
-test("removed review enqueue never touches the legacy inflight path", () => {
-  const id = randomUUID();
-  const home = join(tmpdir(), `cairn-auto-review-failure-home-${id}`);
-  const dbPath = join(tmpdir(), `cairn-auto-review-failure-${id}.db`);
-  const blockedInflight = join(tmpdir(), `cairn-auto-review-inflight-${id}`);
-  const transcriptPath = join(home, ".copilot", "session-state", "auto-failure", "events.jsonl");
-  mkdirSync(join(home, ".copilot", "session-state", "auto-failure"), { recursive: true });
-  writeFileSync(blockedInflight, "not a directory");
-  writeFileSync(transcriptPath, [
-    JSON.stringify({ type: "user.message", id: "user-1", timestamp: 10, data: { content: "Fix the bug." } }),
-    JSON.stringify({ type: "assistant.message", timestamp: 30, data: { content: "The bug is fixed." } }),
-  ].join("\n"));
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const env = {
-    ...process.env,
-    USERPROFILE: home,
-    HOME: home,
-    CAIRN_DB_PATH: dbPath,
-    CAIRN_INFLIGHT_DIR: blockedInflight,
-    CAIRN_MAX_LEARNERS: "0",
-    CAIRN_SKILLS: "1",
-  };
-  const invoke = (mode: string, payload: object) =>
-    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
-
-  expect(invoke("post-tool", {
-    sessionId: "auto-failure",
-    toolName: "cairn-skill_select",
-    toolArgs: { ids: ["skill-auto-failure"] },
-  }).status).toBe(0);
-  expect(invoke("post-tool", {
-    sessionId: "auto-failure",
-    toolName: "cairn-brain_search",
-    toolArgs: {},
-  }).status).toBe(0);
-  completeBrainWorkflow(invoke, "auto-failure");
-  expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString())
-    .toContain("completed every requested task");
-  expect(invoke("agent-stop", { sessionId: "auto-failure", transcriptPath }).stdout.toString()).toBe("{}");
-  rmSync(blockedInflight, { force: true });
-});
-
-test("subagentStart injects only the delegated protocol, not the full catalog", () => {
-  const id = randomUUID();
-  const home = join(tmpdir(), `cairn-subagent-start-home-${id}`);
-  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
-  const run = spawnSync(process.execPath, [hook, "subagent-start"], {
-    input: JSON.stringify({ sessionId: "parent-session", agentName: "explore" }),
-    env: { ...process.env, USERPROFILE: home, HOME: home, CAIRN_SKILLS: "1" },
-  });
-  expect(run.status).toBe(0);
-  const output = JSON.parse(run.stdout.toString()) as { additionalContext: string };
-  expect(output.additionalContext).toContain("parent owns skill selection and maintenance");
-  expect(output.additionalContext).not.toContain("Available skill catalog");
 });
 
 test("brain node floor scales with execution and keeps fail-closed invariants", () => {

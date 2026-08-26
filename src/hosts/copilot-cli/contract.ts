@@ -70,9 +70,9 @@ export function clearContract(sessionId = ""): void {
  */
 export function declareContract(checks: string[], sessionId = ""): { error?: string; criteria?: Criterion[] } {
   const existing = readContract(sessionId);
-  const known = new Set((existing?.criteria ?? []).map((criterion) => normalize(criterion.check)));
+  const known = new Set((existing?.criteria ?? []).map((criterion) => normalize(criterion.check).toLowerCase()));
   const added = [...new Set(checks.map(normalize).filter(Boolean))]
-    .filter((check) => !known.has(check))
+    .filter((check) => !known.has(normalize(check).toLowerCase()))
     .map((check) => ({ check, passed: false, failedFirst: false, evidence: "" }));
   const criteria = [...(existing?.criteria ?? []), ...added];
   if (!criteria.length) return { error: "declare at least one criterion describing what done means" };
@@ -93,10 +93,11 @@ export function declareContract(checks: string[], sessionId = ""): { error?: str
 // argument rather than at the head of a segment.
 function ranCheck(executed: string, check: string): boolean {
   if (!check) return false;
+  const lowerCheck = check.toLowerCase();
   return executed
     .split(/[;|]|&&/)
-    .map((segment) => segment.trim())
-    .some((segment) => segment === check || segment.startsWith(`${check} `));
+    .map((segment) => segment.trim().toLowerCase())
+    .some((segment) => segment === lowerCheck || segment.startsWith(`${lowerCheck} `));
 }
 
 // Executable criteria satisfy themselves: an observed successful run of the declared check closes it.
@@ -130,9 +131,9 @@ export function recordObservedRun(command: string, succeeded: boolean, sessionId
 export function satisfyCriterion(check: string, evidence: string, sessionId = ""): { error?: string; remaining?: string[] } {
   const contract = readContract(sessionId);
   if (!contract) return { error: "no contract is declared for this task" };
-  const wanted = normalize(check);
-  const match = contract.criteria.find((criterion) => normalize(criterion.check) === wanted);
-  if (!match) return { error: `no declared criterion matches: ${wanted}` };
+  const wanted = normalize(check).toLowerCase();
+  const match = contract.criteria.find((criterion) => normalize(criterion.check).toLowerCase() === wanted);
+  if (!match) return { error: `no declared criterion matches: ${normalize(check)}` };
   if (!normalize(evidence)) return { error: "evidence is required: name the artifact that satisfies this" };
   const criteria = contract.criteria.map((criterion) =>
     criterion === match ? { ...criterion, passed: true, evidence: normalize(evidence) } : criterion);

@@ -461,9 +461,12 @@ export async function runCopilotHook(): Promise<void> {
         ? args.checks.filter((check): check is string => typeof check === "string")
         : [];
       const satisfied = typeof args.satisfied === "string" ? args.satisfied : "";
-      contractResult = satisfied
-        ? satisfyCriterion(satisfied, typeof args.evidence === "string" ? args.evidence : "", sessionId)
-        : declareContract(checks, sessionId);
+      if (checks.length > 0) {
+        contractResult = declareContract(checks, sessionId);
+      }
+      if (satisfied) {
+        contractResult = satisfyCriterion(satisfied, typeof args.evidence === "string" ? args.evidence : "", sessionId);
+      }
     }
     if (typeof args.command === "string") {
       recordObservedRun(args.command, toolResultSucceeded(result) && !reportedNonZeroExit(result), sessionId);

@@ -103,7 +103,7 @@ function ensureServer(): void {
   if (!eligible() || spawned || !claimStartup()) return;
   spawned = true;
   try {
-    const bin = process.platform === "win32" ? "bun.exe" : "bun";
+    const bin = process.execPath || (process.platform === "win32" ? "bun.exe" : "bun");
     const path = process.env.CAIRN_ENGINE_SERVER
       || fileURLToPath(new URL("./engine-server.ts", import.meta.url));
     spawn(bin, [path], {

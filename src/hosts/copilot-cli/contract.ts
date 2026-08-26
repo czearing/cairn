@@ -9,8 +9,8 @@
 // declare-then-satisfy loop subsumes the phrase matching (a turn cannot trail off into an offer while it
 // still owes an unmet criterion).
 //
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { config } from "../../core/config";
@@ -33,8 +33,10 @@ const cap = (): number => Math.max(1, Number(process.env.CAIRN_CONTRACT_CAP || "
 const normalize = (text: string): string => text.replace(/\s+/g, " ").trim();
 
 /** Per-session scratch used for hook-only ledgers. */
-export const sessionStatePath = (sessionId: string, file: string): string =>
-  join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId, file);
+export const sessionStatePath = (sessionId: string, file: string): string => {
+  const safeSession = sessionId ? createHash("sha256").update(sessionId).digest("hex") : "default";
+  return join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", safeSession, file);
+};
 
 // Calls without a host session id retain the legacy path for direct unit tests and non-Copilot callers.
 // Production Copilot hooks always pass sessionId and therefore never share this file.
@@ -55,8 +57,17 @@ export function readContract(sessionId = ""): Contract | null {
 }
 
 function write(contract: Contract, sessionId = ""): void {
-  mkdirSync(dirname(path(sessionId)), { recursive: true });
-  writeFileSync(path(sessionId), JSON.stringify(contract));
+  const target = path(sessionId);
+  const dir = dirname(target);
+  mkdirSync(dir, { recursive: true });
+  const tmp = join(dir, `.tmp-${process.pid}-${Date.now()}-${randomBytes(4).toString("hex")}.json`);
+  try {
+    writeFileSync(tmp, JSON.stringify(contract));
+    renameSync(tmp, target);
+  } catch (err) {
+    try { rmSync(tmp, { force: true }); } catch { /* ignore */ }
+    throw err;
+  }
 }
 
 export function clearContract(sessionId = ""): void {

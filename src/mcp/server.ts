@@ -230,20 +230,24 @@ registerTool(
   "Search thoughts by semantic relevance. Results are score-ordered and may include adjacent `prior`/`next` question context.",
   { query: z.string().describe("What you are looking for, in natural language.") },
   async ({ query }) => measured("brain_search", { query }, async () => {
-    const { engineSearch } = await import("../core/engine-client");
-    const { refsByIds } = await import("../core/neurons");
-    // Relevance-ranked search (cosine, most-relevant-first).
-    const hits = await engineSearch(query, activeReleaseIdentity());
-    const capped = SEARCH_LIMIT > 0 ? hits.slice(0, SEARCH_LIMIT) : hits;
-    // Resolve each hit's adjacent decomposition questions (prior = parent, next = child) to short text:
-    // a compact, useful use of edges (where a recalled thought sits in the reasoning flow) instead of
-    // raw neighbor UUIDs the agent can't act on. One batched lookup for every referenced neighbor.
-    const refs = refsByIds(capped.flatMap((h) => [h.id, ...h.edges]));
-    const thoughts = searchPayload(capped, refs);
-    // The result set is kept tight by the adaptive relevance floor (CAIRN_RELATIVE_FLOOR, default 0.85 of the
-    // top score) rather than a character cap — only genuinely-relevant thoughts qualify, so the payload stays
-    // small without ever truncating a node's answer. Tighten the floor (or set CAIRN_SEARCH_LIMIT) to trim more.
-    return json(thoughts);
+    try {
+      const { engineSearch } = await import("../core/engine-client");
+      const { refsByIds } = await import("../core/neurons");
+      // Relevance-ranked search (cosine, most-relevant-first).
+      const hits = await engineSearch(query, activeReleaseIdentity());
+      const capped = SEARCH_LIMIT > 0 ? hits.slice(0, SEARCH_LIMIT) : hits;
+      // Resolve each hit's adjacent decomposition questions (prior = parent, next = child) to short text:
+      // a compact, useful use of edges (where a recalled thought sits in the reasoning flow) instead of
+      // raw neighbor UUIDs the agent can't act on. One batched lookup for every referenced neighbor.
+      const refs = refsByIds(capped.flatMap((h) => [h.id, ...h.edges]));
+      const thoughts = searchPayload(capped, refs);
+      // The result set is kept tight by the adaptive relevance floor (CAIRN_RELATIVE_FLOOR, default 0.85 of the
+      // top score) rather than a character cap — only genuinely-relevant thoughts qualify, so the payload stays
+      // small without ever truncating a node's answer. Tighten the floor (or set CAIRN_SEARCH_LIMIT) to trim more.
+      return json(thoughts);
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
+    }
   })
 );
 
@@ -252,8 +256,13 @@ if (benchmark) {
     "benchmark_submit",
     "Submit the exact final structured result for an isolated prompt benchmark.",
     { result: z.unknown().describe("The final structured result required by the benchmark task.") },
-    async ({ result }) => measured("benchmark_submit", { result }, () =>
-      json(benchmark.submitBenchmarkResult(result)))
+    async ({ result }) => measured("benchmark_submit", { result }, () => {
+      try {
+        return json(benchmark.submitBenchmarkResult(result));
+      } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err));
+      }
+    })
   );
 }
 
@@ -266,16 +275,20 @@ registerTool(
   },
   async ({ text, edges }) => measured("brain_create", { text, edges }, async () => {
     if (!text.trim()) return fail("text is required");
-    const { engineCreate } = await import("../core/engine-client");
-    const { neuron, nearDuplicates } = await engineCreate(
-      text,
-      edges ?? [],
-      activeReleaseIdentity(),
-    );
-    return json({
-      ...mutationAck(neuron),
-      ...(nearDuplicates.length ? { nearDuplicates } : {}),
-    });
+    try {
+      const { engineCreate } = await import("../core/engine-client");
+      const { neuron, nearDuplicates } = await engineCreate(
+        text,
+        edges ?? [],
+        activeReleaseIdentity(),
+      );
+      return json({
+        ...mutationAck(neuron),
+        ...(nearDuplicates.length ? { nearDuplicates } : {}),
+      });
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
+    }
   })
 );
 
@@ -315,8 +328,12 @@ registerTool(
   "Delete a thought by id and detach its graph edges.",
   { id: z.string().describe("id of the thought to delete.") },
   async ({ id }) => measured("brain_delete", { id }, async () => {
-    const { engineDelete } = await import("../core/engine-client");
-    return json({ deleted: await engineDelete(id, activeReleaseIdentity()) });
+    try {
+      const { engineDelete } = await import("../core/engine-client");
+      return json({ deleted: await engineDelete(id, activeReleaseIdentity()) });
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
+    }
   })
 );
 

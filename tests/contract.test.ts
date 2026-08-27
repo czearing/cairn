@@ -11,6 +11,7 @@ import {
   contractExhausted,
   contractStopReason,
   declareContract,
+  isExecutableCommand,
   noteContractNudge,
   readContract,
   recordObservedRun,
@@ -480,6 +481,28 @@ test("declared plan enforces full completion even when executionToolCount is 0",
     // Satisfy the second item
     satisfyCriterion("Implement IK hands", "src/ik.cpp implemented", sessionId);
     expect(contractStopReason(false, sessionId)).toBe("");
+  } finally {
+    clearContract(sessionId);
+  }
+});
+
+// A criterion that merely begins with an English verb which happens to share a tool's name is prose, not a
+// command. Misclassifying it made the criterion unclosable: no run can mark it passed, and satisfyCriterion
+// refuses it for having no passing run.
+test("prose criteria beginning with a tool-named verb are not treated as executable commands", () => {
+  expect(isExecutableCommand("Make the deny message name the outstanding step")).toBe(false);
+  expect(isExecutableCommand("Go through the remaining review comments")).toBe(false);
+  expect(isExecutableCommand("Make sure the release path is reachable")).toBe(false);
+
+  expect(isExecutableCommand("make -j8 all")).toBe(true);
+  expect(isExecutableCommand("go test ./...")).toBe(true);
+  expect(isExecutableCommand("bun test tests/contract.test.ts")).toBe(true);
+
+  const sessionId = randomUUID();
+  try {
+    declareContract(["Make the release path reachable"], sessionId);
+    expect(satisfyCriterion("Make the release path reachable", "edited hook.ts agent-stop to count blocked attempts", sessionId))
+      .toEqual({ remaining: [] });
   } finally {
     clearContract(sessionId);
   }

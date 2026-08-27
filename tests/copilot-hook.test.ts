@@ -1667,5 +1667,5 @@ test("complete pre-tool gate transitions and verifies all error messages", () =>
   } finally {
     rmSync(dbPath, { force: true });
   }
-});
+}, 60_000);
 

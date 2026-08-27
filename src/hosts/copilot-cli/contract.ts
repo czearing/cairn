@@ -144,8 +144,18 @@ export function recordObservedRun(command: string, succeeded: boolean, sessionId
 const EXECUTABLE_COMMAND_PREFIX =
   /^(?:bun|node|npm|npx|cargo|pytest|python|python3|go|ctest|cmake|make|bash|sh|powershell|git)\s+/i;
 
+// Several tool names are also ordinary English verbs, so "Make the deny message specific" and "Go through
+// the failures" parsed as `make`/`go` invocations. Such a criterion could never be closed: it is not a real
+// command, so no run can mark it passed, and satisfyCriterion refuses it for lacking a passing run. A shell
+// invocation's next token is a subcommand, flag, or path, never a determiner, so prose is what follows.
+const PROSE_SECOND_WORD =
+  /^(?:the|a|an|all|any|each|every|some|no|this|that|these|those|it|its|his|her|their|our|your|my|sure|for|from|into|onto|over|through|via|with|without|about|back|out|up|down|ahead|again|and|but|or|so)$/i;
+
 export function isExecutableCommand(check: string): boolean {
-  return EXECUTABLE_COMMAND_PREFIX.test(normalize(check));
+  const trimmed = normalize(check);
+  if (!EXECUTABLE_COMMAND_PREFIX.test(trimmed)) return false;
+  const second = trimmed.split(/\s+/)[1] ?? "";
+  return !PROSE_SECOND_WORD.test(second);
 }
 
 export function validateEvidence(evidence: string): { valid: boolean; error?: string } {

@@ -62,6 +62,7 @@ function ensureLifecycleSchema(db: Database): void {
   db.run(`CREATE TABLE IF NOT EXISTS lifecycle_turns (
     scope TEXT PRIMARY KEY,
     turn_seq INTEGER NOT NULL DEFAULT 0,
+    updated_ts INTEGER NOT NULL DEFAULT 0,
     searched INTEGER NOT NULL DEFAULT 0,
     searched_node_ids TEXT NOT NULL DEFAULT '[]',
     created_count INTEGER NOT NULL DEFAULT 0,
@@ -84,6 +85,7 @@ function ensureLifecycleSchema(db: Database): void {
     (db.query("PRAGMA table_info(lifecycle_turns)").all() as { name: string }[]).map((c) => c.name)
   );
   const expectedCols: [string, string][] = [
+    ["updated_ts", "INTEGER NOT NULL DEFAULT 0"],
     ["searched", "INTEGER NOT NULL DEFAULT 0"],
     ["searched_node_ids", "TEXT NOT NULL DEFAULT '[]'"],
     ["created_count", "INTEGER NOT NULL DEFAULT 0"],
@@ -163,13 +165,14 @@ export function updateLifecycle(
     const updated = fn(current);
     db.run(
       `INSERT INTO lifecycle_turns (
-        scope, turn_seq, searched, searched_node_ids, created_count, answered_count,
+        scope, turn_seq, updated_ts, searched, searched_node_ids, created_count, answered_count,
         reused_count, reused_node_ids, created_node_ids, open_created_node_ids,
         root_synthesized, cairn_tool_attempted, cairn_tool_observed, cairn_visibility_nudged,
         execution_tool_count, stop_nudges, stop_blocked, completion_nudged
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(scope) DO UPDATE SET
         turn_seq=excluded.turn_seq,
+        updated_ts=excluded.updated_ts,
         searched=excluded.searched,
         searched_node_ids=excluded.searched_node_ids,
         created_count=excluded.created_count,
@@ -189,6 +192,7 @@ export function updateLifecycle(
       [
         scope,
         updated.turnSeq,
+        Date.now(),
         updated.searched ? 1 : 0,
         JSON.stringify(updated.searchedNodeIds),
         updated.createdCount,

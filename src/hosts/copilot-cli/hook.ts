@@ -34,9 +34,11 @@ import {
   CONTRACT_DECLARE_REASON,
   CONTRACT_UNAVAILABLE_REASON,
   clearInstrumentDoubt,
+  contractBlockedAttempts,
   contractInstrumentMissing,
   contractInstrumentReported,
   markContractInstrumentReported,
+  noteContractBlocked,
   noteUndeclaredNudge,
   sessionStatePath,
   declareContract,
@@ -148,13 +150,35 @@ function brainWorkComplete(s: WorkflowEvidence): boolean {
   return created + reused >= floor && !owed && Boolean(s.rootSynthesized);
 }
 
-const READ_ONLY_TOOLS = /^(read|view|glob|grep|rg|search|web_fetch|web_search|fetch_copilot_cli_documentation|list_|get_|sql|session_store_sql|ask_user|vote_memory|store_memory)/i;
+const READ_ONLY_TOOLS = /^(read|view|glob|grep|rg|search|tool_search|web_fetch|web_search|fetch_copilot_cli_documentation|list_|get_|sql|session_store_sql|ask_user|vote_memory|store_memory)/i;
 const FILE_MUTATION_TOOLS = /^(edit|create|write|replace|patch|new_file)/i;
 const SHELL_MUTATION = /(?:^|[;&|]\s*)(?:set-content|add-content|out-file|remove-item|move-item|copy-item|rename-item|new-item)\b|\bgit\s+(?:add|commit|push|checkout|switch|reset|clean|merge|rebase|tag)\b|\baz\s+repos\s+pr\s+(?:create|update)\b|\baz\s+devops\s+invoke\b[\s\S]*?--http-method\s+(?:post|put|patch|delete)\b|(?:^|[^<=])>{1,2}(?![>&])/i;
 const workflowReady = (s: WorkflowEvidence): boolean => brainWorkComplete(s);
 
 export function isFileMutationTool(toolName: string): boolean {
   return FILE_MUTATION_TOOLS.test(toolName);
+}
+
+// A deny that lists every step leaves the agent guessing which one it still owes, so it retries the
+// blocked call instead of the missing step. Name the single outstanding step, in the same order
+// brainWorkComplete checks them, so the next action is unambiguous.
+export function workflowDeficit(s: WorkflowEvidence): string {
+  if (!s.brainSearched) return "call `brain_search` to check for relevant prior knowledge";
+  const created = s.brainCreatedCount ?? 0;
+  const reused = s.brainReusedCount ?? 0;
+  if (created === 0 && reused === 0) {
+    return "call `brain_create` to record the open question this work answers";
+  }
+  const floor = s.stopNudges >= STOP_CAP ? 1 : (s.minimumBrainNodes ?? 1);
+  const owed = s.openCreatedCount ?? Math.max(0, created - (s.brainAnsweredCount ?? 0));
+  if (owed > 0) {
+    return `answer ${owed} open node(s) with \`brain_mutate\`, supplying an answer and a citation`;
+  }
+  if (created + reused < floor) {
+    return `create ${floor - (created + reused)} more decomposition node(s) with \`brain_create\``;
+  }
+  if (!s.rootSynthesized) return "synthesize the root node with `brain_mutate`";
+  return "finish the remaining Cairn workflow step";
 }
 
 export function requiredBrainNodes(executionToolCalls: number): number {
@@ -211,7 +235,8 @@ export function workflowActionDecision(
   return {
     deny: true,
     reason:
-      "Finish the injected Cairn workflow before acting: search the brain, create and answer the required decomposition nodes, then synthesize the root. The requested side effect was not executed.",
+      `Blocked by the Cairn workflow. One step is outstanding: ${workflowDeficit(state)}.`
+      + " Do that next rather than retrying this call. The requested side effect was not executed.",
   };
 }
 
@@ -491,6 +516,7 @@ export async function runCopilotHook(): Promise<void> {
 
     if (!decision.deny && !isTask(toolName) && isFileMutationTool(toolName)) {
       if (!contractDeclared(sessionId) && !contractExhausted(sessionId) && !contractInstrumentMissing(sessionId)) {
+        noteContractBlocked(sessionId);
         emit({ permissionDecision: "deny", permissionDecisionReason: CONTRACT_DECLARE_REASON });
         return;
       }
@@ -660,7 +686,11 @@ export async function runCopilotHook(): Promise<void> {
       return;
     }
 
-    const contractReason = contractStopReason(st.executionToolCount > 0, sessionId);
+    // A turn whose every execution tool was denied never increments the lifecycle counter, so treat
+    // blocked attempts as evidence the turn tried to act. Otherwise the demand is never ledgered, the
+    // release below can never be earned, and a session that cannot declare a contract stays bricked.
+    const attemptedToAct = st.executionToolCount > 0 || contractBlockedAttempts(sessionId) > 0;
+    const contractReason = contractStopReason(attemptedToAct, sessionId);
     if (contractReason) {
       if (contractDeclared(sessionId)) clearInstrumentDoubt(sessionId);
       else noteUndeclaredNudge(sessionId, st.turnSeq);

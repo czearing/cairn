@@ -140,6 +140,10 @@ test("Copilot model attribution prefers payload, Harness environment, then profi
 test("read-only tools do not count as execution", () => {
   expect(countsAsExecution("view", { path: "foo.ts" })).toBe(false);
   expect(countsAsExecution("grep", { pattern: "bar" })).toBe(false);
+  // Discovering a tool has no side effect; denying it deadlocks older sessions
+  // whose negotiated tool list predates the plan tool, because discovery is the
+  // only route to the very tool the gate demands.
+  expect(countsAsExecution("tool_search_tool", { pattern: "plan" })).toBe(false);
   expect(countsAsExecution("glob", { pattern: "*.ts" })).toBe(false);
   expect(countsAsExecution("sql", { query: "SELECT 1;" })).toBe(false);
   expect(countsAsExecution("session_store_sql", { query: "SELECT 1;" })).toBe(false);
@@ -252,6 +256,18 @@ test("Harness side effects are denied until the strict workflow is complete", ()
     minimumBrainNodes: 3,
   };
   expect(workflowActionDecision("discord_send_message", incomplete).deny).toBe(true);
+  // A deny that lists every step leaves the agent guessing, so it must name the one step still owed.
+  // This state has one unanswered node, so that is what it is told to do, and nothing else.
+  const owed = workflowActionDecision("discord_send_message", incomplete).reason ?? "";
+  expect(owed).toContain("One step is outstanding");
+  expect(owed).toContain("answer 1 open node");
+  expect(owed).not.toContain("synthesize the root");
+  expect(workflowActionDecision("discord_send_message", {
+    ...incomplete, brainSearched: false,
+  }).reason).toContain("`brain_search`");
+  expect(workflowActionDecision("discord_send_message", {
+    ...incomplete, brainAnsweredCount: 3, rootSynthesized: false,
+  }).reason).toContain("synthesize the root");
   expect(workflowActionDecision("cairn-harness-task_complete", incomplete).deny).toBe(true);
   expect(workflowActionDecision("powershell", incomplete, {
     command: "git fetch origin master; az repos pr show --id 42",
@@ -955,7 +971,55 @@ test("a session that can never declare a contract is told once and then released
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 60_000);
+
+// A turn whose execution tools are all denied at the pre-tool gate never reaches postToolUse, so the
+// lifecycle execution counter stays zero and the turn looks read-only when it ends. The demand was
+// therefore never recorded and the ledger stayed empty, so the sessions that most needed the release
+// were the only ones that could never earn it. Blocked attempts are the evidence the turn tried to act.
+test("a turn whose execution tools were all denied still earns the contract release", () => {
+  const dir = join(tmpdir(), `cairn-contract-blocked-${randomUUID()}`);
+  mkdirSync(dir, { recursive: true });
+  const dbPath = join(dir, "c.db");
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = {
+    ...process.env,
+    CAIRN_DB_PATH: dbPath,
+    CAIRN_ENFORCE_STOP_GATES: "0",
+    CAIRN_SKILLS: "0",
+    COPILOT_HOME: join(dir, "home"),
+  };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const sid = "contract-blocked-only";
+  const stop = () => invoke("agent-stop", { sessionId: sid }).stdout.toString();
+  const tryCreate = () => invoke("pre-tool", {
+    sessionId: sid, toolName: "create", toolArgs: { path: join(dir, "out.txt") },
+  }).stdout.toString();
+  // A turn that only ever attempts work the gate refuses: nothing reaches postToolUse.
+  const blockedTurn = (prompt: string) => {
+    expect(invoke("user-prompt", { sessionId: sid, prompt }).status).toBe(0);
+    expect(tryCreate()).toContain("Declare your plan first");
+  };
+  try {
+    blockedTurn("Do the thing.");
+    // The turn tried to act and could not, so ending it must still record the unmet demand.
+    expect(stop()).toContain("declare what done means");
+    expect(stop()).toContain("declare what done means");
+
+    blockedTurn("Next thing.");
+    let notice = stop();
+    for (let i = 0; i < 6 && notice.includes("declare what done means"); i += 1) notice = stop();
+    expect(notice).toContain("not reachable from this session");
+
+    // Said once, then the gate expires instead of repeating.
+    expect(stop()).not.toContain("not reachable from this session");
+    // Released: the contract gate no longer refuses work. Remaining gates are ones it can satisfy.
+    expect(tryCreate()).not.toContain("Declare your plan first");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 60_000);
 
 test("an ignored healthy Cairn workflow remains blocked until Cairn is used", () => {
   const id = randomUUID();

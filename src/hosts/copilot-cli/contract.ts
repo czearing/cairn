@@ -241,9 +241,9 @@ export function contractStopReason(changedDurableState = false, sessionId = ""):
 // per-turn budget in two or more separate turns without ever declaring is missing the instrument, not
 // disobeying. It is then told once, so the user hears it, and released — a gate whose instrument is
 // absent must expire, not brick.
-interface NudgeLedger { nudges: number; turns: number[]; reported: boolean }
+interface NudgeLedger { nudges: number; turns: number[]; reported: boolean; blocked: number }
 
-const EMPTY_LEDGER: NudgeLedger = { nudges: 0, turns: [], reported: false };
+const EMPTY_LEDGER: NudgeLedger = { nudges: 0, turns: [], reported: false, blocked: 0 };
 const ledgerPath = (sessionId: string): string => sessionStatePath(sessionId, "cairn-contract-nudges.json");
 
 function readLedger(sessionId: string): NudgeLedger {
@@ -254,6 +254,7 @@ function readLedger(sessionId: string): NudgeLedger {
       nudges: Number(parsed.nudges) || 0,
       turns: Array.isArray(parsed.turns) ? parsed.turns.filter((t) => typeof t === "number") : [],
       reported: parsed.reported === true,
+      blocked: Number(parsed.blocked) || 0,
     };
   } catch {
     return EMPTY_LEDGER;
@@ -276,6 +277,21 @@ export function noteUndeclaredNudge(sessionId: string, turnSeq: number): void {
     nudges: ledger.nudges + 1,
     turns: ledger.turns.includes(turnSeq) ? ledger.turns : [...ledger.turns, turnSeq],
   });
+}
+
+/**
+ * Record one execution tool denied at the pre-tool gate for want of a contract. A denied call never
+ * reaches postToolUse, so the lifecycle execution counter stays zero and the turn looks read-only at
+ * stop time. Without this the ledger never accumulates for the sessions it exists to release.
+ */
+export function noteContractBlocked(sessionId: string): void {
+  if (!sessionId) return;
+  const ledger = readLedger(sessionId);
+  writeLedger(sessionId, { ...ledger, blocked: ledger.blocked + 1 });
+}
+
+export function contractBlockedAttempts(sessionId: string): number {
+  return readLedger(sessionId).blocked;
 }
 
 /** Demanded across at least two separate turns and never once satisfied: the tool is not there. */

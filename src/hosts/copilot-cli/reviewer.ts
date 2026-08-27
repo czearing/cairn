@@ -7,14 +7,16 @@ export interface ReviewVerdict {
   source: "subagent" | "heuristic" | "bypass";
 }
 
-const REVIEWER_PROMPT = (task: string, evidence: string) => `You are an objective task completion reviewer. Verify if the provided evidence genuinely proves that the task was completed.
+const REVIEWER_PROMPT = (task: string, evidence: string) => `You are an objective task completion reviewer. Verify if the provided evidence genuinely and completely proves that the task was completed.
 
 Task: ${task}
 Claimed Evidence: ${evidence}
 
-Instructions:
-- If the evidence is lame, fake, mock, placeholder, or does not actually satisfy what the task asked for (e.g. creating a text log when the task required footage/media export, or claiming work without real deliverables), REJECT it.
-- If the evidence is genuine, substantive, and matches the task requirements, APPROVE it.
+Evaluation Criteria:
+1. Deliverable Fidelity: Was the actual requested deliverable produced (not just a mock, text log, or self-reported claim)?
+2. Research Grounding: For research tasks, does the evidence cite concrete files, symbols, or factual findings rather than speculative hand-waving?
+3. Testing & Edge Cases: For testing or verification tasks, does the evidence prove base cases, boundary conditions, and edge cases were executed with concrete outputs rather than an unverified assertion?
+4. Substantive Proof: Reject lame, fake, mock, or placeholder evidence. Approve only when the proof is concrete, genuine, and directly satisfies the task.
 
 Output format:
 VERDICT: APPROVED or REJECTED

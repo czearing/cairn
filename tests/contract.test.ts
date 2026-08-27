@@ -518,4 +518,53 @@ test("plan completion invokes live 3.7 reviewer to verify evidence and rejects m
   }
 }, 30_000);
 
+test("live 3.7 reviewer catches inadequate research and incomplete edge case testing", () => {
+  const sessionId = randomUUID();
+  delete process.env.CAIRN_REVIEWER_MOCK;
+  try {
+    declareContract([
+      "Research vector indexing algorithm",
+      "Test string parser against all edge cases and boundary inputs",
+    ], sessionId);
+
+    // 1. Inadequate research: vague claim with no files, symbols, or citations
+    const vagueResearch = satisfyCriterion(
+      "Research vector indexing algorithm",
+      "Looked around the codebase and understood how vectors work in general.",
+      sessionId,
+    );
+    expect(vagueResearch.error).toBeDefined();
+    expect(vagueResearch.error).toContain("reviewer rejected completion");
+
+    // 2. Concrete research with file citations and findings is approved
+    const solidResearch = satisfyCriterion(
+      "Research vector indexing algorithm",
+      "Audited src/core/vector-index.ts and src/core/embed.ts: identified cosine loop unrolling and sqlite-vec handle reuse across exactVectorCandidates.",
+      sessionId,
+    );
+    expect(solidResearch.error).toBeUndefined();
+
+    // 3. Incomplete testing: blanket assertion with no edge case execution
+    const incompleteTest = satisfyCriterion(
+      "Test string parser against all edge cases and boundary inputs",
+      "Checked the code mentally and everything looks good for edge cases.",
+      sessionId,
+    );
+    expect(incompleteTest.error).toBeDefined();
+    expect(incompleteTest.error).toContain("reviewer rejected completion");
+
+    // 4. Concrete test verification covering base cases, empty input, and bounds
+    const robustTest = satisfyCriterion(
+      "Test string parser against all edge cases and boundary inputs",
+      "Executed `bun test tests/parser.test.ts` (exit 0): 18 passed assertions covering empty string '', 10k bounds, unicode, and null bytes in src/parser.ts.",
+      sessionId,
+    );
+    expect(robustTest.error).toBeUndefined();
+    expect(robustTest.remaining).toEqual([]);
+  } finally {
+    process.env.CAIRN_REVIEWER_MOCK = "approve";
+    clearContract(sessionId);
+  }
+}, 45_000);
+
 

@@ -39,6 +39,7 @@ import {
   contractInstrumentReported,
   markContractInstrumentReported,
   noteContractBlocked,
+  noteActiveSession,
   noteUndeclaredNudge,
   sessionStatePath,
   declareContract,
@@ -424,6 +425,7 @@ export async function runCopilotHook(): Promise<void> {
     eventId, toolCallId, durationMs, model: payloadModel,
   } = parsePayload(raw);
   const model = resolveCopilotModel(payloadModel);
+  noteActiveSession(sessionId);
   let turnSeq = 0;
   try { turnSeq = readLifecycle(turnScope(sessionId, agentId)).turnSeq; } catch { /* telemetry is optional */ }
   const usageSource = `${mode || "hook"}${toolName ? `:${toolName}` : ""}`;

@@ -38,7 +38,33 @@ export const sessionStatePath = (sessionId: string, file: string): string =>
   join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId || "default", file);
 
 const effectiveSessionId = (sessionId = ""): string =>
-  sessionId || process.env.CAIRN_SESSION_ID || process.env.COPILOT_SESSION_ID || "";
+  sessionId || process.env.CAIRN_SESSION_ID || readActiveSession() || process.env.COPILOT_SESSION_ID || "";
+
+// The MCP server is a separate, long-lived process: it captures COPILOT_SESSION_ID once at spawn and never
+// sees it change, so after the host starts a new session the `plan` tool kept writing to the previous
+// session's contract. It answered "accepted" while the stop gate, which is handed the live session id by the
+// hook, went on enforcing criteria that nothing could close — a turn blocked forever on work already done.
+// The hook knows the live id on every event, so it publishes it here for processes that cannot be told.
+const activeSessionPath = (): string =>
+  join(dirname(process.env.CAIRN_DB_PATH || config.dbPath), "contracts", "active-session");
+
+function readActiveSession(): string {
+  try {
+    return readFileSync(activeSessionPath(), "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+export function noteActiveSession(sessionId: string): void {
+  if (!sessionId.trim() || readActiveSession() === sessionId.trim()) return;
+  try {
+    mkdirSync(dirname(activeSessionPath()), { recursive: true });
+    writeFileSync(activeSessionPath(), sessionId.trim());
+  } catch {
+    /* best effort: a stale pointer only restores the previous fallback */
+  }
+}
 
 // Calls without a host session id retain the legacy path for direct unit tests and non-Copilot callers.
 // Production Copilot hooks always pass sessionId and therefore never share this file.

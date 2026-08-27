@@ -12,6 +12,7 @@ import {
   contractStopReason,
   declareContract,
   isExecutableCommand,
+  noteActiveSession,
   noteContractNudge,
   readContract,
   recordObservedRun,
@@ -505,6 +506,32 @@ test("prose criteria beginning with a tool-named verb are not treated as executa
       .toEqual({ remaining: [] });
   } finally {
     clearContract(sessionId);
+  }
+});
+
+// A separate long-lived process (the MCP server) captures COPILOT_SESSION_ID once at spawn. When the host
+// starts a new session, that process must still reach the contract the hook enforces, or `plan` reports
+// success while the stop gate blocks on criteria nothing can close.
+test("a process holding a stale COPILOT_SESSION_ID still reaches the session the hook is enforcing", () => {
+  const live = randomUUID();
+  const stale = randomUUID();
+  const previous = process.env.COPILOT_SESSION_ID;
+  try {
+    declareContract(["ship the feature"], live);
+    noteActiveSession(live);
+
+    process.env.COPILOT_SESSION_ID = stale;
+    delete process.env.CAIRN_SESSION_ID;
+
+    // Resolved with no explicit id, exactly as the MCP server does.
+    expect(satisfyCriterion("ship the feature", "implemented in src/feature.ts", "")).toEqual({ remaining: [] });
+    expect(readContract(live)?.criteria[0]?.passed).toBe(true);
+    expect(contractStopReason(true, live)).toBe("");
+  } finally {
+    if (previous === undefined) delete process.env.COPILOT_SESSION_ID;
+    else process.env.COPILOT_SESSION_ID = previous;
+    clearContract(live);
+    clearContract(stale);
   }
 });
 

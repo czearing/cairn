@@ -355,16 +355,23 @@ registerTool(
   },
   async ({ tasks, checks, completed, satisfied, evidence }) => measured("plan", { tasks, checks, completed, satisfied, evidence }, async () => {
     const itemToClose = completed || satisfied;
-    const itemsToAdd = tasks || checks;
-    if (itemToClose) {
-      const { validateEvidence } = await import("../hosts/copilot-cli/contract");
-      const validation = validateEvidence(evidence || "");
-      if (!validation.valid) return fail(validation.error || "evidence is required");
+    const itemsToAdd = (tasks || checks)?.map((t) => t.trim()).filter(Boolean);
+    const { declareContract, satisfyCriterion } = await import("../hosts/copilot-cli/contract");
+
+    if (itemsToAdd && itemsToAdd.length > 0) {
+      declareContract(itemsToAdd);
     }
-    if (!itemToClose && !(itemsToAdd?.some((item) => item.trim()))) {
+
+    if (itemToClose) {
+      const res = satisfyCriterion(itemToClose, evidence || "");
+      if (res.error) return fail(res.error);
+      return json({ accepted: true, completed: itemToClose, remaining: res.remaining });
+    }
+
+    if (!itemsToAdd || itemsToAdd.length === 0) {
       return fail("provide at least one planned task item");
     }
-    return json({ accepted: true });
+    return json({ accepted: true, tasks: itemsToAdd });
   })
 );
 
@@ -382,16 +389,23 @@ registerTool(
   },
   async ({ checks, tasks, satisfied, completed, evidence }) => measured("contract", { checks, tasks, satisfied, completed, evidence }, async () => {
     const itemToClose = satisfied || completed;
-    const itemsToAdd = checks || tasks;
-    if (itemToClose) {
-      const { validateEvidence } = await import("../hosts/copilot-cli/contract");
-      const validation = validateEvidence(evidence || "");
-      if (!validation.valid) return fail(validation.error || "evidence is required");
+    const itemsToAdd = (checks || tasks)?.map((c) => c.trim()).filter(Boolean);
+    const { declareContract, satisfyCriterion } = await import("../hosts/copilot-cli/contract");
+
+    if (itemsToAdd && itemsToAdd.length > 0) {
+      declareContract(itemsToAdd);
     }
-    if (!itemToClose && !(itemsToAdd?.some((check) => check.trim()))) {
+
+    if (itemToClose) {
+      const res = satisfyCriterion(itemToClose, evidence || "");
+      if (res.error) return fail(res.error);
+      return json({ accepted: true, completed: itemToClose, remaining: res.remaining });
+    }
+
+    if (!itemsToAdd || itemsToAdd.length === 0) {
       return fail("declare at least one criterion describing what done means");
     }
-    return json({ accepted: true });
+    return json({ accepted: true, criteria: itemsToAdd });
   })
 );
 

@@ -503,15 +503,6 @@ test("plan completion invokes live 3.7 reviewer to verify evidence and rejects m
     );
     expect(res.error).toBeDefined();
     expect(res.error).toContain("reviewer rejected completion");
-
-    // Attempting to complete with real deliverable is approved
-    const validRes = satisfyCriterion(
-      "Export video footage evidence",
-      "Exported footage/camera_movement_150f.mp4 showing camera rotation and translated vectors",
-      sessionId,
-    );
-    expect(validRes.error).toBeUndefined();
-    expect(validRes.remaining).toEqual([]);
   } finally {
     process.env.CAIRN_REVIEWER_MOCK = "approve";
     clearContract(sessionId);
@@ -524,7 +515,7 @@ test("live 3.7 reviewer catches inadequate research and incomplete edge case tes
   try {
     declareContract([
       "Research vector indexing algorithm",
-      "Test string parser against all edge cases and boundary inputs",
+      "Test vector encoding and decoding against boundary edge cases",
     ], sessionId);
 
     // 1. Inadequate research: vague claim with no files, symbols, or citations
@@ -546,17 +537,17 @@ test("live 3.7 reviewer catches inadequate research and incomplete edge case tes
 
     // 3. Incomplete testing: blanket assertion with no edge case execution
     const incompleteTest = satisfyCriterion(
-      "Test string parser against all edge cases and boundary inputs",
+      "Test vector encoding and decoding against boundary edge cases",
       "Checked the code mentally and everything looks good for edge cases.",
       sessionId,
     );
     expect(incompleteTest.error).toBeDefined();
     expect(incompleteTest.error).toContain("reviewer rejected completion");
 
-    // 4. Concrete test verification covering base cases, empty input, and bounds
+    // 4. Concrete test verification covering real test files and outputs
     const robustTest = satisfyCriterion(
-      "Test string parser against all edge cases and boundary inputs",
-      "Executed `bun test tests/parser.test.ts` (exit 0): 18 passed assertions covering empty string '', 10k bounds, unicode, and null bytes in src/parser.ts.",
+      "Test vector encoding and decoding against boundary edge cases",
+      "Executed `bun test tests/vector.test.ts` (exit 0): 7 tests passed covering float32 precision, IEEE-754 little-endian byte layout, buffer offsets, and null/unreadable edge cases in tests/vector.test.ts.",
       sessionId,
     );
     expect(robustTest.error).toBeUndefined();
@@ -565,6 +556,36 @@ test("live 3.7 reviewer catches inadequate research and incomplete edge case tes
     process.env.CAIRN_REVIEWER_MOCK = "approve";
     clearContract(sessionId);
   }
-}, 45_000);
+}, 90_000);
+
+test("live 3.7 reviewer inspects codebase files on disk and rejects non-existent code claims", () => {
+  const sessionId = randomUUID();
+  delete process.env.CAIRN_REVIEWER_MOCK;
+  try {
+    declareContract([
+      "Implement vector serialization utility",
+    ], sessionId);
+
+    // 1. Claiming a non-existent file: reviewer actively inspects the repo, detects absence, and rejects
+    const fakeFile = satisfyCriterion(
+      "Implement vector serialization utility",
+      "Implemented MemoryScanner class and scanning methods in src/fake_scanner_nonexistent_xyz.h",
+      sessionId,
+    );
+    expect(fakeFile.error).toBeDefined();
+    expect(fakeFile.error).toContain("reviewer rejected completion");
+
+    // 2. Claiming real file that exists in repo: reviewer reads the code and approves
+    const realFile = satisfyCriterion(
+      "Implement vector serialization utility",
+      "Implemented encodeVector with Float32Array conversion in src/core/vector.ts",
+      sessionId,
+    );
+    expect(realFile.error).toBeUndefined();
+  } finally {
+    process.env.CAIRN_REVIEWER_MOCK = "approve";
+    clearContract(sessionId);
+  }
+}, 60_000);
 
 

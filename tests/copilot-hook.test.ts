@@ -1423,3 +1423,168 @@ test("conversational turn with no execution tools allows fast response without s
   }
 });
 
+test("complete pre-tool gate transitions and verifies all error messages", () => {
+  const id = randomUUID();
+  const dbPath = join(tmpdir(), `cairn-pre-tool-messages-${id}.db`);
+  const hook = join(import.meta.dir, "..", "src", "hosts", "copilot-cli", "hook.ts");
+  const env = { ...process.env, CAIRN_DB_PATH: dbPath, CAIRN_ENFORCE_STOP_GATES: "1" };
+  const invoke = (mode: string, payload: object) =>
+    spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
+  const session = `pre-tool-msg-${id}`;
+
+  try {
+    invoke("user-prompt", { sessionId: session, prompt: "Refactor codebase." });
+
+    // 1. Stage 1: No plan declared -> denied with CONTRACT_DECLARE_REASON
+    const stage1 = invoke("pre-tool", {
+      sessionId: session,
+      toolName: "edit",
+      toolArgs: { path: "src/app.ts", old_str: "1", new_str: "2" },
+    }).stdout.toString();
+    const stage1Json = JSON.parse(stage1);
+    expect(stage1Json.permissionDecision).toBe("deny");
+    expect(stage1Json.permissionDecisionReason).toBe(
+      "Declare your plan first: call the `plan` (or `contract`) tool with the tasks defining done for this task. The requested side effect was not executed."
+    );
+
+    // Declare plan
+    const planPost = invoke("post-tool", {
+      sessionId: session,
+      toolName: "plan",
+      toolArgs: { tasks: ["Update app", "bun test"] },
+      toolResult: { accepted: true },
+    }).stdout.toString();
+    const planPostJson = JSON.parse(planPost);
+    expect(planPostJson.additionalContext).toContain("Plan state:");
+    expect(planPostJson.additionalContext).toContain("- [ ] Update app");
+    expect(planPostJson.additionalContext).toContain("- [ ] bun test");
+
+    // 2. Stage 2: Plan declared, but no brain_search -> denied with research reason
+    const stage2 = invoke("pre-tool", {
+      sessionId: session,
+      toolName: "edit",
+      toolArgs: { path: "src/app.ts", old_str: "1", new_str: "2" },
+    }).stdout.toString();
+    const stage2Json = JSON.parse(stage2);
+    expect(stage2Json.permissionDecision).toBe("deny");
+    expect(stage2Json.permissionDecisionReason).toBe(
+      "Research in Cairn first: call `brain_search` to check for relevant prior knowledge before modifying files or executing changes."
+    );
+
+    // Perform brain_search
+    const searchPost = invoke("post-tool", {
+      sessionId: session,
+      toolName: "brain_search",
+      toolArgs: { query: "app refactor" },
+      toolResult: { success: true },
+    }).stdout.toString();
+    expect(JSON.parse(searchPost).additionalContext).toBeDefined();
+
+    // 3. Stage 3: Searched, but no root node created -> denied with decomposition reason
+    const stage3 = invoke("pre-tool", {
+      sessionId: session,
+      toolName: "edit",
+      toolArgs: { path: "src/app.ts", old_str: "1", new_str: "2" },
+    }).stdout.toString();
+    const stage3Json = JSON.parse(stage3);
+    expect(stage3Json.permissionDecision).toBe("deny");
+    expect(stage3Json.permissionDecisionReason).toBe(
+      "Decompose your task in Cairn first: declare your root question with `brain_create` (or reuse a covering node with `brain_mutate`) before modifying files or executing changes."
+    );
+
+    // Create root node
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "brain_create",
+      toolArgs: { text: "How to update app.ts safely?" },
+      toolResult: { success: true, id: "root-app-1" },
+    });
+
+    // 4. Stage 4: Plan + Search + Root Node established -> edit allowed!
+    const stage4 = invoke("pre-tool", {
+      sessionId: session,
+      toolName: "edit",
+      toolArgs: { path: "src/app.ts", old_str: "1", new_str: "2" },
+    }).stdout.toString();
+    expect(stage4).toBe("{}");
+
+    // Execute the edit
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "edit",
+      toolArgs: { path: "src/app.ts", old_str: "1", new_str: "2" },
+      toolResult: { success: true },
+    });
+
+    // 5. Stage 5: Stop gate deficit shows open unanswered node
+    const stopGate = invoke("agent-stop", { sessionId: session }).stdout.toString();
+    const stopGateJson = JSON.parse(stopGate);
+    expect(stopGateJson.decision).toBe("block");
+    expect(stopGateJson.reason).toContain("These nodes you created are still unanswered: root-app-1");
+
+    // Mutate and answer root node, and create + answer decomposition children
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "brain_create",
+      toolArgs: { text: "What is subtask 1?" },
+      toolResult: { success: true, id: "child-app-1" },
+    });
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "brain_create",
+      toolArgs: { text: "What is subtask 2?" },
+      toolResult: { success: true, id: "child-app-2" },
+    });
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "brain_mutate",
+      toolArgs: { id: "child-app-1", answer: "Child 1 solved.", citation: "https://example.com" },
+      toolResult: { success: true, id: "child-app-1" },
+    });
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "brain_mutate",
+      toolArgs: { id: "child-app-2", answer: "Child 2 solved.", citation: "https://example.com" },
+      toolResult: { success: true, id: "child-app-2" },
+    });
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "brain_mutate",
+      toolArgs: { id: "root-app-1", answer: "Refactored safely.", citation: "https://example.com" },
+      toolResult: { success: true, id: "root-app-1" },
+    });
+
+    // 6. Stage 6: Stop gate shows unmet plan items
+    const stopPlan = invoke("agent-stop", { sessionId: session }).stdout.toString();
+    const stopPlanJson = JSON.parse(stopPlan);
+    expect(stopPlanJson.decision).toBe("block");
+    expect(stopPlanJson.reason).toContain("These declared items are unmet: Update app | bun test");
+
+    // Satisfy first item via plan tool
+    const updatePost = invoke("post-tool", {
+      sessionId: session,
+      toolName: "plan",
+      toolArgs: { completed: "Update app", evidence: "src/app.ts updated" },
+      toolResult: { accepted: true },
+    }).stdout.toString();
+    const updatePostJson = JSON.parse(updatePost);
+    expect(updatePostJson.additionalContext).toContain("- [x] Update app");
+    expect(updatePostJson.additionalContext).toContain("- [ ] bun test");
+
+    // Satisfy second item via command execution
+    invoke("post-tool", {
+      sessionId: session,
+      toolName: "powershell",
+      toolArgs: { command: "bun test" },
+      toolResult: { success: true, textResultForLlm: "<shellId: 1 completed with exit code 0>" },
+    });
+
+    // 7. Stage 7: Both brain and plan satisfied -> completes!
+    const finalStop = invoke("agent-stop", { sessionId: session }).stdout.toString();
+    expect(finalStop).toContain("completed every requested task");
+    expect(invoke("agent-stop", { sessionId: session }).stdout.toString()).toBe("{}");
+  } finally {
+    rmSync(dbPath, { force: true });
+  }
+});
+

@@ -45,10 +45,8 @@ interface McpConfig {
   [k: string]: unknown;
 }
 
-// Merge the cairn server into mcp-config.json, preserving any other servers and unknown keys. Any
-// CAIRN_LIBSQL_* vars in the environment are written into the server's `env` so cloud sync is set up
-// by `cairn install` alone. If the server already exists but is missing those vars (sync added after
-// the fact), they are folded into its env in place.
+// Merge the cairn server into mcp-config.json, preserving any other servers and unknown keys.
+// If the server already exists but is missing configuration, it is updated in place.
 export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
   const path = copilotMcpPath();
   const cfg: McpConfig = existsSync(path) ? JSON.parse(await readFile(path, "utf8")) : {};

@@ -76,11 +76,8 @@ async function installHooks(dryRun: boolean): Promise<{ added: string[]; bak: bo
   return { added, bak };
 }
 
-// Phase 3 — register the MCP server at user scope, but probe first so a re-run is a no-op, not an
-// error. Any CAIRN_LIBSQL_* vars in the environment are baked into the registration as `-e` flags, so
-// `cairn install` is all a new device needs to join cloud sync. If the server is already registered
-// but lacks those creds (e.g. sync was set up after the fact), it is re-registered to add them.
-// In dryRun mode it only probes and reports what WOULD happen. Returns what happened.
+// Phase 3 — register the MCP server at user scope, probing first so a re-run is a clean no-op.
+// In dryRun mode it only probes and reports what WOULD happen. Returns status.
 function registerMcp(dryRun: boolean): "registered" | "updated" | "already" | "failed" | "no-cli" | "would-register" {
   const claude = Bun.which("claude");
   if (!claude) return "no-cli";

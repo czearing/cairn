@@ -25,10 +25,14 @@ import {
 } from "../src/hosts/copilot-cli/hook";
 
 const priorCompletionContinuation = process.env.CAIRN_FORCE_COMPLETION_CONTINUATION;
-beforeAll(() => { process.env.CAIRN_FORCE_COMPLETION_CONTINUATION = "1"; });
+beforeAll(() => {
+  process.env.CAIRN_FORCE_COMPLETION_CONTINUATION = "1";
+  process.env.CAIRN_REVIEWER_MOCK = "approve";
+});
 afterAll(() => {
   if (priorCompletionContinuation == null) delete process.env.CAIRN_FORCE_COMPLETION_CONTINUATION;
   else process.env.CAIRN_FORCE_COMPLETION_CONTINUATION = priorCompletionContinuation;
+  delete process.env.CAIRN_REVIEWER_MOCK;
 });
 
 function lifecycleState(dbPath: string, scope: string): { pendingReviewIds: string[]; pendingReviews: unknown[] } {
@@ -855,6 +859,7 @@ test("contracts remain isolated between concurrent Copilot sessions", () => {
     CAIRN_DB_PATH: dbPath,
     CAIRN_ENFORCE_STOP_GATES: "0",
     CAIRN_SKILLS: "0",
+    CAIRN_REVIEWER_MOCK: "approve",
     COPILOT_HOME: join(dir, "home"),
   };
   const invoke = (mode: string, payload: object) =>

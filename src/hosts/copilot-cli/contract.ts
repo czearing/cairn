@@ -14,6 +14,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { config } from "../../core/config";
+import { verifyPlanEvidence } from "./reviewer";
 
 export interface Criterion {
   check: string;
@@ -193,6 +194,10 @@ export function satisfyCriterion(check: string, evidence: string, sessionId = ""
   if (!validation.valid) return { error: validation.error };
   if (isExecutableCommand(match.check) && !match.passed) {
     return { error: `executable check "${match.check}" must be run via command execution and observe exit code 0` };
+  }
+  const review = verifyPlanEvidence(match.check, evidence);
+  if (!review.approved) {
+    return { error: `reviewer rejected completion: ${review.reason}` };
   }
   const criteria = contract.criteria.map((criterion) =>
     criterion === match ? { ...criterion, passed: true, evidence: normalize(evidence) } : criterion);

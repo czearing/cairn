@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -16,6 +16,14 @@ import {
   recordObservedRun,
   satisfyCriterion,
 } from "../src/hosts/copilot-cli/contract";
+
+beforeAll(() => {
+  process.env.CAIRN_REVIEWER_MOCK = "approve";
+});
+
+afterAll(() => {
+  delete process.env.CAIRN_REVIEWER_MOCK;
+});
 
 test("declareContract sets up initial criteria and prevents empty declaration", () => {
   const sessionId = randomUUID();
@@ -69,7 +77,7 @@ test("declareContract ratchets: appends new criteria and ignores duplicates with
   } finally {
     clearContract(sessionId);
   }
-});
+}, 20_000);
 
 test("satisfyCriterion handles case-insensitivity, normalization, and updating evidence", () => {
   const sessionId = randomUUID();
@@ -96,14 +104,14 @@ test("satisfyCriterion handles case-insensitivity, normalization, and updating e
     expect(buildCrit?.evidence).toBe("exit 0 from npm run build");
 
     // Updating evidence for an existing satisfied criterion
-    satisfyCriterion("docs updated", "README.md line 42", sessionId);
+    satisfyCriterion("docs updated", "Updated README.md section on usage with configuration parameters", sessionId);
     contract = readContract(sessionId);
     expect(contract?.criteria.every((c) => c.passed)).toBe(true);
     expect(contractStopReason(true, sessionId)).toBe("");
   } finally {
     clearContract(sessionId);
   }
-});
+}, 20_000);
 
 test("recordObservedRun closes executable criteria accurately without false positives", () => {
   const sessionId = randomUUID();
@@ -480,4 +488,34 @@ test("declared plan is NEVER released when items are unmet regardless of nudge c
     clearContract(sessionId);
   }
 });
+
+test("plan completion invokes live 3.7 reviewer to verify evidence and rejects mock/lame proof", () => {
+  const sessionId = randomUUID();
+  delete process.env.CAIRN_REVIEWER_MOCK;
+  try {
+    declareContract(["Export video footage evidence"], sessionId);
+
+    // Attempting to complete with a text log should be rejected by the reviewer
+    const res = satisfyCriterion(
+      "Export video footage evidence",
+      "Generated OutlastVR_FootageVerification.log documenting 150 frames of camera movement",
+      sessionId,
+    );
+    expect(res.error).toBeDefined();
+    expect(res.error).toContain("reviewer rejected completion");
+
+    // Attempting to complete with real deliverable is approved
+    const validRes = satisfyCriterion(
+      "Export video footage evidence",
+      "Exported footage/camera_movement_150f.mp4 showing camera rotation and translated vectors",
+      sessionId,
+    );
+    expect(validRes.error).toBeUndefined();
+    expect(validRes.remaining).toEqual([]);
+  } finally {
+    process.env.CAIRN_REVIEWER_MOCK = "approve";
+    clearContract(sessionId);
+  }
+}, 30_000);
+
 

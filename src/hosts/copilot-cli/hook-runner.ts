@@ -1,4 +1,9 @@
 #!/usr/bin/env bun
+if (process.env.CAIRN_SKIP_HOOKS === "1" || process.env.CAIRN_REVIEWER === "1") {
+  process.stdout.write("{}");
+  process.exit(0);
+}
+
 import { appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

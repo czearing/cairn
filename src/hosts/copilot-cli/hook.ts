@@ -378,6 +378,10 @@ function debugLog(mode: string, raw: string): void {
 }
 
 export async function runCopilotHook(): Promise<void> {
+  if (process.env.CAIRN_SKIP_HOOKS === "1" || process.env.CAIRN_REVIEWER === "1") {
+    process.stdout.write("{}");
+    return;
+  }
   process.env.CAIRN_READONLY = "1";
   const mode = process.argv[2];
   const raw = await readStdin();

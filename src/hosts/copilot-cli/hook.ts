@@ -152,7 +152,7 @@ const SHELL_MUTATION = /(?:^|[;&|]\s*)(?:set-content|add-content|out-file|remove
 const workflowReady = (s: WorkflowEvidence): boolean => brainWorkComplete(s);
 
 export function requiredBrainNodes(executionToolCalls: number): number {
-  const full = Math.max(1, Number(process.env.CAIRN_MIN_BRAIN_NODES || "3"));
+  const full = Math.max(1, Number(process.env.CAIRN_MIN_BRAIN_NODES || "1"));
   const readOnly = Math.max(1, Number(process.env.CAIRN_MIN_BRAIN_NODES_READONLY || "1"));
   return executionToolCalls > 0 ? full : Math.min(readOnly, full);
 }
@@ -628,8 +628,8 @@ export async function runCopilotHook(): Promise<void> {
       executionToolCount: st.executionToolCount,
     }).file;
 
-    const deficit = file === "turn-reminder.md"
-      ? `\n\nThis turn already has: searched=${st.searched}, created=${st.createdCount}, answered=${st.answeredCount}, reused=${st.reusedCount}, root synthesized=${st.rootSynthesized}. Required nodes for a turn that changed durable state: ${requiredBrainNodes(st.executionToolCount)}. Supply only what is missing; do not repeat what is already done.${st.openCreatedNodeIds.length ? ` These nodes you created are still unanswered: ${st.openCreatedNodeIds.join(", ")}.` : ""}`
+    const deficit = file === "turn-reminder.md" && st.openCreatedNodeIds.length > 0
+      ? `\n\nUnresolved nodes to answer: ${st.openCreatedNodeIds.join(", ")}.`
       : "";
     const text = file ? internalContext(`${await promptText(file)}${deficit}`) : "";
     if (text) {

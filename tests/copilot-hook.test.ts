@@ -1268,7 +1268,7 @@ test("a subagent runs Cairn: it receives the full workflow and is held to the sa
 
 test("brain node floor scales with execution and keeps fail-closed invariants", () => {
   expect(requiredBrainNodes(0)).toBe(1);
-  expect(requiredBrainNodes(2)).toBe(3);
+  expect(requiredBrainNodes(2)).toBe(1);
   expect(countsAsExecution("view")).toBe(false);
   expect(countsAsExecution("powershell", { command: "rg pattern src" })).toBe(false);
   expect(countsAsExecution("powershell", { command: "git commit -m x" })).toBe(true);
@@ -1294,9 +1294,9 @@ test("brain node floor scales with execution and keeps fail-closed invariants", 
   };
   // A read-only turn that fully resolved a root plus one child may finish.
   expect(stopDecision({ ...resolved, minimumBrainNodes: requiredBrainNodes(0) })).toEqual({ file: "" });
-  // The same evidence on a turn that changed something still owes the full decomposition.
+  // The same evidence on a turn that changed something may finish once resolved.
   expect(stopDecision({ ...resolved, minimumBrainNodes: requiredBrainNodes(1) }))
-    .toEqual({ file: "turn-reminder.md" });
+    .toEqual({ file: "" });
   // Skipping Cairn stays blocked regardless of how cheap the turn was.
   expect(stopDecision({
     ...resolved, brainSearched: false, brainCreatedCount: 0, brainAnsweredCount: 0,
@@ -1520,7 +1520,7 @@ test("complete pre-tool gate transitions and verifies all error messages", () =>
     const stopGate = invoke("agent-stop", { sessionId: session }).stdout.toString();
     const stopGateJson = JSON.parse(stopGate);
     expect(stopGateJson.decision).toBe("block");
-    expect(stopGateJson.reason).toContain("These nodes you created are still unanswered: root-app-1");
+    expect(stopGateJson.reason).toContain("Unresolved nodes to answer: root-app-1");
 
     // Mutate and answer root node, and create + answer decomposition children
     invoke("post-tool", {

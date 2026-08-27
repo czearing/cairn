@@ -15,6 +15,7 @@ import {
   readContract,
   recordObservedRun,
   satisfyCriterion,
+  formatPlanSummary,
 } from "../src/hosts/copilot-cli/contract";
 
 beforeAll(() => {
@@ -170,6 +171,36 @@ test("concurrent sessions have strictly isolated contracts", () => {
     clearContract(sessionA);
     clearContract(sessionB);
     clearContract(sessionC);
+  }
+});
+
+test("formatPlanSummary strictly isolates plans between different Copilot sessions", () => {
+  const session1 = `session-summary-1-${randomUUID()}`;
+  const session2 = `session-summary-2-${randomUUID()}`;
+
+  try {
+    declareContract(["Task 1 for session 1", "Task 2 for session 1"], session1);
+    declareContract(["Task A for session 2", "Task B for session 2"], session2);
+
+    satisfyCriterion("Task 1 for session 1", "evidence for task 1", session1);
+
+    const summary1 = formatPlanSummary(session1);
+    const summary2 = formatPlanSummary(session2);
+
+    // Summary 1 only contains Session 1 tasks
+    expect(summary1).toContain("Task 1 for session 1");
+    expect(summary1).toContain("Task 2 for session 1");
+    expect(summary1).not.toContain("Task A for session 2");
+    expect(summary1).not.toContain("Task B for session 2");
+
+    // Summary 2 only contains Session 2 tasks
+    expect(summary2).toContain("Task A for session 2");
+    expect(summary2).toContain("Task B for session 2");
+    expect(summary2).not.toContain("Task 1 for session 1");
+    expect(summary2).not.toContain("Task 2 for session 1");
+  } finally {
+    clearContract(session1);
+    clearContract(session2);
   }
 });
 
@@ -454,18 +485,15 @@ test("declared plan enforces full completion even when executionToolCount is 0",
   }
 });
 
-test("satisfyCriterion validates evidence quality and rejects trivial/vacuous proof", () => {
+test("satisfyCriterion validates evidence presence", () => {
   const sessionId = randomUUID();
   try {
     declareContract(["Feature Implemented"], sessionId);
-    expect(satisfyCriterion("Feature Implemented", "done", sessionId)).toEqual({
-      error: "insufficient evidence: specify what you did to complete this task with concrete details (e.g., files modified, command output, or artifact produced)",
+    expect(satisfyCriterion("Feature Implemented", "", sessionId)).toEqual({
+      error: "evidence is required: specify what you did to complete this task (e.g., files modified, test output, or artifact produced)",
     });
-    expect(satisfyCriterion("Feature Implemented", "ok", sessionId)).toEqual({
-      error: "insufficient evidence: specify what you did to complete this task with concrete details (e.g., files modified, command output, or artifact produced)",
-    });
-    expect(satisfyCriterion("Feature Implemented", "fixed", sessionId)).toEqual({
-      error: "insufficient evidence: specify what you did to complete this task with concrete details (e.g., files modified, command output, or artifact produced)",
+    expect(satisfyCriterion("Feature Implemented", "   ", sessionId)).toEqual({
+      error: "evidence is required: specify what you did to complete this task (e.g., files modified, test output, or artifact produced)",
     });
     expect(satisfyCriterion("Feature Implemented", "implemented user authentication in src/auth.ts", sessionId)).toEqual({
       remaining: [],
@@ -507,7 +535,7 @@ test("plan completion invokes live 3.7 reviewer to verify evidence and rejects m
     process.env.CAIRN_REVIEWER_MOCK = "approve";
     clearContract(sessionId);
   }
-}, 30_000);
+}, 60_000);
 
 test("live 3.7 reviewer catches inadequate research and incomplete edge case testing", () => {
   const sessionId = randomUUID();

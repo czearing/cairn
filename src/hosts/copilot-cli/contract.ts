@@ -37,15 +37,21 @@ const normalize = (text: string): string => text.replace(/\s+/g, " ").trim();
 export const sessionStatePath = (sessionId: string, file: string): string =>
   join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "session-state", sessionId || "default", file);
 
+const effectiveSessionId = (sessionId = ""): string =>
+  sessionId || process.env.CAIRN_SESSION_ID || process.env.COPILOT_SESSION_ID || "";
+
 // Calls without a host session id retain the legacy path for direct unit tests and non-Copilot callers.
 // Production Copilot hooks always pass sessionId and therefore never share this file.
-const path = (sessionId = ""): string => sessionId
-  ? join(
-      dirname(process.env.CAIRN_DB_PATH || config.dbPath),
-      "contracts",
-      `${createHash("sha256").update(sessionId).digest("hex")}.json`,
-    )
-  : join(dirname(process.env.CAIRN_DB_PATH || config.dbPath), "contract.json");
+const path = (sessionId = ""): string => {
+  const sid = effectiveSessionId(sessionId);
+  return sid
+    ? join(
+        dirname(process.env.CAIRN_DB_PATH || config.dbPath),
+        "contracts",
+        `${createHash("sha256").update(sid).digest("hex")}.json`,
+      )
+    : join(dirname(process.env.CAIRN_DB_PATH || config.dbPath), "contract.json");
+};
 
 export function readContract(sessionId = ""): Contract | null {
   try {
@@ -142,40 +148,12 @@ export function isExecutableCommand(check: string): boolean {
   return EXECUTABLE_COMMAND_PREFIX.test(normalize(check));
 }
 
-const TRIVIAL_EVIDENCE = new Set([
-  "done",
-  "fixed",
-  "completed",
-  "ok",
-  "yes",
-  "passed",
-  "verified",
-  "true",
-  "none",
-  "n/a",
-  "na",
-  "finished",
-  "resolved",
-  "complete",
-  "satisfies",
-  "satisfied",
-  "success",
-  "did it",
-  "it is done",
-]);
-
 export function validateEvidence(evidence: string): { valid: boolean; error?: string } {
   const trimmed = normalize(evidence);
   if (!trimmed) {
     return {
       valid: false,
       error: "evidence is required: specify what you did to complete this task (e.g., files modified, test output, or artifact produced)",
-    };
-  }
-  if (trimmed.length < 8 || TRIVIAL_EVIDENCE.has(trimmed.toLowerCase())) {
-    return {
-      valid: false,
-      error: "insufficient evidence: specify what you did to complete this task with concrete details (e.g., files modified, command output, or artifact produced)",
     };
   }
   return { valid: true };

@@ -134,6 +134,13 @@ export function recordObservedRun(command: string, succeeded: boolean, sessionId
   if (changed) write({ ...contract, criteria }, sessionId);
 }
 
+const EXECUTABLE_COMMAND_PREFIX =
+  /^(?:bun|node|npm|npx|cargo|pytest|python|python3|go|ctest|cmake|make|bash|sh|powershell|git)\s+/i;
+
+export function isExecutableCommand(check: string): boolean {
+  return EXECUTABLE_COMMAND_PREFIX.test(normalize(check));
+}
+
 // Not every criterion can be a command — no shell decides whether a poem was written. Such a criterion is
 // closed by naming the artifact that satisfies it, which is an explicit act the turn must perform; a turn
 // cannot drift into offering to do the work while it still owes one.
@@ -144,6 +151,9 @@ export function satisfyCriterion(check: string, evidence: string, sessionId = ""
   const match = contract.criteria.find((criterion) => normalize(criterion.check).toLowerCase() === wanted);
   if (!match) return { error: `no declared criterion matches: ${normalize(check)}` };
   if (!normalize(evidence)) return { error: "evidence is required: name the artifact that satisfies this" };
+  if (isExecutableCommand(match.check) && !match.passed) {
+    return { error: `executable check "${match.check}" must be run via command execution and observe exit code 0` };
+  }
   const criteria = contract.criteria.map((criterion) =>
     criterion === match ? { ...criterion, passed: true, evidence: normalize(evidence) } : criterion);
   write({ ...contract, criteria }, sessionId);

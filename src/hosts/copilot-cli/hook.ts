@@ -123,11 +123,12 @@ export interface WorkflowEvidence {
   strict?: boolean;
   minimumBrainNodes?: number;
   executionToolCount?: number;
+  planDeclared?: boolean;
 }
 
 export function stopDecision(s: WorkflowEvidence): { file: string } {
   if (s.stopNudges >= OUTAGE_CAP) return { file: "" };
-  if (s.executionToolCount === 0) return { file: "" };
+  if (!s.planDeclared && s.executionToolCount === 0) return { file: "" };
   if (s.strict && !brainWorkComplete(s)) {
     return { file: (s.brainSearched && (s.brainCreatedCount ?? 0) === 0)
       ? "brain-reuse-reminder.md"
@@ -614,6 +615,7 @@ export async function runCopilotHook(): Promise<void> {
     }
 
     const brainUsed = st.createdCount > 0 || st.reusedCount > 0 || st.searched;
+    const isPlanDeclared = contractDeclared(sessionId);
     const file = stopDecision({
       brainUsed,
       brainSearched: st.searched,
@@ -626,6 +628,7 @@ export async function runCopilotHook(): Promise<void> {
       strict: true,
       minimumBrainNodes: requiredBrainNodes(st.executionToolCount),
       executionToolCount: st.executionToolCount,
+      planDeclared: isPlanDeclared,
     }).file;
 
     const deficit = file === "turn-reminder.md" && st.openCreatedNodeIds.length > 0

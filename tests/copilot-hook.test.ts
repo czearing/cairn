@@ -133,6 +133,19 @@ test("Copilot model attribution prefers payload, Harness environment, then profi
 
 // ── postToolFiles: which prompts a COMPLETED Copilot tool delivers, mirroring Claude's after-tool set ──
 
+test("read-only tools do not count as execution", () => {
+  expect(countsAsExecution("view", { path: "foo.ts" })).toBe(false);
+  expect(countsAsExecution("grep", { pattern: "bar" })).toBe(false);
+  expect(countsAsExecution("glob", { pattern: "*.ts" })).toBe(false);
+  expect(countsAsExecution("sql", { query: "SELECT 1;" })).toBe(false);
+  expect(countsAsExecution("session_store_sql", { query: "SELECT 1;" })).toBe(false);
+  expect(countsAsExecution("ask_user", { question: "What is next?" })).toBe(false);
+  expect(countsAsExecution("vote_memory", { fact: "foo" })).toBe(false);
+  expect(countsAsExecution("store_memory", { fact: "foo" })).toBe(false);
+  expect(countsAsExecution("edit", { path: "foo.ts" })).toBe(true);
+  expect(countsAsExecution("create", { path: "foo.ts" })).toBe(true);
+});
+
 test("postToolFiles returns the search reminder for a brain_search", () => {
   expect(postToolFiles("cairn-brain_search", "")).toEqual(["search-results.md"]);
 });

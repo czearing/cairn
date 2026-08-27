@@ -148,7 +148,7 @@ function brainWorkComplete(s: WorkflowEvidence): boolean {
   return created + reused >= floor && !owed && Boolean(s.rootSynthesized);
 }
 
-const READ_ONLY_TOOLS = /^(read|view|glob|grep|rg|search|web_fetch|web_search|fetch_copilot_cli_documentation|list_|get_)/i;
+const READ_ONLY_TOOLS = /^(read|view|glob|grep|rg|search|web_fetch|web_search|fetch_copilot_cli_documentation|list_|get_|sql|session_store_sql|ask_user|vote_memory|store_memory)/i;
 const SHELL_MUTATION = /(?:^|[;&|]\s*)(?:set-content|add-content|out-file|remove-item|move-item|copy-item|rename-item|new-item|stop-process|start-process)\b|\bgit\s+(?:add|commit|push|checkout|switch|reset|clean|merge|rebase|tag)\b|\baz\s+repos\s+pr\s+(?:create|update)\b|\baz\s+devops\s+invoke\b[\s\S]*?--http-method\s+(?:post|put|patch|delete)\b|(?:^|[^<=])>{1,2}(?![>&])/i;
 const workflowReady = (s: WorkflowEvidence): boolean => brainWorkComplete(s);
 

@@ -9,11 +9,12 @@
 //     brain keeps working unchanged before (or without) migration. Nothing is broken on upgrade.
 
 /** Pack a vector into a little-endian float32 BLOB. */
-export function encodeVector(vec: number[]): Uint8Array {
-  const buf = new ArrayBuffer(vec.length * 4);
-  const view = new DataView(buf);
-  for (let i = 0; i < vec.length; i++) view.setFloat32(i * 4, vec[i]!, true); // true = little-endian
-  return new Uint8Array(buf);
+export function encodeVector(vec: number[] | Float32Array): Uint8Array {
+  if (vec instanceof Float32Array) {
+    return new Uint8Array(vec.buffer, vec.byteOffset, vec.byteLength);
+  }
+  const f32 = new Float32Array(vec);
+  return new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength);
 }
 
 /** Read a stored embedding into a number[]. Accepts the current BLOB format AND the legacy JSON string
@@ -31,11 +32,15 @@ export function decodeVector(value: unknown): number[] | null {
   }
   // Current rows: a packed little-endian float32 BLOB.
   if (value instanceof Uint8Array) {
-    const n = value.byteLength >>> 2; // 4 bytes per float
-    const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
-    const out = new Array<number>(n);
-    for (let i = 0; i < n; i++) out[i] = view.getFloat32(i * 4, true);
-    return out;
+    const byteLength = value.byteLength;
+    const n = Math.floor(byteLength / 4);
+    if (n === 0) return [];
+    if (value.byteOffset % 4 === 0) {
+      return Array.from(new Float32Array(value.buffer, value.byteOffset, n));
+    }
+    const copy = new Uint8Array(byteLength);
+    copy.set(value);
+    return Array.from(new Float32Array(copy.buffer, 0, n));
   }
   return null;
 }

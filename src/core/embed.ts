@@ -36,10 +36,18 @@ function unit(v: number[]): number[] {
 // vs 1536-dim OpenAI). Those spaces are incomparable, so there is no real similarity to report —
 // return -1 (maximally dissimilar) rather than silently dotting the shared prefix, which would
 // invent a meaningless score and could let an unrelated neuron clear the relevance threshold.
-export function cosine(a: number[], b: number[]): number {
-  if (a.length !== b.length) return -1;
+export function cosine(a: number[] | Float32Array, b: number[] | Float32Array): number {
+  const len = a.length;
+  if (len !== b.length) return -1;
   let d = 0;
-  for (let i = 0; i < a.length; i++) d += a[i]! * b[i]!;
+  let i = 0;
+  const limit = len - 3;
+  for (; i < limit; i += 4) {
+    d += a[i]! * b[i]! + a[i + 1]! * b[i + 1]! + a[i + 2]! * b[i + 2]! + a[i + 3]! * b[i + 3]!;
+  }
+  for (; i < len; i++) {
+    d += a[i]! * b[i]!;
+  }
   return d;
 }
 

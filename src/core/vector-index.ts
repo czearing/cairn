@@ -1,6 +1,4 @@
-import { Database } from "bun:sqlite";
-import * as sqliteVec from "sqlite-vec";
-import { config } from "./config";
+import { db } from "./db";
 import { encodeVector } from "./vector";
 
 interface VecRow {
@@ -22,11 +20,10 @@ export function exactVectorCandidates(
   initial = 256
 ): IndexedScore[] | null {
   if (threshold <= 0) return null;
-  const database = new Database(config.dbPath, { readonly: true });
+  const database = db();
   try {
     const counts = database.query("SELECT COUNT(*) AS total FROM neurons").get() as { total: number };
     if (counts.total < threshold) return null;
-    sqliteVec.load(database);
     const state = database.query(`SELECT
       model,
       dimensions,
@@ -72,7 +69,5 @@ export function exactVectorCandidates(
     }
   } catch {
     return null;
-  } finally {
-    database.close();
   }
 }

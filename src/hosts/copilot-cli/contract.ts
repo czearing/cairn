@@ -176,10 +176,10 @@ export function contractExhausted(sessionId = ""): boolean {
  * recordObservedRun for why forcing a falsifiable check onto every task made real tasks worse.
  */
 export function contractStopReason(changedDurableState = false, sessionId = ""): string {
-  if (!changedDurableState) return "";
   const contract = readContract(sessionId);
   if (contract && contract.nudges > cap()) return "";
   if (!contract?.criteria.length) {
+    if (!changedDurableState) return "";
     return "Before ending this turn, declare what done means for it: call the `plan` (or `contract`) tool with the"
       + " tasks this task must meet, then satisfy each one. Do not end by offering to do the work.";
   }

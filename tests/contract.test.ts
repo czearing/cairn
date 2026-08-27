@@ -424,3 +424,24 @@ test("plan tool provides interactive todo checklist workflow and formatted summa
     rmSync(dbPath, { force: true });
   }
 });
+
+test("declared plan enforces full completion even when executionToolCount is 0", () => {
+  const sessionId = randomUUID();
+  try {
+    declareContract(["Implement stereo rendering", "Implement IK hands"], sessionId);
+
+    // With executionToolCount === 0 (changedDurableState: false), contractStopReason MUST STILL block on unmet declared tasks
+    expect(contractStopReason(false, sessionId)).toContain("Not done. These declared items are unmet: Implement stereo rendering | Implement IK hands");
+
+    // Satisfy one item
+    satisfyCriterion("Implement stereo rendering", "src/stereo.cpp implemented", sessionId);
+    expect(contractStopReason(false, sessionId)).toContain("Implement IK hands");
+    expect(contractStopReason(false, sessionId)).not.toContain("Implement stereo rendering");
+
+    // Satisfy the second item
+    satisfyCriterion("Implement IK hands", "src/ik.cpp implemented", sessionId);
+    expect(contractStopReason(false, sessionId)).toBe("");
+  } finally {
+    clearContract(sessionId);
+  }
+});

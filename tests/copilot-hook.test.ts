@@ -1397,14 +1397,13 @@ test("the contract loop blocks until declared criteria are met, whatever shape t
     contract.recordObservedRun("a new runnable check", true);
     expect(contract.contractStopReason(true)).toBe("");
 
-    // 5. Bounded: an impossible criterion escapes as a report instead of looping forever.
+    // 5. Hard block: declared criteria never escape until satisfied.
     contract.clearContract();
     contract.declareContract(["an impossible thing"]);
     const cap = Number(process.env.CAIRN_CONTRACT_CAP || "3");
-    for (let i = 0; i < cap; i += 1) contract.noteContractNudge();
-    expect(contract.contractStopReason(true)).toContain("decision it needs from the user");
-    contract.noteContractNudge();
-    expect(contract.contractStopReason(true)).toBe("");
+    for (let i = 0; i < cap + 5; i += 1) contract.noteContractNudge();
+    expect(contract.contractStopReason(true)).toContain("These declared plan items are unmet: an impossible thing");
+    expect(contract.contractExhausted()).toBe(false);
   } finally {
     if (prior == null) delete process.env.CAIRN_DB_PATH; else process.env.CAIRN_DB_PATH = prior;
     rmSync(dir, { recursive: true, force: true });
@@ -1571,7 +1570,7 @@ test("complete pre-tool gate transitions and verifies all error messages", () =>
     const stopPlan = invoke("agent-stop", { sessionId: session }).stdout.toString();
     const stopPlanJson = JSON.parse(stopPlan);
     expect(stopPlanJson.decision).toBe("block");
-    expect(stopPlanJson.reason).toContain("These declared items are unmet: Update app | bun test");
+    expect(stopPlanJson.reason).toContain("These declared plan items are unmet: Update app | bun test");
 
     // Satisfy first item via plan tool
     const updatePost = invoke("post-tool", {

@@ -141,6 +141,45 @@ export function isExecutableCommand(check: string): boolean {
   return EXECUTABLE_COMMAND_PREFIX.test(normalize(check));
 }
 
+const TRIVIAL_EVIDENCE = new Set([
+  "done",
+  "fixed",
+  "completed",
+  "ok",
+  "yes",
+  "passed",
+  "verified",
+  "true",
+  "none",
+  "n/a",
+  "na",
+  "finished",
+  "resolved",
+  "complete",
+  "satisfies",
+  "satisfied",
+  "success",
+  "did it",
+  "it is done",
+]);
+
+export function validateEvidence(evidence: string): { valid: boolean; error?: string } {
+  const trimmed = normalize(evidence);
+  if (!trimmed) {
+    return {
+      valid: false,
+      error: "evidence is required: specify what you did to complete this task (e.g., files modified, test output, or artifact produced)",
+    };
+  }
+  if (trimmed.length < 8 || TRIVIAL_EVIDENCE.has(trimmed.toLowerCase())) {
+    return {
+      valid: false,
+      error: "insufficient evidence: specify what you did to complete this task with concrete details (e.g., files modified, command output, or artifact produced)",
+    };
+  }
+  return { valid: true };
+}
+
 // Not every criterion can be a command — no shell decides whether a poem was written. Such a criterion is
 // closed by naming the artifact that satisfies it, which is an explicit act the turn must perform; a turn
 // cannot drift into offering to do the work while it still owes one.
@@ -150,7 +189,8 @@ export function satisfyCriterion(check: string, evidence: string, sessionId = ""
   const wanted = normalize(check).toLowerCase();
   const match = contract.criteria.find((criterion) => normalize(criterion.check).toLowerCase() === wanted);
   if (!match) return { error: `no declared criterion matches: ${normalize(check)}` };
-  if (!normalize(evidence)) return { error: "evidence is required: name the artifact that satisfies this" };
+  const validation = validateEvidence(evidence);
+  if (!validation.valid) return { error: validation.error };
   if (isExecutableCommand(match.check) && !match.passed) {
     return { error: `executable check "${match.check}" must be run via command execution and observe exit code 0` };
   }
@@ -174,34 +214,28 @@ export function contractDeclared(sessionId = ""): boolean {
   return (readContract(sessionId)?.criteria.length ?? 0) > 0;
 }
 
-/** The turn has been asked enough times; stop denying so an unusable gate cannot brick the session. */
+/** The turn has been asked enough times; stop denying so an unusable gate cannot brick the session. Declared plans are never exhausted. */
 export function contractExhausted(sessionId = ""): boolean {
   const contract = readContract(sessionId);
+  if ((contract?.criteria?.length ?? 0) > 0) return false;
   return !!contract && contract.nudges > cap();
 }
 
 /**
  * The stop verdict. One rule: block while the turn has declared nothing, or still owes a criterion.
- * `changedDurableState` is accepted for call-site compatibility and deliberately unused — see
- * recordObservedRun for why forcing a falsifiable check onto every task made real tasks worse.
+ * Declared plans are NEVER allowed to end with unmet tasks.
  */
 export function contractStopReason(changedDurableState = false, sessionId = ""): string {
   const contract = readContract(sessionId);
-  if (contract && contract.nudges > cap()) return "";
   if (!contract?.criteria.length) {
+    if (contract && contract.nudges > cap()) return "";
     if (!changedDurableState) return "";
     return "Before ending this turn, declare what done means for it: call the `plan` (or `contract`) tool with the"
       + " tasks this task must meet, then satisfy each one. Do not end by offering to do the work.";
   }
   const unmet = contract.criteria.filter((criterion) => !criterion.passed).map((criterion) => criterion.check);
-  const atCap = contract.nudges === cap();
   if (unmet.length) {
-    // At the cap an unmeetable criterion leaves as named evidence rather than as a vague "I could not".
-    return atCap
-      ? `Your plan still has unmet items after ${cap()} attempts: ${unmet.join(" | ")}. For each one,`
-        + " report exactly what you did, its output, and the specific decision it needs from the user."
-      : `Not done. These declared items are unmet: ${unmet.join(" | ")}. Do the work that meets them,`
-        + " then record each with the `plan` tool. Do not ask whether to continue.";
+    return `Not done. These declared plan items are unmet: ${unmet.join(" | ")}. You MUST complete every item and mark each completed with evidence using the \`plan\` tool before ending this turn.`;
   }
   return "";
 }

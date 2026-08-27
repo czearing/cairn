@@ -83,7 +83,7 @@ test("satisfyCriterion handles case-insensitivity, normalization, and updating e
 
     // Fails on empty evidence
     expect(satisfyCriterion("Build Succeeded", "   ", sessionId)).toEqual({
-      error: "evidence is required: name the artifact that satisfies this",
+      error: "evidence is required: specify what you did to complete this task (e.g., files modified, test output, or artifact produced)",
     });
 
     // Satisfies with case-insensitive check
@@ -285,7 +285,7 @@ test("hook enforces hard-block when no contract is declared and allows execution
     // Turn completion is blocked because contract criteria are still unmet
     const stopBlocked = invoke("agent-stop", { sessionId: session });
     expect(stopBlocked.stdout.toString()).toContain('"decision":"block"');
-    expect(stopBlocked.stdout.toString()).toContain("These declared items are unmet");
+    expect(stopBlocked.stdout.toString()).toContain("These declared plan items are unmet");
 
     // Close one criterion via command run, and one via explicit evidence in single call
     invoke("post-tool", {
@@ -431,7 +431,7 @@ test("declared plan enforces full completion even when executionToolCount is 0",
     declareContract(["Implement stereo rendering", "Implement IK hands"], sessionId);
 
     // With executionToolCount === 0 (changedDurableState: false), contractStopReason MUST STILL block on unmet declared tasks
-    expect(contractStopReason(false, sessionId)).toContain("Not done. These declared items are unmet: Implement stereo rendering | Implement IK hands");
+    expect(contractStopReason(false, sessionId)).toContain("Not done. These declared plan items are unmet: Implement stereo rendering | Implement IK hands");
 
     // Satisfy one item
     satisfyCriterion("Implement stereo rendering", "src/stereo.cpp implemented", sessionId);
@@ -445,3 +445,39 @@ test("declared plan enforces full completion even when executionToolCount is 0",
     clearContract(sessionId);
   }
 });
+
+test("satisfyCriterion validates evidence quality and rejects trivial/vacuous proof", () => {
+  const sessionId = randomUUID();
+  try {
+    declareContract(["Feature Implemented"], sessionId);
+    expect(satisfyCriterion("Feature Implemented", "done", sessionId)).toEqual({
+      error: "insufficient evidence: specify what you did to complete this task with concrete details (e.g., files modified, command output, or artifact produced)",
+    });
+    expect(satisfyCriterion("Feature Implemented", "ok", sessionId)).toEqual({
+      error: "insufficient evidence: specify what you did to complete this task with concrete details (e.g., files modified, command output, or artifact produced)",
+    });
+    expect(satisfyCriterion("Feature Implemented", "fixed", sessionId)).toEqual({
+      error: "insufficient evidence: specify what you did to complete this task with concrete details (e.g., files modified, command output, or artifact produced)",
+    });
+    expect(satisfyCriterion("Feature Implemented", "implemented user authentication in src/auth.ts", sessionId)).toEqual({
+      remaining: [],
+    });
+  } finally {
+    clearContract(sessionId);
+  }
+});
+
+test("declared plan is NEVER released when items are unmet regardless of nudge count", () => {
+  const sessionId = randomUUID();
+  try {
+    declareContract(["Deploy Service"], sessionId);
+    for (let i = 0; i < 10; i++) {
+      noteContractNudge(sessionId);
+      expect(contractStopReason(true, sessionId)).toContain("These declared plan items are unmet");
+      expect(contractExhausted(sessionId)).toBe(false);
+    }
+  } finally {
+    clearContract(sessionId);
+  }
+});
+

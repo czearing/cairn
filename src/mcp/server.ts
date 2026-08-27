@@ -343,7 +343,7 @@ registerTool(
 // unconditionally makes the tool's presence independent of whether the gate is currently enforcing.
 registerTool(
   "plan",
-  "Declare and manage the task plan / todo checklist. Define what done means with actionable tasks, append new items as you discover work, and mark items completed with evidence.",
+  "Declare and manage the task plan / todo checklist. Define what done means with actionable tasks, append new items as you discover work, and mark items completed with evidence specifying what you did.",
   {
     tasks: z.array(z.string()).min(1).optional()
       .describe("List of planned tasks/todo items defining done. Append anytime."),
@@ -351,12 +351,16 @@ registerTool(
       .describe("Alias for tasks."),
     completed: z.string().optional().describe("A planned task/todo item to mark as done."),
     satisfied: z.string().optional().describe("Alias for completed."),
-    evidence: z.string().optional().describe("What satisfies it: the artifact produced, test command run, or observed output."),
+    evidence: z.string().optional().describe("Proof of completion: specify concrete details of what was done, files modified, or output observed."),
   },
   async ({ tasks, checks, completed, satisfied, evidence }) => measured("plan", { tasks, checks, completed, satisfied, evidence }, async () => {
     const itemToClose = completed || satisfied;
     const itemsToAdd = tasks || checks;
-    if (itemToClose && !evidence?.trim()) return fail("evidence is required: describe what satisfies this task");
+    if (itemToClose) {
+      const { validateEvidence } = await import("../hosts/copilot-cli/contract");
+      const validation = validateEvidence(evidence || "");
+      if (!validation.valid) return fail(validation.error || "evidence is required");
+    }
     if (!itemToClose && !(itemsToAdd?.some((item) => item.trim()))) {
       return fail("provide at least one planned task item");
     }
@@ -366,7 +370,7 @@ registerTool(
 
 registerTool(
   "contract",
-  "Alias for plan. Declare what done means for this task and close criteria with evidence.",
+  "Alias for plan. Declare what done means for this task and close criteria with evidence specifying what you did.",
   {
     checks: z.array(z.string()).min(1).optional()
       .describe("Declare the criteria that define done."),
@@ -374,12 +378,16 @@ registerTool(
       .describe("Alias for checks."),
     satisfied: z.string().optional().describe("A declared criterion to close."),
     completed: z.string().optional().describe("Alias for satisfied."),
-    evidence: z.string().optional().describe("What satisfies it: the artifact produced or the output observed."),
+    evidence: z.string().optional().describe("Proof of completion: specify concrete details of what was done, files modified, or output observed."),
   },
   async ({ checks, tasks, satisfied, completed, evidence }) => measured("contract", { checks, tasks, satisfied, completed, evidence }, async () => {
     const itemToClose = satisfied || completed;
     const itemsToAdd = checks || tasks;
-    if (itemToClose && !evidence?.trim()) return fail("evidence is required: name the artifact that satisfies this");
+    if (itemToClose) {
+      const { validateEvidence } = await import("../hosts/copilot-cli/contract");
+      const validation = validateEvidence(evidence || "");
+      if (!validation.valid) return fail(validation.error || "evidence is required");
+    }
     if (!itemToClose && !(itemsToAdd?.some((check) => check.trim()))) {
       return fail("declare at least one criterion describing what done means");
     }

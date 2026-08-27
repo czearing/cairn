@@ -325,9 +325,14 @@ export const CONTRACT_UNAVAILABLE_REASON =
 export function formatPlanSummary(sessionId = ""): string {
   const contract = readContract(sessionId);
   if (!contract || !contract.criteria.length) return "No active plan.";
-  return contract.criteria
+  const unmetCount = contract.criteria.filter((c) => !c.passed).length;
+  const items = contract.criteria
     .map((c) => `- [${c.passed ? "x" : " "}] ${c.check}${c.evidence ? ` (Evidence: ${c.evidence})` : ""}`)
     .join("\n");
+  if (unmetCount > 0) {
+    return `${items}\n\n${unmetCount} item(s) remaining. To mark an item complete, call \`plan\` with \`completed: "<task name>"\` and \`evidence: "<specific details of what you did>"\`.`;
+  }
+  return `${items}\n\nAll ${contract.criteria.length} planned items completed with verified evidence.`;
 }
 
 export const CONTRACT_DECLARE_REASON =

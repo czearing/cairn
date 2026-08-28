@@ -221,6 +221,15 @@ export function resetLifecycle(scope: string, dbPath = config.dbPath): void {
   updateLifecycle(scope, (s) => ({
     ...defaultState(scope),
     turnSeq: s.turnSeq + 1,
+    searched: s.searched,
+    searchedNodeIds: s.searchedNodeIds,
+    createdCount: s.createdCount,
+    createdNodeIds: s.createdNodeIds,
+    answeredCount: s.answeredCount,
+    reusedCount: s.reusedCount,
+    reusedNodeIds: s.reusedNodeIds,
+    rootSynthesized: s.rootSynthesized,
+    cairnToolAttempted: s.cairnToolAttempted,
     cairnToolObserved: s.cairnToolObserved,
   }), dbPath);
 }

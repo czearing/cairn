@@ -785,7 +785,7 @@ test("the contract gate denies execution, loops the turn, and releases only when
 
     // 1b. The instrument the deny NAMES must itself be allowed, or obeying the message is impossible.
     // Both wire forms, because the host may present an MCP tool bare or server-prefixed.
-    for (const toolName of ["contract", "cairn-contract"]) {
+    for (const toolName of ["plan", "cairn-plan"]) {
       expect(invoke("pre-tool", {
         sessionId: "contract-e2e", toolName, toolArgs: { checks: ["bun test"] },
       }).stdout.toString()).not.toContain("deny");
@@ -887,13 +887,13 @@ test("contracts remain isolated between concurrent Copilot sessions", () => {
     }
     expect(invoke("post-tool", {
       sessionId: "session-a",
-      toolName: "cairn-contract",
+      toolName: "cairn-plan",
       toolArgs: { checks: ["session A output exists"] },
       toolResult: { success: true, accepted: true },
     }).status).toBe(0);
     expect(invoke("post-tool", {
       sessionId: "session-b",
-      toolName: "cairn-contract",
+      toolName: "cairn-plan",
       toolArgs: { checks: ["session B output exists"] },
       toolResult: { success: true, accepted: true },
     }).status).toBe(0);
@@ -905,7 +905,7 @@ test("contracts remain isolated between concurrent Copilot sessions", () => {
 
     expect(invoke("post-tool", {
       sessionId: "session-a",
-      toolName: "cairn-contract",
+      toolName: "cairn-plan",
       toolArgs: { satisfied: "session A output exists", evidence: "verified A" },
       toolResult: { success: true, accepted: true },
     }).status).toBe(0);
@@ -1356,10 +1356,10 @@ test("brain node floor scales with execution and keeps fail-closed invariants", 
   expect(countsAsExecution("powershell", { command: "git commit -m x" })).toBe(true);
   expect(countsAsExecution("edit")).toBe(true);
   expect(countsAsExecution("cairn-brain_create")).toBe(false);
-  // The gate's own instrument is never an execution tool: the pre-tool deny names `contract` as the way
+  // The gate's own instrument is never an execution tool: the pre-tool deny names `plan` as the way
   // out, so classifying it as execution denies the only exit from the gate and deadlocks the session.
-  expect(countsAsExecution("contract")).toBe(false);
-  expect(countsAsExecution("cairn-contract")).toBe(false);
+  expect(countsAsExecution("plan")).toBe(false);
+  expect(countsAsExecution("cairn-plan")).toBe(false);
   // A read-only probe is not a write just because its code contains an arrow function: `=>` is not the
   // `>` redirect. This misread also removed the last escape from the deadlock above, since it denied the
   // read-only shell an instrument-less session would use to declare through Cairn's own API.
@@ -1466,13 +1466,18 @@ test("the contract loop blocks until declared criteria are met, whatever shape t
     contract.recordObservedRun("a new runnable check", true);
     expect(contract.contractStopReason(true)).toBe("");
 
-    // 5. Hard block: declared criteria never escape until satisfied.
+    // 5. Hard block: a declared item insists for the whole budget, then expires instead of queueing forever.
     contract.clearContract();
     contract.declareContract(["an impossible thing"]);
-    const cap = Number(process.env.CAIRN_CONTRACT_CAP || "3");
-    for (let i = 0; i < cap + 5; i += 1) contract.noteContractNudge();
-    expect(contract.contractStopReason(true)).toContain("These declared plan items are unmet: an impossible thing");
-    expect(contract.contractExhausted()).toBe(false);
+    const planCap = Number(process.env.CAIRN_PLAN_CAP || "6");
+    for (let i = 0; i < planCap; i += 1) {
+      expect(contract.contractStopReason(true)).toContain("These declared plan items are unmet: an impossible thing");
+      expect(contract.contractExhausted()).toBe(false);
+      contract.noteContractNudge();
+    }
+    contract.noteContractNudge();
+    expect(contract.contractStopReason(true)).toBe("");
+    expect(contract.contractExhausted()).toBe(true);
   } finally {
     if (prior == null) delete process.env.CAIRN_DB_PATH; else process.env.CAIRN_DB_PATH = prior;
     rmSync(dir, { recursive: true, force: true });
@@ -1525,7 +1530,7 @@ test("complete pre-tool gate transitions and verifies all error messages", () =>
     const stage1Json = JSON.parse(stage1);
     expect(stage1Json.permissionDecision).toBe("deny");
     expect(stage1Json.permissionDecisionReason).toBe(
-      "Declare your plan first: call the `plan` (or `contract`) tool with the tasks defining done for this task. The requested side effect was not executed."
+      "Declare your plan first: call the `plan` tool with the tasks defining done for this task. The requested side effect was not executed."
     );
 
     // Declare plan

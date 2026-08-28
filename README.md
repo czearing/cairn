@@ -75,7 +75,7 @@ Cairn exposes standardized MCP tools directly to agent runtimes:
 | `brain_create` | Declares an atomic question node linked into the knowledge graph. |
 | `brain_mutate` | Answers a question node with citation-backed evidence or updates links. |
 | `brain_delete` | Removes a specific node and detaches its graph edges. |
-| `plan` / `contract` | Declares structured criteria and tracks verified completion in real time. |
+| `plan` | Declares structured task items and tracks verified completion in real time. |
 
 ---
 

@@ -44,7 +44,7 @@ const parse = (r: { content: { text: string }[] }) => JSON.parse(r.content[0]!.t
 
 test("exposes only the agent-owned brain, plan, and contract tools", async () => {
   const { tools } = await client.listTools();
-  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "contract", "plan"]);
+  expect(tools.map((t) => t.name).sort()).toEqual(["brain_create", "brain_delete", "brain_mutate", "brain_search", "plan"]);
 });
 
 test("tool results expose content-free MCP runtime identity", async () => {
@@ -104,7 +104,7 @@ test("MCP calls record local size and latency telemetry", async () => {
   expect(event.version).toBe(releaseVersion);
   expect(event.run_class).toBe("human");
   expect(columns.map((column) => column.name)).not.toContain("content");
-  expect(schemas.tools).toBe(6);
+  expect(schemas.tools).toBe(5);
   expect(schemas.chars).toBeGreaterThan(0);
   expect(schemas.tokens).toBeGreaterThan(0);
 });

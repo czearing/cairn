@@ -337,10 +337,19 @@ registerTool(
   })
 );
 
-// The proof contract is always registered. Gating tool REGISTRATION on the same env flag that gates the
+// The plan tool is always registered. Gating tool REGISTRATION on the same env flag that gates the
 // deny created a hard dependency ordering: with the gate on but the tool absent, pre-tool denies every
-// execution tool while the agent has no way to declare a contract, locking the session. Registering it
+// execution tool while the agent has no way to declare a plan, locking the session. Registering it
 // unconditionally makes the tool's presence independent of whether the gate is currently enforcing.
+//
+// This handler deliberately does NOT touch the plan ledger. The ledger is per-session, and only the host
+// hook is told which session a call belongs to; this server process is not. An earlier version called
+// declareContract/satisfyCriterion here with no session id, which silently fell back to a single global
+// file shared by every session on the machine. That file grew without bound, fuzzy-matched a "completed"
+// item against some other session's leftovers, and reported failure for items the host hook had in fact
+// recorded — leaving the real per-session item unmet and the stop gate blocking forever. Acknowledging
+// here and letting the post-tool hook (which knows the session) do the single authoritative write keeps
+// one writer, one ledger, one truth.
 registerTool(
   "plan",
   "Declare and manage the task plan / todo checklist. Define what done means with actionable tasks, append new items as you discover work, and mark items completed with evidence specifying what you did.",
@@ -354,58 +363,20 @@ registerTool(
     evidence: z.string().optional().describe("Proof of completion: specify concrete details of what was done, files modified, or output observed."),
   },
   async ({ tasks, checks, completed, satisfied, evidence }) => measured("plan", { tasks, checks, completed, satisfied, evidence }, async () => {
-    const itemToClose = completed || satisfied;
-    const itemsToAdd = (tasks || checks)?.map((t) => t.trim()).filter(Boolean);
-    const { declareContract, satisfyCriterion } = await import("../hosts/copilot-cli/contract");
-
-    if (itemsToAdd && itemsToAdd.length > 0) {
-      declareContract(itemsToAdd);
-    }
+    const itemToClose = (completed || satisfied || "").trim();
+    const itemsToAdd = (tasks || checks)?.map((t) => t.trim()).filter(Boolean) ?? [];
 
     if (itemToClose) {
-      const res = satisfyCriterion(itemToClose, evidence || "");
-      if (res.error) return fail(res.error);
-      return json({ accepted: true, completed: itemToClose, remaining: res.remaining });
+      if (!(evidence || "").trim()) {
+        return fail("evidence is required: specify what you did to complete this item (files modified, output observed, or artifact produced)");
+      }
+      return json({ accepted: true, completed: itemToClose, ...(itemsToAdd.length ? { tasks: itemsToAdd } : {}) });
     }
 
-    if (!itemsToAdd || itemsToAdd.length === 0) {
+    if (itemsToAdd.length === 0) {
       return fail("provide at least one planned task item");
     }
     return json({ accepted: true, tasks: itemsToAdd });
-  })
-);
-
-registerTool(
-  "contract",
-  "Alias for plan. Declare what done means for this task and close criteria with evidence specifying what you did.",
-  {
-    checks: z.array(z.string()).min(1).optional()
-      .describe("Declare the criteria that define done."),
-    tasks: z.array(z.string()).min(1).optional()
-      .describe("Alias for checks."),
-    satisfied: z.string().optional().describe("A declared criterion to close."),
-    completed: z.string().optional().describe("Alias for satisfied."),
-    evidence: z.string().optional().describe("Proof of completion: specify concrete details of what was done, files modified, or output observed."),
-  },
-  async ({ checks, tasks, satisfied, completed, evidence }) => measured("contract", { checks, tasks, satisfied, completed, evidence }, async () => {
-    const itemToClose = satisfied || completed;
-    const itemsToAdd = (checks || tasks)?.map((c) => c.trim()).filter(Boolean);
-    const { declareContract, satisfyCriterion } = await import("../hosts/copilot-cli/contract");
-
-    if (itemsToAdd && itemsToAdd.length > 0) {
-      declareContract(itemsToAdd);
-    }
-
-    if (itemToClose) {
-      const res = satisfyCriterion(itemToClose, evidence || "");
-      if (res.error) return fail(res.error);
-      return json({ accepted: true, completed: itemToClose, remaining: res.remaining });
-    }
-
-    if (!itemsToAdd || itemsToAdd.length === 0) {
-      return fail("declare at least one criterion describing what done means");
-    }
-    return json({ accepted: true, criteria: itemsToAdd });
   })
 );
 

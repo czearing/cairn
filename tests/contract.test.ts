@@ -146,6 +146,49 @@ test("recordObservedRun closes executable criteria accurately without false posi
   }
 });
 
+test("satisfyCriterion supports flexible matching: prefix stripping, substrings, and numeric indices", () => {
+  const sessionId = randomUUID();
+  try {
+    declareContract([
+      "Hook D3D11CreateDeviceAndSwapChain and DXGI factory creation in VRFramework graphics layer",
+      "Compile and deploy updated VRFramework dxgi.dll to Outlast Binaries Win64 directory",
+      "Launch Outlast and verify live in-game stereo rendering in VR headset",
+    ], sessionId);
+
+    // 1. Prefix-stripped completion (e.g. agent passing "Phase 1: Hook D3D11CreateDeviceAndSwapChain...")
+    const res1 = satisfyCriterion(
+      "Phase 1: Hook D3D11CreateDeviceAndSwapChain and DXGI factory creation in VRFramework graphics layer",
+      "Hooked D3D11CreateDeviceAndSwapChain via MinHook in src/dxgi.cpp",
+      sessionId,
+    );
+    expect(res1.error).toBeUndefined();
+    expect(res1.remaining?.length).toBe(2);
+
+    // 2. Substring matching (e.g. agent passing short summary of item 2)
+    const res2 = satisfyCriterion(
+      "Compile and deploy updated VRFramework dxgi.dll",
+      "Compiled dxgi.dll with MSBuild and copied to Outlast/Binaries/Win64",
+      sessionId,
+    );
+    expect(res2.error).toBeUndefined();
+    expect(res2.remaining?.length).toBe(1);
+
+    // 3. Numeric index matching (e.g. "3" or "3." for item 3)
+    const res3 = satisfyCriterion(
+      "3",
+      "Launched OLGame.exe with OpenXR runtime and confirmed 90fps stereo frames",
+      sessionId,
+    );
+    expect(res3.error).toBeUndefined();
+    expect(res3.remaining?.length).toBe(0);
+
+    const contract = readContract(sessionId);
+    expect(contract?.criteria.every((c) => c.passed)).toBe(true);
+  } finally {
+    clearContract(sessionId);
+  }
+});
+
 test("concurrent sessions have strictly isolated contracts", () => {
   const sessionA = `session-a-${randomUUID()}`;
   const sessionB = `session-b-${randomUUID()}`;
@@ -238,7 +281,7 @@ test("hook enforces hard-block when no contract is declared and allows execution
     // Declare contract via post-tool
     invoke("post-tool", {
       sessionId: session,
-      toolName: "cairn-contract",
+      toolName: "cairn-plan",
       toolArgs: { checks: ["src/index.ts updated", "bun test"] },
       toolResult: { accepted: true },
     });
@@ -337,7 +380,7 @@ test("hook enforces hard-block when no contract is declared and allows execution
     });
     invoke("post-tool", {
       sessionId: session,
-      toolName: "cairn-contract",
+      toolName: "cairn-plan",
       toolArgs: { satisfied: "src/index.ts updated", evidence: "refactored exports" },
       toolResult: { accepted: true },
     });
@@ -366,7 +409,7 @@ test("contract tool handles simultaneous append and satisfy in a single call", (
     // Initial declaration of criterion 1
     invoke("post-tool", {
       sessionId: session,
-      toolName: "cairn-contract",
+      toolName: "cairn-plan",
       toolArgs: { checks: ["build pass"] },
       toolResult: { accepted: true },
     });
@@ -374,7 +417,7 @@ test("contract tool handles simultaneous append and satisfy in a single call", (
     // Appending criterion 2 AND satisfying criterion 1 in the same call
     const simultaneous = invoke("post-tool", {
       sessionId: session,
-      toolName: "cairn-contract",
+      toolName: "cairn-plan",
       toolArgs: {
         checks: ["deploy pass"],
         satisfied: "build pass",
@@ -553,15 +596,21 @@ test("satisfyCriterion validates evidence presence", () => {
   }
 });
 
-test("declared plan is NEVER released when items are unmet regardless of nudge count", () => {
+test("a declared plan insists on completion for many turns, then expires instead of queueing forever", () => {
   const sessionId = randomUUID();
+  const cap = Number(process.env.CAIRN_PLAN_CAP || "6");
   try {
     declareContract(["Deploy Service"], sessionId);
-    for (let i = 0; i < 10; i++) {
-      noteContractNudge(sessionId);
+    // It nags hard: an unmet item blocks the stop gate for the whole budget.
+    for (let i = 0; i < cap; i++) {
       expect(contractStopReason(true, sessionId)).toContain("These declared plan items are unmet");
       expect(contractExhausted(sessionId)).toBe(false);
+      noteContractNudge(sessionId);
     }
+    // Then it expires, because a demand the turn cannot satisfy must not repeat without end.
+    noteContractNudge(sessionId);
+    expect(contractStopReason(true, sessionId)).toBe("");
+    expect(contractExhausted(sessionId)).toBe(true);
   } finally {
     clearContract(sessionId);
   }
@@ -625,7 +674,7 @@ test("live 3.7 reviewer catches inadequate research and incomplete edge case tes
     // 4. Concrete test verification covering real test files and outputs
     const robustTest = satisfyCriterion(
       "Test vector encoding and decoding against boundary edge cases",
-      "Executed `bun test tests/vector.test.ts` (exit 0): 7 tests passed covering float32 precision, IEEE-754 little-endian byte layout, buffer offsets, and null/unreadable edge cases in tests/vector.test.ts.",
+      "Implemented comprehensive unit test suite in tests/vector.test.ts covering float32 precision, IEEE-754 little-endian byte layout, buffer offsets, legacy JSON compatibility, and null handling for src/core/vector.ts.",
       sessionId,
     );
     expect(robustTest.error).toBeUndefined();

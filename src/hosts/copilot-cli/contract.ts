@@ -81,7 +81,9 @@ const path = (sessionId = ""): string => {
 
 export function readContract(sessionId = ""): Contract | null {
   try {
-    return JSON.parse(readFileSync(path(sessionId), "utf8")) as Contract;
+    const raw = readFileSync(path(sessionId), "utf8").trim();
+    const clean = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
+    return JSON.parse(clean) as Contract;
   } catch {
     return null;
   }
@@ -103,6 +105,14 @@ function write(contract: Contract, sessionId = ""): void {
 
 export function clearContract(sessionId = ""): void {
   rmSync(path(sessionId), { force: true });
+}
+
+export function hasActiveContract(sessionId = ""): boolean {
+  const contract = readContract(sessionId);
+  if (!contract || !Array.isArray(contract.criteria) || contract.criteria.length === 0) return false;
+  // If the contract has already accumulated nudges from prior turns, it is not an active mid-turn declaration
+  if (contract.nudges > 0) return false;
+  return contract.criteria.some((criterion) => !criterion.passed);
 }
 
 /**
@@ -195,21 +205,83 @@ export function validateEvidence(evidence: string): { valid: boolean; error?: st
   return { valid: true };
 }
 
+export function stripTaskPrefix(text: string): string {
+  let s = normalize(text).trim();
+  const prefixes = ["phase", "task", "step", "item", "check"];
+  const lower = s.toLowerCase();
+  for (const p of prefixes) {
+    if (lower.startsWith(p)) {
+      const colonIdx = s.indexOf(":");
+      const dashIdx = s.indexOf("-");
+      const splitIdx = colonIdx !== -1 ? colonIdx : dashIdx;
+      if (splitIdx !== -1 && splitIdx < 30) {
+        s = s.slice(splitIdx + 1).trim();
+        break;
+      }
+    }
+  }
+  if (s.length > 2 && (s[1] === "." || s[1] === ")" || s[1] === "-") && s[0] >= "0" && s[0] <= "9") {
+    s = s.slice(2).trim();
+  } else if (s.length > 3 && (s[2] === "." || s[2] === ")") && s[0] >= "0" && s[0] <= "9" && s[1] >= "0" && s[1] <= "9") {
+    s = s.slice(3).trim();
+  }
+  return s;
+}
+
+export function findMatchingCriterion(check: string, criteria: Criterion[]): Criterion | undefined {
+  if (!criteria || criteria.length === 0) return undefined;
+  const wanted = normalize(check).toLowerCase();
+  if (!wanted) return undefined;
+
+  // 1. Exact match
+  const exact = criteria.find((c) => normalize(c.check).toLowerCase() === wanted);
+  if (exact) return exact;
+
+  // 2. Numeric index (1-based, e.g. "1", "2", "3")
+  const num = parseInt(wanted, 10);
+  if (!isNaN(num) && num >= 1 && num <= criteria.length && String(num) === wanted) {
+    return criteria[num - 1];
+  }
+
+  // 3. Exact match after stripping task prefixes (e.g. "Phase 1: ...", "1. ...")
+  const strippedWanted = stripTaskPrefix(wanted).toLowerCase();
+  const strippedExact = criteria.find((c) => stripTaskPrefix(c.check).toLowerCase() === strippedWanted);
+  if (strippedExact) return strippedExact;
+
+  // 4. Substring match (either direction) - only for strings of 4+ characters
+  if (wanted.length >= 4 || strippedWanted.length >= 4) {
+    const substring = criteria.find((c) => {
+      const cLower = normalize(c.check).toLowerCase();
+      const cStripped = stripTaskPrefix(c.check).toLowerCase();
+      return (wanted.length >= 4 && (cLower.includes(wanted) || wanted.includes(cLower))) ||
+        (strippedWanted.length >= 4 && (cStripped.includes(strippedWanted) || strippedWanted.includes(cStripped)));
+    });
+    if (substring) return substring;
+  }
+
+  // 5. If only 1 unmet criterion exists and wanted is generic complete
+  const unmet = criteria.filter((c) => !c.passed);
+  if (unmet.length === 1 && (wanted === "done" || wanted === "all" || wanted === "complete" || wanted === "completed")) {
+    return unmet[0];
+  }
+
+  return undefined;
+}
+
 // Not every criterion can be a command — no shell decides whether a poem was written. Such a criterion is
 // closed by naming the artifact that satisfies it, which is an explicit act the turn must perform; a turn
 // cannot drift into offering to do the work while it still owes one.
 export function satisfyCriterion(check: string, evidence: string, sessionId = ""): { error?: string; remaining?: string[] } {
   const contract = readContract(sessionId);
   if (!contract) return { error: "no contract is declared for this task" };
-  const wanted = normalize(check).toLowerCase();
-  const match = contract.criteria.find((criterion) => normalize(criterion.check).toLowerCase() === wanted);
+  const match = findMatchingCriterion(check, contract.criteria);
   if (!match) return { error: `no declared criterion matches: ${normalize(check)}` };
   const validation = validateEvidence(evidence);
   if (!validation.valid) return { error: validation.error };
   if (isExecutableCommand(match.check) && !match.passed) {
     return { error: `executable check "${match.check}" must be run via command execution and observe exit code 0` };
   }
-  const review = verifyPlanEvidence(match.check, evidence);
+  const review = verifyPlanEvidence(match.check, evidence, sessionId);
   if (!review.approved) {
     return { error: `reviewer rejected completion: ${review.reason}` };
   }
@@ -222,9 +294,9 @@ export function satisfyCriterion(check: string, evidence: string, sessionId = ""
 export function noteContractNudge(sessionId = ""): void {
   const contract = readContract(sessionId);
   // Count the nudge even when nothing is declared. Previously this no-opped without a contract, so the
-  // "declare your contract" block below could never reach the cap and repeated forever — an unbounded
+  // "declare your plan" block below could never reach the cap and repeated forever — an unbounded
   // loop for any session that CANNOT declare one, e.g. an MCP client whose tool list was negotiated
-  // before the `contract` tool existed. A gate whose instrument is absent must expire, not brick.
+  // before the `plan` tool existed. A gate whose instrument is absent must expire, not brick.
   write(contract ? { ...contract, nudges: contract.nudges + 1 } : { criteria: [], nudges: 1 }, sessionId);
 }
 
@@ -233,37 +305,50 @@ export function contractDeclared(sessionId = ""): boolean {
   return (readContract(sessionId)?.criteria.length ?? 0) > 0;
 }
 
-/** The turn has been asked enough times; stop denying so an unusable gate cannot brick the session. Declared plans are never exhausted. */
+// A declared plan is nagged harder than an undeclared one, because the turn chose those items itself and
+// closing one is a single tool call. It is still BOUNDED: see planExhausted.
+const declaredCap = (): number => Math.max(1, Number(process.env.CAIRN_PLAN_CAP || "6"));
+
+/** The turn has been asked enough times; stop denying so an unusable gate cannot brick the session. */
 export function contractExhausted(sessionId = ""): boolean {
   const contract = readContract(sessionId);
-  if ((contract?.criteria?.length ?? 0) > 0) return false;
-  return !!contract && contract.nudges > cap();
+  if (!contract) return false;
+  if (contract.criteria.length > 0) return contract.nudges > declaredCap();
+  return contract.nudges > cap();
 }
 
 /**
- * The stop verdict. One rule: block while the turn has declared nothing, or still owes a criterion.
- * Declared plans are NEVER allowed to end with unmet tasks.
+ * The stop verdict. One rule: block while the turn has declared nothing, or still owes an item.
+ *
+ * The block is BOUNDED. An earlier draft returned a reason for any unmet item and never consulted the
+ * nudge counter, so a plan item the turn could not close — a stale item, an item the model had stopped
+ * being able to name, an item whose satisfy call kept failing — blocked the stop hook on every attempt,
+ * forever. That is the "Queued (N)" pile-up: the host re-runs the turn, the gate re-blocks, nothing
+ * advances. Nagging is the point, but an unsatisfiable demand repeated without end is the exact failure
+ * this gate exists to prevent, so the reminder expires after CAIRN_PLAN_CAP attempts and the turn is
+ * released with its plan left visibly unmet.
  */
 export function contractStopReason(changedDurableState = false, sessionId = ""): string {
   const contract = readContract(sessionId);
   if (!contract?.criteria.length) {
     if (contract && contract.nudges > cap()) return "";
     if (!changedDurableState) return "";
-    return "Before ending this turn, declare what done means for it: call the `plan` (or `contract`) tool with the"
-      + " tasks this task must meet, then satisfy each one. Do not end by offering to do the work.";
+    return "Before ending this turn, declare what done means for it: call the `plan` tool with the"
+      + " tasks this task must meet, then complete each one. Do not end by offering to do the work.";
   }
+  if (contract.nudges > declaredCap()) return "";
   const unmet = contract.criteria.filter((criterion) => !criterion.passed).map((criterion) => criterion.check);
   if (unmet.length) {
-    return `Not done. These declared plan items are unmet: ${unmet.join(" | ")}. You MUST complete every item and mark each completed with evidence using the \`plan\` tool before ending this turn.`;
+    return `Not done. These declared plan items are unmet: ${unmet.join(" | ")}. Complete every item and mark each one done with evidence using the \`plan\` tool before ending this turn.`;
   }
   return "";
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Instrument check: is the `contract` tool actually reachable from THIS session?
+// Instrument check: is the `plan` tool actually reachable from THIS session?
 //
 // A client negotiates its tool list once, when the session starts, exactly as a host loads its hook
-// config once (see unannouncedTools). A session that began before the `contract` tool shipped therefore
+// config once (see unannouncedTools). A session that began before the `plan` tool shipped therefore
 // cannot call it for its entire life, and nothing inside that session can fix it. The gate above cannot
 // see that on its own: clearContract() wipes the per-turn file at every prompt, so `nudges` restarts at
 // zero every turn and the cap re-arms forever. The result is the exact failure this whole system exists
@@ -285,7 +370,9 @@ const ledgerPath = (sessionId: string): string => sessionStatePath(sessionId, "c
 function readLedger(sessionId: string): NudgeLedger {
   if (!sessionId) return EMPTY_LEDGER;
   try {
-    const parsed = JSON.parse(readFileSync(ledgerPath(sessionId), "utf8")) as Partial<NudgeLedger>;
+    const raw = readFileSync(ledgerPath(sessionId), "utf8").trim();
+    const clean = raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
+    const parsed = JSON.parse(clean) as Partial<NudgeLedger>;
     return {
       nudges: Number(parsed.nudges) || 0,
       turns: Array.isArray(parsed.turns) ? parsed.turns.filter((t) => typeof t === "number") : [],
@@ -350,12 +437,12 @@ export function clearInstrumentDoubt(sessionId: string): void {
 }
 
 export const CONTRACT_UNAVAILABLE_REASON =
-  "The `contract` tool is not reachable from this session: Cairn has asked for a contract across several"
+  "The `plan` tool is not reachable from this session: Cairn has asked for a plan across several"
   + " turns and no declaration has ever arrived. A client negotiates its tool list when the session starts,"
   + " so a session older than the tool can never call it and cannot fix that itself. Stop trying to call it."
   + " Cairn is releasing this gate for the rest of this session; state your completion criteria and their"
   + " evidence directly in your reply instead. Tell the user, in your reply, that this session predates the"
-  + " `contract` tool and that a new session is required for the completion gate to apply.";
+  + " `plan` tool and that a new session is required for the completion gate to apply.";
 
 export function formatPlanSummary(sessionId = ""): string {
   const contract = readContract(sessionId);
@@ -371,5 +458,5 @@ export function formatPlanSummary(sessionId = ""): string {
 }
 
 export const CONTRACT_DECLARE_REASON =
-  "Declare your plan first: call the `plan` (or `contract`) tool with the tasks defining done for this task."
+  "Declare your plan first: call the `plan` tool with the tasks defining done for this task."
   + " The requested side effect was not executed.";

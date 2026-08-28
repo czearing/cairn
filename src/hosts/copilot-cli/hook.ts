@@ -47,6 +47,7 @@ import {
   contractDeclared,
   contractExhausted,
   clearContract,
+  hasActiveContract,
   contractStopReason,
   noteContractNudge,
   readContract,
@@ -103,7 +104,7 @@ export const isTool = (name: string, want: string): boolean =>
   name === want || name.endsWith(want) || name.includes(want);
 
 const isCairnMcpTool = (name: string): boolean => [
-  "brain_search", "brain_create", "brain_mutate", "brain_delete", "contract", "plan",
+  "brain_search", "brain_create", "brain_mutate", "brain_delete", "plan",
 ].some((tool) => isTool(name, tool));
 const isTask = (name: string): boolean => /^(task|agent)$/i.test(name) || name === "Task" || name === "Agent";
 
@@ -463,11 +464,25 @@ export async function runCopilotHook(): Promise<void> {
 
     const stateId = turnScope(sessionId);
     if (!shouldStartUserTurn(prompt)) return void emit({});
-    rmSync(complianceReceiptPath(sessionId), { force: true });
-    clearContract(sessionId);
+
+    const activeContract = hasActiveContract(sessionId);
+    if (!activeContract) {
+      rmSync(complianceReceiptPath(sessionId), { force: true });
+      clearContract(sessionId);
+      resetLifecycle(stateId);
+    } else {
+      updateLifecycle(stateId, (current) => ({
+        ...current,
+        turnSeq: current.turnSeq + 1,
+        stopBlocked: false,
+        stopNudges: 0,
+        completionNudged: false,
+      }));
+    }
+
     try { (await import("../../core/auto-update")).maybeAutoUpdate(); }
     catch { /* self-update is background work and never blocks a turn */ }
-    resetLifecycle(stateId);
+
     const state = readLifecycle(stateId);
     if (emittedUsage) emittedUsage.turnSeq = state.turnSeq;
     const wf = await workflowPrompt(state.turnSeq);
@@ -545,7 +560,7 @@ export async function runCopilotHook(): Promise<void> {
   if (mode === "post-tool") {
     const stateId = turnScope(sessionId, agentId);
     let contractResult: { error?: string; criteria?: unknown[]; remaining?: string[] } | undefined;
-    if ((isTool(toolName, "contract") || isTool(toolName, "plan")) && toolResultSucceeded(result)) {
+    if (isTool(toolName, "plan") && toolResultSucceeded(result)) {
       const checks = (Array.isArray(args.tasks) ? args.tasks : Array.isArray(args.checks) ? args.checks : [])
         .filter((check): check is string => typeof check === "string");
       const satisfied = typeof args.completed === "string" ? args.completed
@@ -690,9 +705,10 @@ export async function runCopilotHook(): Promise<void> {
 
     // A turn whose every execution tool was denied never increments the lifecycle counter, so treat
     // blocked attempts as evidence the turn tried to act. Otherwise the demand is never ledgered, the
-    // release below can never be earned, and a session that cannot declare a contract stays bricked.
+    // release below can never be earned, and a session that cannot declare a plan stays bricked.
     const attemptedToAct = st.executionToolCount > 0 || contractBlockedAttempts(sessionId) > 0;
     const contractReason = contractStopReason(attemptedToAct, sessionId);
+
     if (contractReason) {
       if (contractDeclared(sessionId)) clearInstrumentDoubt(sessionId);
       else noteUndeclaredNudge(sessionId, st.turnSeq);

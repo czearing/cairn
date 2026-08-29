@@ -366,10 +366,12 @@ test("hook enforces hard-block when no contract is declared and allows execution
       toolResult: { success: true },
     });
 
-    // Turn completion is blocked because contract criteria are still unmet
+    // The turn is no longer blocked at agent-stop: on Copilot CLI a blocking agentStop only enqueues an
+    // unread message in the user's prompt queue. The unmet items are carried into the next prompt instead.
     const stopBlocked = invoke("agent-stop", { sessionId: session });
-    expect(stopBlocked.stdout.toString()).toContain('"decision":"block"');
-    expect(stopBlocked.stdout.toString()).toContain("These declared plan items are unmet");
+    expect(stopBlocked.stdout.toString()).toBe("{}");
+    const carried = invoke("user-prompt", { sessionId: session, prompt: "carry on" });
+    expect(carried.stdout.toString()).toContain("These declared plan items are unmet");
 
     // Close one criterion via command run, and one via explicit evidence in single call
     invoke("post-tool", {

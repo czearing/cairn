@@ -846,7 +846,9 @@ test("the contract gate denies execution, loops the turn, and releases only when
     expect(invoke("post-tool", {
       sessionId: "contract-e2e", timestamp: 30, toolName: "cairn-skill_review", toolArgs: { id: "skill-e2e" },
     }).status).toBe(0);
-    expect(invoke("agent-stop", { sessionId: "contract-e2e" }).stdout.toString()).toContain("unmet");
+    expect(invoke("agent-stop", { sessionId: "contract-e2e" }).stdout.toString()).toBe("{}");
+    expect(invoke("user-prompt", { sessionId: "contract-e2e", prompt: "carry on" }).stdout.toString())
+      .toContain("unmet");
     expect(telemetryKinds(dbPath)).toContain("contract_blocked");
 
     // 4. An observed run through the real post-tool path releases the turn.
@@ -939,32 +941,40 @@ test("a session that can never declare a contract is told once and then released
   const invoke = (mode: string, payload: object) =>
     spawnSync(process.execPath, [hook, mode], { input: JSON.stringify(payload), env });
   const sid = "contract-missing";
-  const stop = () => invoke("agent-stop", { sessionId: sid }).stdout.toString();
+  // A turn now ends without blocking; the demand is carried into the NEXT prompt as context.
+  const endTurn = () => invoke("agent-stop", { sessionId: sid }).stdout.toString();
+  const nextTurn = (prompt: string) => invoke("user-prompt", { sessionId: sid, prompt }).stdout.toString();
   const useSkill = () => invoke("post-tool", {
     sessionId: sid, toolName: "cairn-skill_select", toolArgs: { ids: ["skill-missing"] },
   });
   try {
-    // Turn 1: the demand is legitimate and repeats up to its cap. Nothing is released early.
+    // Turn 1: the demand is legitimate. The stop itself must not block — that would only enqueue an
+    // unread message in the user's prompt queue — so the demand arrives with the next prompt.
     expect(invoke("user-prompt", { sessionId: sid, prompt: "Do the thing." }).status).toBe(0);
     useSkill();
     completeBrainWorkflow(invoke, sid, { declareContract: false });
-    expect(stop()).toContain("declare what done means");
-    expect(stop()).toContain("declare what done means");
+    expect(endTurn()).toBe("{}");
+    expect(nextTurn("Again.")).toContain("declare what done means");
 
     // Turn 2: a second turn of unanswered demands proves the instrument is absent, so the turn is told
-    // once — in terms the user will hear — instead of being asked a fifth time.
-    expect(invoke("user-prompt", { sessionId: sid, prompt: "Next thing." }).status).toBe(0);
+    // once — in terms the user will hear — instead of being asked again forever.
     useSkill();
     completeBrainWorkflow(invoke, sid, { declareContract: false });
-    let notice = stop();
-    for (let i = 0; i < 6 && notice.includes("declare what done means"); i += 1) notice = stop();
+    let notice = "";
+    for (let i = 0; i < 8 && !notice.includes("not reachable from this session"); i += 1) {
+      endTurn();
+      notice = nextTurn("Next thing.");
+      useSkill();
+      completeBrainWorkflow(invoke, sid, { declareContract: false });
+    }
     expect(notice).toContain("not reachable from this session");
     expect(notice).toContain("new session is required");
     expect(telemetryKinds(dbPath)).toContain("contract_unavailable");
 
     // Having said it once, the gate expires rather than repeating: the turn releases and, critically,
     // execution tools stop being denied.
-    expect(stop()).not.toContain("not reachable from this session");
+    endTurn();
+    expect(nextTurn("And again.")).not.toContain("not reachable from this session");
     expect(invoke("pre-tool", {
       sessionId: sid, toolName: "create", toolArgs: { path: join(dir, "out.txt") },
     }).stdout.toString()).not.toContain("deny");
@@ -1001,19 +1011,26 @@ test("a turn whose execution tools were all denied still earns the contract rele
     expect(invoke("user-prompt", { sessionId: sid, prompt }).status).toBe(0);
     expect(tryCreate()).toContain("Declare your plan first");
   };
+  // Ending a turn can emit the one-shot completion reminder before the contract gate runs; drain it.
+  const endTurn = () => {
+    let out = invoke("agent-stop", { sessionId: sid }).stdout.toString();
+    if (out !== "{}") out = invoke("agent-stop", { sessionId: sid }).stdout.toString();
+    return out;
+  };
   try {
     blockedTurn("Do the thing.");
-    // The turn tried to act and could not, so ending it must still record the unmet demand.
-    expect(stop()).toContain("declare what done means");
-    expect(stop()).toContain("declare what done means");
+    // The turn tried to act and could not, so ending it must still record the unmet demand — carried
+    // into the next prompt rather than blocking the stop, which would only enqueue an unread message.
+    endTurn();
 
-    blockedTurn("Next thing.");
-    let notice = stop();
-    for (let i = 0; i < 6 && notice.includes("declare what done means"); i += 1) notice = stop();
+    let notice = "";
+    for (let i = 0; i < 8 && !notice.includes("not reachable from this session"); i += 1) {
+      notice = invoke("user-prompt", { sessionId: sid, prompt: "Next thing." }).stdout.toString();
+      tryCreate();
+      endTurn();
+    }
     expect(notice).toContain("not reachable from this session");
 
-    // Said once, then the gate expires instead of repeating.
-    expect(stop()).not.toContain("not reachable from this session");
     // Released: the contract gate no longer refuses work. Remaining gates are ones it can satisfy.
     expect(tryCreate()).not.toContain("Declare your plan first");
   } finally {
@@ -1179,23 +1196,30 @@ test("an undeclared contract nudge is bounded, so a session that cannot declare 
   invoke("post-tool", { sessionId: session, toolName: "edit", toolArgs: { path: "a.ts" }, toolResult: { success: true } });
   completeBrainWorkflow(invoke, session, { declareContract: false });
 
-  // Never declaring anything: the gate asks, but only while it can still be acted on.
+  // Never declaring anything: the gate asks, but only while it can still be acted on. The demand is
+  // carried into the next prompt, because a blocking stop on this host only enqueues an unread message.
   const reasons: string[] = [];
-  let released = false;
-  for (let attempt = 0; attempt < 12 && !released; attempt++) {
-    const reason = invoke("agent-stop", { sessionId: session }).stdout.toString();
-    reasons.push(reason);
-    released = reason === "{}";
+  const endTurn = () => {
+    let out = invoke("agent-stop", { sessionId: session }).stdout.toString();
+    if (out !== "{}") out = invoke("agent-stop", { sessionId: session }).stdout.toString();
+    return out;
+  };
+  for (let attempt = 0; attempt < 6; attempt++) {
+    endTurn();
+    reasons.push(invoke("user-prompt", { sessionId: session, prompt: "Carry on." }).stdout.toString());
+    invoke("post-tool", { sessionId: session, toolName: "edit", toolArgs: { path: "a.ts" }, toolResult: { success: true } });
+    completeBrainWorkflow(invoke, session, { declareContract: false });
   }
   const asked = reasons.filter((reason) => reason.includes("declare what done means")).length;
   expect(asked).toBeGreaterThan(0);
   expect(asked).toBeLessThanOrEqual(3);
+  const released = !reasons[reasons.length - 1].includes("declare what done means");
   expect(released).toBe(true);
 
   // Once exhausted the pre-tool deny lifts too, otherwise the turn could never write anything again.
   const write = invoke("pre-tool", { sessionId: session, toolName: "edit", toolArgs: { path: "a.ts" } });
   expect(write.stdout.toString()).not.toContain("Declare your plan first");
-});
+}, 120_000);
 
 test("extractResultNodeId extracts node ID across diverse tool result structures", () => {
   // 1. Direct id on result object
@@ -1640,11 +1664,14 @@ test("complete pre-tool gate transitions and verifies all error messages", () =>
       toolResult: { success: true, id: "root-app-1" },
     });
 
-    // 6. Stage 6: Stop gate shows unmet plan items
-    const stopPlan = invoke("agent-stop", { sessionId: session }).stdout.toString();
-    const stopPlanJson = JSON.parse(stopPlan);
-    expect(stopPlanJson.decision).toBe("block");
-    expect(stopPlanJson.reason).toContain("These declared plan items are unmet: Update app | bun test");
+    // 6. Stage 6: the stop does not block (that would only enqueue an unread message); the unmet plan
+    // items are carried into the next prompt as context instead.
+    expect(invoke("agent-stop", { sessionId: session }).stdout.toString()).toBe("{}");
+    const carriedPlan = JSON.parse(
+      invoke("user-prompt", { sessionId: session, prompt: "carry on" }).stdout.toString(),
+    );
+    expect(carriedPlan.additionalContext)
+      .toContain("These declared plan items are unmet: Update app | bun test");
 
     // Satisfy first item via plan tool
     const updatePost = invoke("post-tool", {

@@ -99,8 +99,12 @@ export async function installCopilotMcp(dryRun: boolean): Promise<Result> {
 //   preToolUse          → gate premature side effects, gate brain_create structure, and prepare Task prompts.
 //   postToolUse         → entry-format/orchestrate + per-tool reminders after a brain_* or Task call; records
 //                         skill selection for delegation.
-//   agentStop           → the Stop equivalent: decision:"block" re-runs the turn (turn-reminder when brain
-//                         unused) and clears completed turn state after the final visible response.
+//   agentStop           → end-of-turn bookkeeping and clearing completed turn state. NOTE: unlike Claude
+//                         Code's Stop hook, decision:"block" here does NOT re-run the turn. Copilot CLI
+//                         enqueues the reason as an unread user message and ends the turn anyway, so a
+//                         blocked stop only piles up in the prompt queue. Guidance must instead be flagged
+//                         here and delivered as userPromptSubmitted additionalContext on the next turn;
+//                         hard enforcement belongs in preToolUse, which genuinely denies.
 //   subagentStart       → additionalContext prepended to a spawned subagent's own prompt.
 // hook.ts picks the mode from its argv.
 function supportsPerPromptContext(): boolean {

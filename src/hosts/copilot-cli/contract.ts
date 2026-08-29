@@ -110,8 +110,11 @@ export function clearContract(sessionId = ""): void {
 export function hasActiveContract(sessionId = ""): boolean {
   const contract = readContract(sessionId);
   if (!contract || !Array.isArray(contract.criteria) || contract.criteria.length === 0) return false;
-  // If the contract has already accumulated nudges from prior turns, it is not an active mid-turn declaration
-  if (contract.nudges > 0) return false;
+  // Keep an unfinished plan across the turn boundary. This used to drop any contract with nudges > 0,
+  // which made the carried-over reminder unactionable: the agent was told which items were unmet and
+  // then found "no contract is declared" when it tried to close them. The plan is released only once its
+  // reminder budget is spent, so a stale plan still cannot haunt the session forever.
+  if (contractExhausted(sessionId)) return false;
   return contract.criteria.some((criterion) => !criterion.passed);
 }
 
@@ -436,6 +439,47 @@ export function noteContractBlocked(sessionId: string): void {
 
 export function contractBlockedAttempts(sessionId: string): number {
   return readLedger(sessionId).blocked;
+}
+
+// -------------------------------------------------------------------------------------------------
+// Delivering the reminder on Copilot CLI.
+//
+// A blocking agentStop hook does NOT re-run the turn here, the way Claude Code's Stop hook does. The
+// host enqueues the reason as a pending USER message and ends the turn:
+//
+//   on.enqueuePrompt && (this.enqueueUserMessage({prompt: on.enqueuePrompt}, true), ...)
+//   return {kind: "ok"}
+//
+// and enqueueUserMessage only calls addItemToQueue — nothing drains it. So every block left a
+// "<cairn-internal> Not done..." item sitting in the user's prompt queue, unread by the model, until the
+// user manually sent something. Blocking therefore never enforced anything on this host; it only filled
+// the queue with messages the agent never received.
+//
+// The reminder is instead flagged here and injected as userPromptSubmitted additionalContext on the next
+// turn, which is a channel verified to reach the model. Same delivery timing, nothing in the queue.
+const reminderPath = (sessionId: string): string => sessionStatePath(sessionId, "cairn-plan-reminder");
+
+export function flagPlanReminder(sessionId: string, kind: "plan" | "unavailable" = "plan"): void {
+  if (!sessionId) return;
+  try {
+    mkdirSync(dirname(reminderPath(sessionId)), { recursive: true });
+    writeFileSync(reminderPath(sessionId), kind);
+  } catch { /* a lost reminder must never block a turn */ }
+}
+
+/**
+ * Read and clear the flag. "plan" text is recomputed by the caller so a reminder for work finished after
+ * the turn ended is never delivered; "unavailable" is a fixed notice that cannot go stale.
+ */
+export function takePlanReminder(sessionId: string): "" | "plan" | "unavailable" {
+  if (!sessionId) return "";
+  try {
+    const kind = readFileSync(reminderPath(sessionId), "utf8").trim();
+    rmSync(reminderPath(sessionId), { force: true });
+    return kind === "unavailable" ? "unavailable" : kind === "plan" ? "plan" : "";
+  } catch {
+    return "";
+  }
 }
 
 /**

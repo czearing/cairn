@@ -27,7 +27,7 @@ function turnDriver() {
     const out = spawnSync(process.execPath, [HOOK, mode], { input: JSON.stringify(payload), env });
     const stdout = out.stdout.toString().trim();
     try {
-      return JSON.parse(stdout) as { decision?: string; reason?: string };
+      return JSON.parse(stdout) as { decision?: string; reason?: string; additionalContext?: string };
     } catch {
       return {};
     }
@@ -39,10 +39,12 @@ test("the plan gate stops nagging across real turns instead of queueing forever"
   const { sessionId, invoke } = turnDriver();
   const unclosable = "Close an item this turn can never close";
   const blockedTurns: number[] = [];
+  const deliveredTurns: number[] = [];
   const TURNS = 25;
 
   for (let turn = 0; turn < TURNS; turn++) {
-    invoke("user-prompt", { sessionId, prompt: `Turn ${turn}: keep working on the thing.` });
+    const prompt = invoke("user-prompt", { sessionId, prompt: `Turn ${turn}: keep working on the thing.` });
+    if ((prompt.additionalContext ?? "").includes(unclosable)) deliveredTurns.push(turn);
 
     // The turn declares its plan, exactly as the `plan` tool's post-tool event does...
     invoke("post-tool", {
@@ -72,16 +74,41 @@ test("the plan gate stops nagging across real turns instead of queueing forever"
     if (stop.decision === "block" && (stop.reason ?? "").includes(unclosable)) blockedTurns.push(turn);
   }
 
-  // It must genuinely nag: a gate that never blocks is not a gate.
-  expect(blockedTurns.length).toBeGreaterThan(0);
+  // The gate must NEVER block agent-stop with the plan reminder on this host. Copilot CLI implements a
+  // blocking agentStop by enqueueing the reason as a pending user message and ending the turn, and
+  // nothing drains that queue, so every block left an unread "<cairn-internal> Not done..." item sitting
+  // in the user's prompt queue forever. Delivery happens at the next prompt instead.
+  expect(blockedTurns).toEqual([]);
 
-  // ...but it must give up. This is the whole point: the user's session recorded 53 consecutive blocked
-  // turns before this was fixed, so any late block here is the bug reproducing.
+  // ...and it must still actually reach the model, in-band, as context on the following turn.
+  expect(deliveredTurns.length).toBeGreaterThan(0);
+
+  // Delivery is bounded too, so an item the turn cannot close stops being repeated forever.
   const cap = Number(process.env.CAIRN_PLAN_CAP || "6");
-  expect(blockedTurns.length).toBeLessThanOrEqual(cap + 2);
-  expect(Math.max(...blockedTurns)).toBeLessThan(cap + 3);
-
-  // The final turns must be released outright.
-  const tail = invoke("agent-stop", { sessionId });
-  expect(tail.decision === "block" && (tail.reason ?? "").includes(unclosable)).toBe(false);
+  expect(deliveredTurns.length).toBeLessThanOrEqual(cap + 2);
 }, 240_000);
+
+test("the carried-over reminder is dropped once the plan is complete, and never queues", () => {
+  const { sessionId, invoke } = turnDriver();
+  const item = "Ship the feature";
+
+  invoke("user-prompt", { sessionId, prompt: "Do the work." });
+  invoke("post-tool", { sessionId, toolName: "plan", toolArgs: { tasks: [item] }, toolResult: { accepted: true } });
+  invoke("post-tool", {
+    sessionId, toolName: "str_replace_editor",
+    toolArgs: { command: "create", path: "src/thing.ts" }, toolResult: { success: true },
+  });
+
+  // Turn ends with the item open: the gate flags a reminder but must not block.
+  const stop = invoke("agent-stop", { sessionId });
+  expect(stop.decision === "block" && (stop.reason ?? "").includes(item)).toBe(false);
+
+  // The item is then closed before the next prompt, so the stale reminder must not be injected.
+  invoke("post-tool", {
+    sessionId, toolName: "plan",
+    toolArgs: { completed: item, evidence: "Implemented the feature in src/thing.ts and verified it." },
+    toolResult: { accepted: true },
+  });
+  const next = invoke("user-prompt", { sessionId, prompt: "Anything else?" });
+  expect(next.additionalContext ?? "").not.toContain(item);
+}, 120_000);

@@ -49,6 +49,8 @@ import {
   clearContract,
   hasActiveContract,
   contractStopReason,
+  flagPlanReminder,
+  takePlanReminder,
   noteContractNudge,
   readContract,
   recordObservedRun,
@@ -465,6 +467,12 @@ export async function runCopilotHook(): Promise<void> {
     const stateId = turnScope(sessionId);
     if (!shouldStartUserTurn(prompt)) return void emit({});
 
+    // Compute the carried-over plan reminder BEFORE the clear below can wipe the contract it describes.
+    const carried = takePlanReminder(sessionId);
+    const planReminder = carried === "unavailable"
+      ? CONTRACT_UNAVAILABLE_REASON
+      : carried === "plan" ? contractStopReason(true, sessionId) : "";
+
     const activeContract = hasActiveContract(sessionId);
     if (!activeContract) {
       rmSync(complianceReceiptPath(sessionId), { force: true });
@@ -486,12 +494,13 @@ export async function runCopilotHook(): Promise<void> {
     const state = readLifecycle(stateId);
     if (emittedUsage) emittedUsage.turnSeq = state.turnSeq;
     const wf = await workflowPrompt(state.turnSeq);
+    const injected = [planReminder, wf].filter(Boolean).join("\n\n");
     beginTelemetryRun({
       host: "copilot", sessionId, turnSeq: state.turnSeq,
       promptHash: promptFingerprint(wf),
-      injectedChars: internalContext(wf).length, model,
+      injectedChars: internalContext(injected).length, model,
     });
-    emit(wf ? { additionalContext: internalContext(wf) } : {});
+    emit(injected ? { additionalContext: internalContext(injected) } : {});
     return;
   }
 
@@ -720,7 +729,10 @@ export async function runCopilotHook(): Promise<void> {
           eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:contract:${readContract(sessionId)?.nudges ?? 0}`,
           kind: "contract_blocked",
         });
-        emit({ decision: "block", reason: internalContext(contractReason) });
+        // Deliver on the next prompt rather than blocking: a block here only enqueues an unread message
+        // in the user's prompt queue and ends the turn anyway. See flagPlanReminder.
+        flagPlanReminder(sessionId);
+        emit({});
         return;
       }
       if (!contractInstrumentReported(sessionId)) {
@@ -730,7 +742,8 @@ export async function runCopilotHook(): Promise<void> {
           eventKey: hostEventKey || `${sessionId}:${st.turnSeq}:contract-unavailable`,
           kind: "contract_unavailable",
         });
-        emit({ decision: "block", reason: internalContext(CONTRACT_UNAVAILABLE_REASON) });
+        flagPlanReminder(sessionId, "unavailable");
+        emit({});
         return;
       }
     }

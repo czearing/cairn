@@ -288,11 +288,20 @@ export function satisfyCriterion(check: string, evidence: string, sessionId = ""
   const criteria = contract.criteria.map((criterion) =>
     criterion === match ? { ...criterion, passed: true, evidence: normalize(evidence) } : criterion);
   write({ ...contract, criteria }, sessionId);
+  // Closing an item is real progress, so the turn is using the gate rather than stuck against it. Clear the
+  // cross-turn budget: the cap below exists to expire an UNSATISFIABLE demand, not to ration a working one.
+  clearDeclaredNudges(sessionId);
   return { remaining: criteria.filter((criterion) => !criterion.passed).map((criterion) => criterion.check) };
 }
 
 export function noteContractNudge(sessionId = ""): void {
   const contract = readContract(sessionId);
+  // Also count it in the cross-turn ledger, which survives clearContract. The per-contract counter below
+  // cannot bound anything on its own: hasActiveContract() treats nudges > 0 as "not a live declaration", so
+  // the next user prompt deletes the file and the turn re-declares at zero. The counter therefore never
+  // exceeded 1 in production and declaredCap() was unreachable — the plan gate re-armed at every turn
+  // boundary and blocked forever, which is the "Queued (N)" pile-up users actually saw.
+  noteDeclaredNudge(sessionId);
   // Count the nudge even when nothing is declared. Previously this no-opped without a contract, so the
   // "declare your plan" block below could never reach the cap and repeated forever — an unbounded
   // loop for any session that CANNOT declare one, e.g. an MCP client whose tool list was negotiated
@@ -313,20 +322,31 @@ const declaredCap = (): number => Math.max(1, Number(process.env.CAIRN_PLAN_CAP 
 export function contractExhausted(sessionId = ""): boolean {
   const contract = readContract(sessionId);
   if (!contract) return false;
-  if (contract.criteria.length > 0) return contract.nudges > declaredCap();
+  if (contract.criteria.length > 0) return declaredNudgeCount(contract, sessionId) > declaredCap();
   return contract.nudges > cap();
+}
+
+/**
+ * How many times this session has been told it still owes declared items. Takes the larger of the
+ * per-contract counter and the cross-turn ledger, so the bound holds whether or not the contract file
+ * survived the last prompt.
+ */
+function declaredNudgeCount(contract: Contract, sessionId: string): number {
+  return Math.max(contract.nudges, declaredNudges(sessionId));
 }
 
 /**
  * The stop verdict. One rule: block while the turn has declared nothing, or still owes an item.
  *
- * The block is BOUNDED. An earlier draft returned a reason for any unmet item and never consulted the
- * nudge counter, so a plan item the turn could not close — a stale item, an item the model had stopped
- * being able to name, an item whose satisfy call kept failing — blocked the stop hook on every attempt,
- * forever. That is the "Queued (N)" pile-up: the host re-runs the turn, the gate re-blocks, nothing
- * advances. Nagging is the point, but an unsatisfiable demand repeated without end is the exact failure
- * this gate exists to prevent, so the reminder expires after CAIRN_PLAN_CAP attempts and the turn is
- * released with its plan left visibly unmet.
+ * The block is BOUNDED, and the bound is counted ACROSS turns. An earlier draft returned a reason for any
+ * unmet item and never consulted the nudge counter; the fix after that consulted only the counter stored on
+ * the contract, which hasActiveContract() causes clearContract() to delete at the next prompt, so it never
+ * exceeded 1 and the cap was unreachable. Either way a plan item the turn could not close — a stale item, an
+ * item the model had stopped being able to name, an item whose satisfy call kept failing — blocked the stop
+ * hook on every attempt, forever. That is the "Queued (N)" pile-up: the host re-runs the turn, the gate
+ * re-blocks, nothing advances. Nagging is the point, but an unsatisfiable demand repeated without end is the
+ * exact failure this gate exists to prevent, so the reminder expires after CAIRN_PLAN_CAP attempts and the
+ * turn is released with its plan left visibly unmet. Closing any item re-arms the full budget.
  */
 export function contractStopReason(changedDurableState = false, sessionId = ""): string {
   const contract = readContract(sessionId);
@@ -336,7 +356,7 @@ export function contractStopReason(changedDurableState = false, sessionId = ""):
     return "Before ending this turn, declare what done means for it: call the `plan` tool with the"
       + " tasks this task must meet, then complete each one. Do not end by offering to do the work.";
   }
-  if (contract.nudges > declaredCap()) return "";
+  if (declaredNudgeCount(contract, sessionId) > declaredCap()) return "";
   const unmet = contract.criteria.filter((criterion) => !criterion.passed).map((criterion) => criterion.check);
   if (unmet.length) {
     return `Not done. These declared plan items are unmet: ${unmet.join(" | ")}. Complete every item and mark each one done with evidence using the \`plan\` tool before ending this turn.`;
@@ -362,9 +382,9 @@ export function contractStopReason(changedDurableState = false, sessionId = ""):
 // per-turn budget in two or more separate turns without ever declaring is missing the instrument, not
 // disobeying. It is then told once, so the user hears it, and released — a gate whose instrument is
 // absent must expire, not brick.
-interface NudgeLedger { nudges: number; turns: number[]; reported: boolean; blocked: number }
+interface NudgeLedger { nudges: number; turns: number[]; reported: boolean; blocked: number; declared: number }
 
-const EMPTY_LEDGER: NudgeLedger = { nudges: 0, turns: [], reported: false, blocked: 0 };
+const EMPTY_LEDGER: NudgeLedger = { nudges: 0, turns: [], reported: false, blocked: 0, declared: 0 };
 const ledgerPath = (sessionId: string): string => sessionStatePath(sessionId, "cairn-contract-nudges.json");
 
 function readLedger(sessionId: string): NudgeLedger {
@@ -378,6 +398,7 @@ function readLedger(sessionId: string): NudgeLedger {
       turns: Array.isArray(parsed.turns) ? parsed.turns.filter((t) => typeof t === "number") : [],
       reported: parsed.reported === true,
       blocked: Number(parsed.blocked) || 0,
+      declared: Number(parsed.declared) || 0,
     };
   } catch {
     return EMPTY_LEDGER;
@@ -415,6 +436,29 @@ export function noteContractBlocked(sessionId: string): void {
 
 export function contractBlockedAttempts(sessionId: string): number {
   return readLedger(sessionId).blocked;
+}
+
+/**
+ * Cross-turn count of "you still owe declared items" blocks. Lives here, not on the contract, because
+ * clearContract() deletes the contract at every prompt whose ledger has been nudged.
+ */
+export function noteDeclaredNudge(sessionId: string): void {
+  const sid = effectiveSessionId(sessionId);
+  if (!sid) return;
+  const ledger = readLedger(sid);
+  writeLedger(sid, { ...ledger, declared: ledger.declared + 1 });
+}
+
+export function declaredNudges(sessionId = ""): number {
+  return readLedger(effectiveSessionId(sessionId)).declared;
+}
+
+/** Progress was made, so the demand is satisfiable after all: re-arm the full budget. */
+export function clearDeclaredNudges(sessionId = ""): void {
+  const sid = effectiveSessionId(sessionId);
+  if (!sid) return;
+  const ledger = readLedger(sid);
+  if (ledger.declared !== 0) writeLedger(sid, { ...ledger, declared: 0 });
 }
 
 /** Demanded across at least two separate turns and never once satisfied: the tool is not there. */

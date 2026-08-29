@@ -158,3 +158,53 @@ async function callPlanTool(calls: Record<string, unknown>[]): Promise<Record<st
     })}\n`);
   });
 }
+
+// The production loop the per-contract counter could not catch. hasActiveContract() treats a nudged
+// contract as "not a live declaration", so the user-prompt hook calls clearContract() at every turn
+// boundary. The counter stored on the contract therefore reset to 0 every turn and never reached the cap:
+// the gate re-armed forever and blocked once per turn for the life of the session. Observed in the wild as
+// a session with 33 contract_blocked telemetry events whose ledger on disk still read "nudges": 0.
+test("the gate expires across turn boundaries even though each prompt wipes the contract", () => {
+  const sessionId = randomUUID();
+  try {
+    const cap = Number(process.env.CAIRN_PLAN_CAP || "6");
+    const items = ["Close the unclosable item"];
+
+    for (let turn = 0; turn <= cap; turn++) {
+      // A new turn: the prompt hook wipes the contract, and the turn re-declares the same open item.
+      clearContract(sessionId);
+      declareContract(items, sessionId);
+      expect(readContract(sessionId)!.nudges).toBe(0); // the wipe really did reset the per-contract counter
+      expect(contractStopReason(true, sessionId)).toContain("Close the unclosable item");
+      noteContractNudge(sessionId);
+    }
+
+    // One more turn boundary, and the demand must now be expired rather than re-armed.
+    clearContract(sessionId);
+    declareContract(items, sessionId);
+    expect(readContract(sessionId)!.nudges).toBe(0);
+    expect(contractStopReason(true, sessionId)).toBe("");
+    expect(readContract(sessionId)!.criteria.every((c) => !c.passed)).toBe(true);
+  } finally {
+    clearContract(sessionId);
+  }
+});
+
+// The cap must bound UNPRODUCTIVE nagging only. A session that keeps closing items keeps its gate.
+test("closing an item re-arms the cross-turn budget", () => {
+  const sessionId = randomUUID();
+  try {
+    const cap = Number(process.env.CAIRN_PLAN_CAP || "6");
+    declareContract(["First item", "Second item"], sessionId);
+    for (let turn = 0; turn < cap; turn++) noteContractNudge(sessionId);
+
+    // Real progress resets the budget, so the remaining item is still enforced.
+    expect(satisfyCriterion("First item", "Implemented first item in src/first.ts", sessionId).error)
+      .toBeUndefined();
+    clearContract(sessionId);
+    declareContract(["Second item"], sessionId);
+    expect(contractStopReason(true, sessionId)).toContain("Second item");
+  } finally {
+    clearContract(sessionId);
+  }
+});

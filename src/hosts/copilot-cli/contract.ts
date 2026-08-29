@@ -475,9 +475,21 @@ export function markContractInstrumentReported(sessionId: string): void {
   if (sessionId) writeLedger(sessionId, { ...readLedger(sessionId), reported: true });
 }
 
-/** Declaring even once proves the tool is reachable, so the evidence of absence is discarded. */
+/**
+ * Declaring even once proves the tool is reachable, so the evidence of absence is discarded.
+ *
+ * It must NOT discard the declared-nudge budget. This deleted the whole ledger file, and the agent-stop
+ * hook calls it on every stop where a plan exists — immediately before noteContractNudge writes the
+ * budget back at 1. That silently pinned the cross-turn counter to 1 forever, so CAIRN_PLAN_CAP was
+ * unreachable and the plan gate still re-armed at every turn boundary. Observed as a session blocked on
+ * 53 consecutive turns whose ledger on disk still read "declared": 1.
+ */
 export function clearInstrumentDoubt(sessionId: string): void {
-  if (sessionId) rmSync(ledgerPath(sessionId), { force: true });
+  if (!sessionId) return;
+  const { declared } = readLedger(sessionId);
+  // Preserve the budget when there is one; otherwise remove the file exactly as before.
+  if (declared > 0) writeLedger(sessionId, { ...EMPTY_LEDGER, declared });
+  else rmSync(ledgerPath(sessionId), { force: true });
 }
 
 export const CONTRACT_UNAVAILABLE_REASON =

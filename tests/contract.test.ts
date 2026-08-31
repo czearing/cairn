@@ -539,10 +539,16 @@ test("prose criteria beginning with a tool-named verb are not treated as executa
   expect(isExecutableCommand("Make the deny message name the outstanding step")).toBe(false);
   expect(isExecutableCommand("Go through the remaining review comments")).toBe(false);
   expect(isExecutableCommand("Make sure the release path is reachable")).toBe(false);
+  // The second word alone was not a sufficient tell: these read as make
+  // targets and became impossible-to-close criteria.
+  expect(isExecutableCommand("Make both practice targets fail loudly on a truncated run")).toBe(false);
+  expect(isExecutableCommand("Make selfcheck.py report a truncated run as INCONCLUSIVE")).toBe(false);
+  expect(isExecutableCommand("Make single-pass stereo a measured verdict with a negative control")).toBe(false);
 
   expect(isExecutableCommand("make -j8 all")).toBe(true);
   expect(isExecutableCommand("go test ./...")).toBe(true);
   expect(isExecutableCommand("bun test tests/contract.test.ts")).toBe(true);
+  expect(isExecutableCommand("python tools/selfcheck.py --rung7")).toBe(true);
 
   const sessionId = randomUUID();
   try {

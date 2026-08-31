@@ -193,8 +193,22 @@ const PROSE_SECOND_WORD =
 export function isExecutableCommand(check: string): boolean {
   const trimmed = normalize(check);
   if (!EXECUTABLE_COMMAND_PREFIX.test(trimmed)) return false;
-  const second = trimmed.split(/\s+/)[1] ?? "";
-  return !PROSE_SECOND_WORD.test(second);
+  // Checking only the second word was not enough. "Make both practice targets
+  // fail loudly on a truncated run" and "Make selfcheck.py report a truncated
+  // run as INCONCLUSIVE" both survived it -- "both" and "selfcheck.py" are not
+  // determiners, so they read as make targets -- and such a criterion can then
+  // never be closed: no real command exists to run, and satisfyCriterion
+  // refuses it for lacking a passing run.
+  //
+  // Length is the tell that does not need an ever-growing word list. A shell
+  // invocation is a handful of tokens; a criterion phrased as a sentence is
+  // not. Scanning for a function word anywhere was tried first and rejected:
+  // it misreads `make -j8 all`, where "all" is a target. Erring toward prose
+  // is the safe direction, because the cost is only that the criterion is
+  // closed with written evidence rather than an observed run.
+  const tokens = trimmed.split(/\s+/);
+  if (tokens.length > 6) return false;
+  return !PROSE_SECOND_WORD.test(tokens[1] ?? "");
 }
 
 export function validateEvidence(evidence: string): { valid: boolean; error?: string } {
